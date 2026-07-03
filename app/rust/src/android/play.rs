@@ -10,7 +10,7 @@ use ndk::media::media_codec::{
 };
 use ndk::native_window::NativeWindow;
 use streambeam_core::{
-    annex_b::{extract_avc_decoder_config, nal_with_start_code},
+    annex_b::{access_unit_is_keyframe, extract_avc_decoder_config, nal_with_start_code},
     connect_as_identity, connect_known, request_idr, save_saved_host, ClientSession,
     FrameReassembler, SavedHost,
 };
@@ -20,6 +20,7 @@ use crate::api::StreamStats;
 use crate::store::client_identity_path;
 
 const TIMEOUT: Duration = Duration::from_micros(30_000);
+const BUFFER_FLAG_KEY_FRAME: u32 = 1;
 
 pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> Result<StreamStats, String> {
     let session = connect_as_identity(
@@ -90,6 +91,13 @@ async fn play_session_inner(
             .ok_or("invalid native window")?;
         NativeWindow::from_ptr(ptr)
     };
+    window
+        .set_buffers_geometry(
+            i32::from(session.width),
+            i32::from(session.height),
+            None,
+        )
+        .map_err(|e| format!("surface geometry: {e}"))?;
 
     let mut codec = MediaCodec::from_decoder_type("video/avc")
         .ok_or("no AVC decoder available")?;
@@ -105,6 +113,11 @@ async fn play_session_inner(
         .configure(&format, Some(&window), MediaCodecDirection::Decoder)
         .map_err(|e| e.to_string())?;
     codec.start().map_err(|e| e.to_string())?;
+
+    // Match ffplay `prime()`: feed the host CodecConfig access unit (SPS/PPS/IDR) before
+    // network frames so the decoder has a keyframe even if the first live packet is a P-frame.
+    feed_access_unit(&mut codec, config, 0, BUFFER_FLAG_KEY_FRAME)?;
+    drain_output(&mut codec)?;
 
     let mut stats = StreamStats {
         width: session.width,
@@ -138,7 +151,12 @@ async fn play_session_inner(
         }
 
         if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
-            feed_access_unit(&mut codec, &frame, pts_us)?;
+            let flags = if access_unit_is_keyframe(&frame) {
+                BUFFER_FLAG_KEY_FRAME
+            } else {
+                0
+            };
+            feed_access_unit(&mut codec, &frame, pts_us, flags)?;
             pts_us += 33_000;
             stats.video_frames = asm.stats().frames_complete;
             drain_output(&mut codec)?;
@@ -149,7 +167,12 @@ async fn play_session_inner(
     Ok(stats)
 }
 
-fn feed_access_unit(codec: &mut MediaCodec, data: &[u8], pts_us: u64) -> Result<(), String> {
+fn feed_access_unit(
+    codec: &mut MediaCodec,
+    data: &[u8],
+    pts_us: u64,
+    flags: u32,
+) -> Result<(), String> {
     let input = codec
         .dequeue_input_buffer(TIMEOUT)
         .map_err(|e| e.to_string())?;
@@ -168,7 +191,7 @@ fn feed_access_unit(codec: &mut MediaCodec, data: &[u8], pts_us: u64) -> Result<
         dst.write(byte);
     }
     codec
-        .queue_input_buffer(input_buf, 0, data.len(), pts_us, 0)
+        .queue_input_buffer(input_buf, 0, data.len(), pts_us, flags)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -29,34 +29,7 @@ class StreamBeamApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: const HomePage(),
-    );
-  }
-}
-
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
-
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  int _tab = 0;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('StreamBeam')),
-      body: _tab == 0 ? const WatchPage() : const StatsPage(),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.play_circle), label: 'Watch'),
-          NavigationDestination(icon: Icon(Icons.analytics), label: 'Stats'),
-        ],
-      ),
+      home: const WatchPage(),
     );
   }
 }
@@ -74,6 +47,8 @@ class _WatchPageState extends State<WatchPage> {
 
   final _payloadCtrl = TextEditingController();
   bool _busy = false;
+  bool _showVideo = false;
+  bool _reconnectPending = false;
   String? _status;
   int? _pendingWindow;
   bool _surfaceReady = false;
@@ -94,7 +69,11 @@ class _WatchPageState extends State<WatchPage> {
           _surfaceReady = _pendingWindow != null;
         });
         if (_busy && _pendingWindow != null) {
-          unawaited(_startPlayback(_pendingWindow!));
+          if (_reconnectPending) {
+            unawaited(_startReconnect(_pendingWindow!));
+          } else {
+            unawaited(_startPlayback(_pendingWindow!));
+          }
         }
       }
     });
@@ -106,6 +85,13 @@ class _WatchPageState extends State<WatchPage> {
     super.dispose();
   }
 
+  void _teardownVideo() {
+    _showVideo = false;
+    _reconnectPending = false;
+    _surfaceReady = false;
+    _pendingWindow = null;
+  }
+
   Future<void> _discoverHosts() async {
     setState(() => _status = 'Searching LAN…');
     try {
@@ -113,14 +99,13 @@ class _WatchPageState extends State<WatchPage> {
       setState(() {
         if (hosts.isEmpty) {
           _status =
-              'No hosts found.\n'
-              'On Windows: cargo run -p streambeam-host --release\n'
-              'Phone and PC must be on the same Wi‑Fi.';
+              'No hosts on this network.\n'
+              'Start streambeam-host on your PC (same Wi‑Fi).';
         } else {
           final lines = hosts
               .map((h) => '${h.name}  ${h.addrs.join(", ")}:${h.port}')
               .join('\n');
-          _status = 'Found ${hosts.length} host(s):\n$lines\n\nScan QR on the host to pair.';
+          _status = 'Found ${hosts.length} host(s):\n$lines\n\nScan the host QR to pair.';
         }
       });
     } catch (e) {
@@ -128,9 +113,35 @@ class _WatchPageState extends State<WatchPage> {
     }
   }
 
+  Future<void> _beginSession({required bool reconnect}) async {
+    if (!Platform.isAndroid) {
+      setState(() => _status = 'Playback is Android-only.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _showVideo = true;
+      _reconnectPending = reconnect;
+      _surfaceReady = false;
+      _pendingWindow = null;
+      _status = reconnect ? 'Reconnecting…' : 'Connecting…';
+    });
+    if (_surfaceReady && _pendingWindow != null) {
+      if (reconnect) {
+        unawaited(_startReconnect(_pendingWindow!));
+      } else {
+        unawaited(_startPlayback(_pendingWindow!));
+      }
+    }
+  }
+
   Future<void> _startPlayback(int nativeWindow) async {
-    final payload = _payloadCtrl.text.trim();
+    final payload = _normalizePayload(_payloadCtrl.text);
+    if (payload != _payloadCtrl.text) {
+      _payloadCtrl.text = payload;
+    }
     try {
+      setState(() => _status = 'Streaming…');
       final stats = await playStream(
         payload: payload,
         nativeWindow: nativeWindow,
@@ -140,29 +151,23 @@ class _WatchPageState extends State<WatchPage> {
       if (!mounted) return;
       setState(() {
         _status =
-            'Stopped — ${stats.videoFrames} video / ${stats.audioPackets} audio';
+            'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
+        _teardownVideo();
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _status = 'Error: $e');
+      setState(() {
+        _status = 'Error: $e';
+        _teardownVideo();
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _reconnect() async {
-    if (!Platform.isAndroid) return;
-    setState(() {
-      _busy = true;
-      _status = 'Reconnecting…';
-    });
-    if (_surfaceReady && _pendingWindow != null) {
-      unawaited(_startReconnect(_pendingWindow!));
-    }
-  }
-
   Future<void> _startReconnect(int nativeWindow) async {
     try {
+      setState(() => _status = 'Streaming…');
       final stats = await reconnectPlayStream(
         nativeWindow: nativeWindow,
         maxVideoFrames: 0,
@@ -170,206 +175,238 @@ class _WatchPageState extends State<WatchPage> {
       if (!mounted) return;
       setState(() {
         _status =
-            'Stopped — ${stats.videoFrames} video / ${stats.audioPackets} audio';
+            'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
+        _teardownVideo();
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _status = 'Error: $e');
+      setState(() {
+        _status = 'Error: $e';
+        _teardownVideo();
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _play() async {
-    final payload = _payloadCtrl.text.trim();
+    final payload = _normalizePayload(_payloadCtrl.text);
+    if (payload != _payloadCtrl.text) {
+      _payloadCtrl.text = payload;
+    }
     if (!payload.startsWith('sbm1:')) {
       setState(() => _status = 'Scan the QR from streambeam-host on your PC');
       return;
     }
-    if (!Platform.isAndroid) {
-      setState(() {
-        _status =
-            'Android playback only.\n'
-            'Mac dev loop: ./scripts/visual-test.sh';
-      });
+    if (payload.length < 48) {
+      setState(() => _status =
+          'sbm1: payload looks truncated — copy the full single line from the host');
       return;
     }
-    setState(() {
-      _busy = true;
-      _status = 'Connecting…';
-    });
-    if (_surfaceReady && _pendingWindow != null) {
-      setState(() => _status = 'Streaming…');
-      unawaited(_startPlayback(_pendingWindow!));
-    } else {
-      setState(() => _status = 'Waiting for video surface…');
-    }
+    await _beginSession(reconnect: false);
+  }
+
+  Future<void> _reconnect() async {
+    if (_savedHost == null) return;
+    await _beginSession(reconnect: true);
   }
 
   Future<void> _scanQr() async {
     final payload = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => const QrScanPage()),
     );
-    if (payload != null && payload.startsWith('sbm1:')) {
-      _payloadCtrl.text = payload;
-      saveHostFromPayload(payload: payload);
+    if (payload != null) {
+      final normalized = _normalizePayload(payload);
+      if (!normalized.startsWith('sbm1:')) {
+        if (mounted) {
+          setState(() => _status = 'QR did not contain sbm1: — scan the host terminal QR');
+        }
+        return;
+      }
+      _payloadCtrl.text = normalized;
+      saveHostFromPayload(payload: normalized);
       _refreshSavedHost();
-      if (mounted) setState(() => _status = 'Payload loaded — tap Play');
+      if (mounted) {
+        setState(() => _status = 'Paired — tap Play');
+      }
     }
+  }
+
+  String _normalizePayload(String raw) {
+    return raw.replaceAll(RegExp(r'\s+'), '');
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (Platform.isAndroid)
-            AspectRatio(
-              aspectRatio: 16 / 9,
-              child: ColoredBox(
-                color: Colors.black,
-                child: AndroidView(
-                  viewType: 'streambeam/video',
-                  layoutDirection: TextDirection.ltr,
-                ),
-              ),
-            )
-          else
-            Container(
-              height: 120,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                border: Border.all(color: Theme.of(context).dividerColor),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text('Watch tab is for Android'),
-            ),
-          const SizedBox(height: 12),
-          Text(
-            '1. Run streambeam-host on Windows (same Wi‑Fi)\n'
-            '2. Scan QR → Play',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _payloadCtrl,
-            decoration: const InputDecoration(
-              labelText: 'sbm1: pairing payload',
-              border: OutlineInputBorder(),
-            ),
-            maxLines: 2,
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _play,
-                icon: const Icon(Icons.play_arrow),
-                label: const Text('Play'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _scanQr,
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan QR'),
-              ),
-              OutlinedButton.icon(
-                onPressed: (_busy || _savedHost == null) ? null : _reconnect,
-                icon: const Icon(Icons.link),
-                label: Text(_savedHost == null ? 'Reconnect' : 'Reconnect $_savedHost'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _discoverHosts,
-                icon: const Icon(Icons.wifi_find),
-                label: const Text('Find host'),
-              ),
-            ],
-          ),
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('StreamBeam'),
+        actions: [
           if (_savedHost != null)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text('Paired with $_savedHost — Reconnect skips QR after first scan'),
+              padding: const EdgeInsets.only(right: 8),
+              child: Chip(
+                avatar: const Icon(Icons.check_circle, size: 18),
+                label: Text(_savedHost!, style: theme.textTheme.labelMedium),
+              ),
             ),
-          if (_status != null) ...[
-            const SizedBox(height: 12),
-            Text(_status!),
-          ],
         ],
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_showVideo && Platform.isAndroid)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        AndroidView(
+                          viewType: 'streambeam/video',
+                          layoutDirection: TextDirection.ltr,
+                        ),
+                        if (_busy && _status != 'Streaming…')
+                          ColoredBox(
+                            color: Colors.black54,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const CircularProgressIndicator(
+                                    color: Colors.white,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    _status ?? 'Connecting…',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                _IdleHero(busy: _busy),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _busy ? null : _scanQr,
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scan host QR'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: _busy ? null : _play,
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Play'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: (_busy || _savedHost == null) ? null : _reconnect,
+                      icon: const Icon(Icons.link),
+                      label: const Text('Reconnect'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _discoverHosts,
+                icon: const Icon(Icons.wifi_find),
+                label: const Text('Find hosts on LAN'),
+              ),
+              const SizedBox(height: 16),
+              ExpansionTile(
+                title: const Text('Paste pairing payload'),
+                subtitle: const Text('sbm1:… from host terminal'),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: TextField(
+                      controller: _payloadCtrl,
+                      decoration: const InputDecoration(
+                        hintText: 'sbm1:…',
+                        border: OutlineInputBorder(),
+                      ),
+                      maxLines: 3,
+                    ),
+                  ),
+                ],
+              ),
+              if (_status != null && !_showVideo) ...[
+                const SizedBox(height: 12),
+                Material(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(_status!),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-class StatsPage extends StatefulWidget {
-  const StatsPage({super.key});
+class _IdleHero extends StatelessWidget {
+  const _IdleHero({required this.busy});
 
-  @override
-  State<StatsPage> createState() => _StatsPageState();
-}
-
-class _StatsPageState extends State<StatsPage> {
-  final _payloadCtrl = TextEditingController();
-  bool _busy = false;
-  String? _status;
-
-  @override
-  void dispose() {
-    _payloadCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _connect() async {
-    final payload = _payloadCtrl.text.trim();
-    if (!payload.startsWith('sbm1:')) {
-      setState(() => _status = 'Paste a valid sbm1: payload');
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _status = 'Connecting…';
-    });
-    try {
-      final stats = await connectAndReceive(payload: payload, maxVideoFrames: 30);
-      setState(() {
-        _status =
-            '${stats.width}x${stats.height} @ ${stats.fps} fps\n'
-            '${stats.videoFrames} video / ${stats.audioPackets} audio packets';
-      });
-    } catch (e) {
-      setState(() => _status = 'Error: $e');
-    } finally {
-      setState(() => _busy = false);
-    }
-  }
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Headless receive test (v${streambeamVersion()})'),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _payloadCtrl,
-            decoration: const InputDecoration(
-              labelText: 'sbm1: payload',
-              border: OutlineInputBorder(),
-            ),
-            maxLines: 3,
+          Icon(
+            Icons.cast_connected,
+            size: 64,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Stream from your PC',
+            style: theme.textTheme.titleMedium,
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          FilledButton(
-            onPressed: _busy ? null : _connect,
-            child: const Text('Receive 30 frames'),
+          Text(
+            'Run streambeam-host on Windows or Mac, then scan the QR code.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
           ),
-          if (_status != null) ...[
-            const SizedBox(height: 12),
-            Text(_status!),
+          if (busy) ...[
+            const SizedBox(height: 20),
+            const CircularProgressIndicator(),
           ],
         ],
       ),

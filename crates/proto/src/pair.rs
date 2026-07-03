@@ -33,14 +33,36 @@ impl PairInfo {
         Ok(format!("{PAIR_PREFIX}{b64}"))
     }
 
+    /// Strip whitespace and validate before decode (Windows terminal wraps often truncate copies).
+    pub fn normalize_payload(s: &str) -> String {
+        s.trim()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
     pub fn decode_payload(s: &str) -> Result<Self, ProtoError> {
+        let s = Self::normalize_payload(s);
         let b64 = s
             .strip_prefix(PAIR_PREFIX)
             .ok_or(ProtoError::BadPairPayload("missing sbm1: prefix"))?;
+        if b64.len() < 32 {
+            return Err(ProtoError::BadPairPayload(
+                "payload too short — copy the entire sbm1: line from streambeam-host (no line breaks)",
+            ));
+        }
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(b64)
-            .map_err(|_| ProtoError::BadPairPayload("invalid base64url"))?;
-        postcard::from_bytes(&bytes).map_err(Into::into)
+            .map_err(|_| ProtoError::BadPairPayload("invalid base64url in sbm1: payload"))?;
+        postcard::from_bytes(&bytes).map_err(|e| {
+            if matches!(e, postcard::Error::DeserializeUnexpectedEnd) {
+                ProtoError::BadPairPayload(
+                    "payload truncated — rescan the QR or paste the full single-line sbm1: string",
+                )
+            } else {
+                ProtoError::Postcard(e)
+            }
+        })
     }
 }
 
@@ -70,6 +92,39 @@ pub fn verify_pair_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_ignores_whitespace() {
+        let info = PairInfo {
+            version: 1,
+            host_name: "host".into(),
+            host_pubkey: [1u8; 32],
+            addrs: vec!["192.168.0.10:47989".parse().unwrap()],
+            token: [2u8; 16],
+            expires_unix: 1_700_000_000,
+        };
+        let payload = info.encode_payload().unwrap();
+        let wrapped = format!("  {}  ", payload);
+        let broken = payload.replace(':', ":\n");
+        assert_eq!(PairInfo::decode_payload(&wrapped).unwrap(), info);
+        assert_eq!(PairInfo::decode_payload(&broken).unwrap(), info);
+    }
+
+    #[test]
+    fn truncated_payload_is_clear() {
+        let info = PairInfo {
+            version: 1,
+            host_name: "host".into(),
+            host_pubkey: [1u8; 32],
+            addrs: vec!["127.0.0.1:47989".parse().unwrap()],
+            token: [2u8; 16],
+            expires_unix: 1_700_000_000,
+        };
+        let payload = info.encode_payload().unwrap();
+        let truncated = &payload[..payload.len() / 2];
+        let err = PairInfo::decode_payload(truncated).unwrap_err().to_string();
+        assert!(err.contains("truncated") || err.contains("too short"), "{err}");
+    }
 
     #[test]
     fn payload_roundtrip() {

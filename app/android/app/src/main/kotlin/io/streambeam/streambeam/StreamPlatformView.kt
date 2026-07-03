@@ -32,7 +32,12 @@ class StreamPlatformView(
         channel.invokeMethod("surfaceReady", ptr)
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        if (width > 0 && height > 0) {
+            val ptr = NativeStream.nativeWindowFromSurface(holder.surface)
+            channel.invokeMethod("surfaceReady", ptr)
+        }
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {}
 }

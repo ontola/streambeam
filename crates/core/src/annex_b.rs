@@ -121,3 +121,10 @@ pub fn nal_with_start_code(nal: &[u8]) -> Vec<u8> {
     out.extend_from_slice(nal);
     out
 }
+
+/// True if the access unit contains an IDR slice (type 5).
+pub fn access_unit_is_keyframe(data: &[u8]) -> bool {
+    split_nal_units(data)
+        .iter()
+        .any(|nal| nal.first().is_some_and(|b| (b & 0x1f) == 5))
+}
