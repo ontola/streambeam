@@ -19,6 +19,7 @@ pub struct ClientSession {
     pub height: u16,
     pub fps: u8,
     pub codec: String,
+    pub codec_config: Option<Vec<u8>>,
 }
 
 pub async fn connect(payload: &str) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
@@ -105,6 +106,7 @@ pub async fn connect_as(
     )
     .await?;
 
+    let mut codec_config = None;
     let (width, height, fps, codec) = loop {
         match read_msg::<HostMsg>(&mut recv, &mut buf).await? {
             HostMsg::SessionAccept {
@@ -114,7 +116,9 @@ pub async fn connect_as(
                 codec,
                 ..
             } => break (width, height, fps, codec),
-            HostMsg::CodecConfig { .. } => {}
+            HostMsg::CodecConfig { data } => {
+                codec_config = Some(data);
+            }
             other => return Err(format!("expected SessionAccept, got {other:?}").into()),
         }
     };
@@ -128,5 +132,6 @@ pub async fn connect_as(
         height,
         fps,
         codec,
+        codec_config,
     })
 }

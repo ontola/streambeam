@@ -12,4 +12,5 @@
 app/.dart_tool/
 app/build/
 app/android/.gradle/
+app/rust/target/
 /build/

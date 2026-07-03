@@ -4,6 +4,9 @@ pub mod annex_b;
 pub mod reassemble;
 pub mod session;
 
-pub use annex_b::{split_access_units, split_nal_units, AccessUnit};
+pub use annex_b::{
+    extract_avc_decoder_config, nal_with_start_code, split_access_units, split_nal_units,
+    AccessUnit,
+};
 pub use reassemble::{FrameReassembler, FrameStats};
 pub use session::{connect, connect_as, ClientSession};

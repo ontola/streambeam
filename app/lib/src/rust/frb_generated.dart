@@ -72,11 +72,11 @@ class StreambeamFfi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1201513182;
+  int get rustContentHash => -579836984;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-        stem: 'streambeam_ffi',
+        stem: 'rust_lib_streambeam',
         ioDirectory: 'rust/target/release/',
         webPrefix: 'pkg/',
       );
@@ -89,6 +89,12 @@ abstract class StreambeamFfiApi extends BaseApi {
   });
 
   Future<void> crateApiInitApp();
+
+  Future<StreamStats> crateApiPlayStream({
+    required String payload,
+    required PlatformInt64 nativeWindow,
+    required int maxVideoFrames,
+  });
 
   String crateApiStreambeamVersion();
 }
@@ -164,12 +170,48 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  Future<StreamStats> crateApiPlayStream({
+    required String payload,
+    required PlatformInt64 nativeWindow,
+    required int maxVideoFrames,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(payload, serializer);
+          sse_encode_i_64(nativeWindow, serializer);
+          sse_encode_u_32(maxVideoFrames, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_stream_stats,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiPlayStreamConstMeta,
+        argValues: [payload, nativeWindow, maxVideoFrames],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPlayStreamConstMeta => const TaskConstMeta(
+    debugName: "play_stream",
+    argNames: ["payload", "nativeWindow", "maxVideoFrames"],
+  );
+
+  @override
   String crateApiStreambeamVersion() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -189,6 +231,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeI64(raw);
   }
 
   @protected
@@ -248,6 +296,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
+  }
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getPlatformInt64();
   }
 
   @protected
@@ -321,6 +375,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
+  }
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putPlatformInt64(self);
   }
 
   @protected

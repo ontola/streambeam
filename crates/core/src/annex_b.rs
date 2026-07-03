@@ -100,3 +100,24 @@ fn start_code_len(data: &[u8], at: usize) -> usize {
         3
     }
 }
+
+/// SPS/PPS NAL payloads (no start codes) for MediaCodec `csd-0` / `csd-1`.
+pub fn extract_avc_decoder_config(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut sps = None;
+    let mut pps = None;
+    for nal in split_nal_units(data) {
+        match nal.first().map(|b| b & 0x1f).unwrap_or(0) {
+            7 => sps = Some(nal),
+            8 => pps = Some(nal),
+            _ => {}
+        }
+    }
+    Some((sps?, pps?))
+}
+
+/// Annex-B buffer with start code prefix (for MediaCodec csd buffers).
+pub fn nal_with_start_code(nal: &[u8]) -> Vec<u8> {
+    let mut out = vec![0, 0, 0, 1];
+    out.extend_from_slice(nal);
+    out
+}

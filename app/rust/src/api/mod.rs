@@ -63,3 +63,21 @@ pub async fn connect_and_receive(
 
     Ok(stats)
 }
+
+/// Decode and render video to an Android Surface (`native_window` = `ANativeWindow*`).
+#[flutter_rust_bridge::frb]
+pub async fn play_stream(
+    payload: String,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android::play::run(payload, native_window, max_video_frames).await;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (payload, native_window, max_video_frames);
+        Err("play_stream is Android-only — on macOS run: ./scripts/visual-test.sh".into())
+    }
+}

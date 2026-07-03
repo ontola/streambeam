@@ -6,6 +6,7 @@ edition = "2024"
 [workspace]
 
 [lib]
+name = "rust_lib_streambeam"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
@@ -13,6 +14,10 @@ flutter_rust_bridge = "=2.11.1"
 streambeam-core = { path = "../../crates/core" }
 streambeam-proto = { path = "../../crates/proto" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk = { version = "0.9", features = ["media", "nativewindow"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

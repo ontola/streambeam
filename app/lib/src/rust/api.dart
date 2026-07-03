@@ -20,6 +20,17 @@ Future<StreamStats> connectAndReceive({
   maxVideoFrames: maxVideoFrames,
 );
 
+/// Decode and render video to an Android Surface (`native_window` = `ANativeWindow*`).
+Future<StreamStats> playStream({
+  required String payload,
+  required PlatformInt64 nativeWindow,
+  required int maxVideoFrames,
+}) => StreambeamFfi.instance.api.crateApiPlayStream(
+  payload: payload,
+  nativeWindow: nativeWindow,
+  maxVideoFrames: maxVideoFrames,
+);
+
 class StreamStats {
   final int width;
   final int height;
