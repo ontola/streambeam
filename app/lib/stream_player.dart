@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -59,6 +60,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _edgeDragActive = false;
   bool _hintPlayed = false;
   bool _keyboardOpen = false;
+  bool _hasVideo = false;
+  bool _videoTimedOut = false;
+  DateTime? _streamStartedAt;
+  Timer? _videoPoll;
   bool _panEnabled = false;
   bool _blockViewerGestures = false;
   PointerMode _pointerMode = PointerMode.direct;
@@ -117,6 +122,45 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       _hintPlayed = true;
       _hintController.forward(from: 0);
     }
+    if (widget.isStreaming && !oldWidget.isStreaming) {
+      _beginVideoWatch();
+    } else if (!widget.isStreaming && oldWidget.isStreaming) {
+      _endVideoWatch();
+    }
+  }
+
+  void _beginVideoWatch() {
+    _hasVideo = false;
+    _videoTimedOut = false;
+    _streamStartedAt = DateTime.now();
+    _videoPoll?.cancel();
+    _videoPoll = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      if (!mounted || !widget.isStreaming) return;
+      final frames = playbackFramesRendered();
+      if (frames > BigInt.zero && !_hasVideo) {
+        setState(() {
+          _hasVideo = true;
+          _videoTimedOut = false;
+        });
+        _videoPoll?.cancel();
+        _videoPoll = null;
+        return;
+      }
+      final started = _streamStartedAt;
+      if (!_videoTimedOut &&
+          started != null &&
+          DateTime.now().difference(started) > const Duration(seconds: 12)) {
+        setState(() => _videoTimedOut = true);
+      }
+    });
+  }
+
+  void _endVideoWatch() {
+    _videoPoll?.cancel();
+    _videoPoll = null;
+    _streamStartedAt = null;
+    _hasVideo = false;
+    _videoTimedOut = false;
   }
 
   void _onTransformChanged() {
@@ -129,6 +173,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   @override
   void dispose() {
+    _videoPoll?.cancel();
     _hintController.removeListener(_onHintTick);
     _hintController.removeStatusListener(_onHintStatus);
     _hintController.dispose();
@@ -294,6 +339,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         ),
                       ),
                       if (widget.isStreaming &&
+                          _hasVideo &&
                           !_panEnabled &&
                           !_menuBlocksPointer &&
                           !_keyboardOpen)
@@ -341,6 +387,58 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                           color: Colors.white,
                         ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (widget.isStreaming && !_hasVideo)
+            ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _videoTimedOut
+                            ? Icons.videocam_off_outlined
+                            : Icons.hourglass_top,
+                        color: Colors.white70,
+                        size: 48,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _videoTimedOut
+                            ? 'No video from your PC'
+                            : 'Waiting for video…',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        _videoTimedOut
+                            ? 'Check that streambeam-host is running on your PC and both devices are on the same Wi‑Fi. The host may still be using a test clip — if this persists, restart the host app.'
+                            : 'Connected to your PC. The first video frame has not arrived yet.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.white60,
+                        ),
+                      ),
+                      if (!_videoTimedOut) ...[
+                        const SizedBox(height: 20),
+                        const SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white54,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

@@ -185,6 +185,7 @@ async fn play_session(
     native_window: i64,
     max_video_frames: u32,
 ) -> Result<StreamStats, String> {
+    crate::playback::reset();
     let runtime = tokio::runtime::Handle::current();
     let input = session
         .input
@@ -357,6 +358,9 @@ fn drain_output(codec: &mut MediaCodec) -> Result<(), String> {
                 codec
                     .release_output_buffer(out, render)
                     .map_err(|e| codec_err("release output", e))?;
+                if render {
+                    crate::playback::note_frame_rendered();
+                }
                 if flags & 0x4 != 0 {
                     break;
                 }
