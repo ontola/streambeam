@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="StreamBeam logo">
+  <defs>
+    <linearGradient id="beam" x1="48" y1="256" x2="464" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0"/>
+      <stop offset="0.28" stop-color="#818CF8"/>
+      <stop offset="0.5" stop-color="#FFFFFF"/>
+      <stop offset="0.72" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beamCore" x1="120" y1="256" x2="392" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C7D2FE" stop-opacity="0"/>
+      <stop offset="0.35" stop-color="#FFFFFF"/>
+      <stop offset="0.65" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#A5F3FC" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="iconStroke" x1="256" y1="120" x2="256" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A5B4FC"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <filter id="beamGlow" x="-20%" y="-60%" width="140%" height="220%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="#0F172A"/>
+
+  <!-- Cast arcs -->
+  <g stroke="url(#iconStroke)" stroke-width="28" stroke-linecap="round" fill="none">
+    <path d="M196 292 A88 88 0 0 1 316 292"/>
+    <path d="M168 292 A116 116 0 0 1 344 292"/>
+    <path d="M140 292 A144 144 0 0 1 372 292"/>
+  </g>
+
+  <!-- Beam -->
+  <g filter="url(#beamGlow)">
+    <path d="M32 256 H480" stroke="url(#beam)" stroke-width="36" stroke-linecap="round"/>
+    <path d="M96 256 H416" stroke="url(#beamCore)" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <!-- Cast screen -->
+  <rect x="176" y="318" width="160" height="96" rx="20" stroke="url(#iconStroke)" stroke-width="28" fill="none"/>
+</svg>

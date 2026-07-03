@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:path_provider/path_provider.dart';
@@ -13,6 +14,7 @@ import 'src/rust/frb_generated.dart';
 
 final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
 final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/releases');
+const _logoAsset = 'assets/streambeam-logo.svg';
 
 Future<void> openGithubRepo() async {
   await launchUrl(_githubRepoUrl, mode: LaunchMode.externalApplication);
@@ -439,7 +441,17 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('StreamBeam'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
+            ),
+            const SizedBox(width: 10),
+            const Text('StreamBeam'),
+          ],
+        ),
         actions: [
           TextButton.icon(
             onPressed: openGithubRepo,
