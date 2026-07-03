@@ -5,8 +5,12 @@ use reed_solomon_simd;
 use crate::media::{self, MediaHeader, DEFAULT_FEC_RATIO, FLAG_KEYFRAME, FLAG_PARITY};
 use crate::ProtoError;
 
-/// Maximum data shards per frame (fits in u8 k/r fields with headroom).
-pub const MAX_DATA_SHARDS: usize = 255;
+/// Maximum data shards per frame. `k`/`r` are `u16` wire fields (max 65535),
+/// but we cap well below that: reed-solomon-simd's supported recovery ratio
+/// shrinks as shard counts approach the tens of thousands, and no realistic
+/// single access unit needs anywhere near this many 1200-byte shards anyway
+/// (16,384 covers a ~19 MB frame).
+pub const MAX_DATA_SHARDS: usize = 16_384;
 
 /// One encoded shard: header + payload bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +75,8 @@ pub fn encode_frame(
 
     let flags_base = if keyframe { FLAG_KEYFRAME } else { 0 };
     let frame_len = frame.len() as u32;
-    let k_u8 = k as u8;
-    let r_u8 = r as u8;
+    let k_u16 = k as u16;
+    let r_u16 = r as u16;
 
     let mut out = Vec::with_capacity(total);
     for (idx, payload) in data_shards.into_iter().enumerate() {
@@ -82,8 +86,8 @@ pub fn encode_frame(
                 flags: flags_base,
                 frame_id,
                 shard_index: idx as u16,
-                k: k_u8,
-                r: r_u8,
+                k: k_u16,
+                r: r_u16,
                 frame_len,
                 capture_ts_us,
             },
@@ -97,8 +101,8 @@ pub fn encode_frame(
                 flags: flags_base | FLAG_PARITY,
                 frame_id,
                 shard_index: (k + i) as u16,
-                k: k_u8,
-                r: r_u8,
+                k: k_u16,
+                r: r_u16,
                 frame_len,
                 capture_ts_us,
             },

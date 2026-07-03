@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use streambeam_proto::fec::{decode_frame, MediaShard};
-use streambeam_proto::media::MediaHeader;
+use streambeam_proto::media::{MediaHeader, MEDIA_HEADER_LEN};
 
 #[derive(Debug, Default)]
 pub struct FrameStats {
@@ -22,8 +22,8 @@ pub struct FrameReassembler {
 
 #[derive(Debug)]
 struct FrameBucket {
-    k: u8,
-    r: u8,
+    k: u16,
+    r: u16,
     frame_len: u32,
     shards: Vec<MediaShard>,
 }
@@ -56,9 +56,9 @@ impl FrameReassembler {
     ) -> Result<Option<(u16, Vec<u8>)>, streambeam_proto::ProtoError> {
         let header = MediaHeader::decode(datagram)?;
         let payload = datagram
-            .get(16..)
+            .get(MEDIA_HEADER_LEN..)
             .ok_or(streambeam_proto::ProtoError::TooShort {
-                need: 17,
+                need: MEDIA_HEADER_LEN + 1,
                 got: datagram.len(),
             })?
             .to_vec();

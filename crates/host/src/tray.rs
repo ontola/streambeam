@@ -3,6 +3,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -60,6 +61,13 @@ const ID_DISCOVER: usize = 1004;
 const ID_ACCEPT: usize = 1005;
 /// Timer id used to refresh the connected-clients list.
 const REFRESH_TIMER: usize = 1;
+/// Per-client Stop/Remove button IDs start here: row `n` gets
+/// `ID_CLIENT_BASE + n*ROW_STRIDE` (stop) and `+1` (remove).
+const ID_CLIENT_BASE: usize = 2000;
+const ROW_STRIDE: usize = 2;
+const MAX_CLIENT_ROWS: usize = 6;
+const CLIENT_LIST_TOP: i32 = 426;
+const CLIENT_ROW_HEIGHT: i32 = 26;
 /// `CF_UNICODETEXT` clipboard format (avoids pulling the `Win32_System_Ole` feature).
 const CF_UNICODETEXT: u32 = 13;
 /// `BST_CHECKED` (from `Win32_UI_Controls`, inlined to skip that feature).
@@ -78,6 +86,13 @@ struct AppState {
     fatal: Mutex<Option<String>>,
     /// Live toggles + connected-client list, shared with the server thread.
     controls: Arc<HostControls>,
+    /// addr+name for each currently-drawn client row, in row order — lets a
+    /// Stop/Remove button click (which only knows its row index) find its
+    /// target. Rebuilt only when the client set actually changes.
+    client_rows: Mutex<Vec<(SocketAddr, String)>>,
+    /// HWNDs of the current per-row Stop/Remove buttons, torn down and
+    /// recreated whenever `client_rows` changes.
+    client_buttons: Mutex<Vec<isize>>,
 }
 
 impl AppState {
@@ -114,6 +129,8 @@ pub fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         approvals: Mutex::new(VecDeque::new()),
         fatal: Mutex::new(None),
         controls: controls.clone(),
+        client_rows: Mutex::new(Vec::new()),
+        client_buttons: Mutex::new(Vec::new()),
     });
     let _ = APP.set(state.clone());
 
@@ -284,6 +301,12 @@ unsafe extern "system" fn wnd_proc(
                 }
                 0
             }
+            id if id >= ID_CLIENT_BASE => {
+                let row = (id - ID_CLIENT_BASE) / ROW_STRIDE;
+                let is_remove = (id - ID_CLIENT_BASE) % ROW_STRIDE == 1;
+                handle_client_button(hwnd, row, is_remove);
+                0
+            }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         },
         WM_TRAY => {
@@ -322,6 +345,7 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_TIMER => {
             if wparam == REFRESH_TIMER {
+                sync_client_buttons(hwnd);
                 // Repaint only the client-list panel to avoid flickering the QR.
                 let panel = RECT {
                     left: 0,
@@ -339,6 +363,10 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_DESTROY => {
             KillTimer(hwnd, REFRESH_TIMER);
+            if let Some(state) = APP.get() {
+                state.client_rows.lock().unwrap().clear();
+                state.client_buttons.lock().unwrap().clear();
+            }
             let font = FONT.swap(0, Ordering::SeqCst) as HFONT;
             if !font.is_null() {
                 DeleteObject(font);
@@ -458,18 +486,96 @@ unsafe fn paint(hwnd: HWND) {
 }
 
 /// Draw the "Connected clients" heading and the current list below the toggles.
+/// Leaves the right edge of each row clear for the Stop/Remove buttons that
+/// [`sync_client_buttons`] places there.
 unsafe fn draw_clients(hdc: HDC, client: &RECT) {
     draw_text_left(hdc, 24, 400, client.right - 24, 422, "Connected clients");
     let clients = app_controls().map(|c| c.clients()).unwrap_or_default();
     if clients.is_empty() {
-        draw_text_left(hdc, 32, 426, client.right - 24, 450, "— none connected —");
+        draw_text_left(
+            hdc,
+            32,
+            CLIENT_LIST_TOP,
+            client.right - 24,
+            CLIENT_LIST_TOP + 24,
+            "— none connected —",
+        );
         return;
     }
-    let mut y = 426;
-    for entry in clients.iter().take(6) {
+    for (row, entry) in clients.iter().take(MAX_CLIENT_ROWS).enumerate() {
+        let y = CLIENT_LIST_TOP + row as i32 * CLIENT_ROW_HEIGHT;
         let line = format!("•  {}   {}", entry.name, entry.addr.ip());
-        draw_text_left(hdc, 32, y, client.right - 24, y + 22, &line);
-        y += 22;
+        draw_text_left(hdc, 32, y, client.right - 84, y + 22, &line);
+    }
+}
+
+/// Rebuild the per-row Stop/Remove buttons if the connected-client set
+/// changed since the last check. Only rebuilding on an actual change (rather
+/// than every timer tick) avoids destroying a button the user is about to
+/// click out from under their cursor.
+unsafe fn sync_client_buttons(hwnd: HWND) {
+    let Some(state) = APP.get() else { return };
+    let rows: Vec<(SocketAddr, String)> = state
+        .controls
+        .clients()
+        .iter()
+        .take(MAX_CLIENT_ROWS)
+        .map(|c| (c.addr, c.name.clone()))
+        .collect();
+
+    if *state.client_rows.lock().unwrap() == rows {
+        return;
+    }
+
+    for old in state.client_buttons.lock().unwrap().drain(..) {
+        DestroyWindow(old as HWND);
+    }
+
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(hwnd, &mut client);
+    let font = FONT.load(Ordering::SeqCst) as HFONT;
+
+    let mut buttons = Vec::with_capacity(rows.len() * ROW_STRIDE);
+    for row in 0..rows.len() {
+        let y = CLIENT_LIST_TOP + row as i32 * CLIENT_ROW_HEIGHT - 2;
+        let stop_id = ID_CLIENT_BASE + row * ROW_STRIDE;
+        let stop_btn = create_small_button(hwnd, stop_id, "✕", client.right - 76, y);
+        let remove_btn = create_small_button(hwnd, stop_id + 1, "🗑", client.right - 40, y);
+        if !font.is_null() {
+            SendMessageW(stop_btn, WM_SETFONT, font as usize, 1);
+            SendMessageW(remove_btn, WM_SETFONT, font as usize, 1);
+        }
+        buttons.push(stop_btn as isize);
+        buttons.push(remove_btn as isize);
+    }
+
+    *state.client_buttons.lock().unwrap() = buttons;
+    *state.client_rows.lock().unwrap() = rows;
+}
+
+/// A Stop or Remove button was clicked for `row`. Stop just closes the
+/// connection (the device stays paired); Remove also forgets the pairing
+/// after the user confirms, so the device needs approval again next time.
+unsafe fn handle_client_button(hwnd: HWND, row: usize, is_remove: bool) {
+    let Some(state) = APP.get() else { return };
+    let Some((addr, name)) = state.client_rows.lock().unwrap().get(row).cloned() else {
+        return;
+    };
+
+    if is_remove {
+        let body =
+            format!("Remove \"{name}\" ({addr})?\n\nIt will need approval again to reconnect.");
+        let confirmed = MessageBoxW(
+            hwnd,
+            wide(&body).as_ptr(),
+            wide("StreamBeam — remove device").as_ptr(),
+            MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST,
+        ) == IDYES;
+        if confirmed {
+            state.controls.forget(addr);
+        }
+    } else {
+        state.controls.disconnect(addr);
     }
 }
 
@@ -572,6 +678,27 @@ unsafe fn create_checkbox(parent: HWND, id: usize, label: &str, x: i32, y: i32) 
         y,
         360,
         24,
+        parent,
+        id as HMENU,
+        GetModuleHandleW(null()),
+        null_mut(),
+    )
+}
+
+/// Create a small square push-button (used for the per-client Stop/Remove
+/// icons) and return its handle.
+unsafe fn create_small_button(parent: HWND, id: usize, label: &str, x: i32, y: i32) -> HWND {
+    let class = wide("BUTTON");
+    let text = wide(label);
+    CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        class.as_ptr(),
+        text.as_ptr(),
+        WS_CHILD | WS_VISIBLE,
+        x,
+        y,
+        30,
+        22,
         parent,
         id as HMENU,
         GetModuleHandleW(null()),

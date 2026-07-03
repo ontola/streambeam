@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use streambeam_core::FrameReassembler;
-use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
+use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO, MEDIA_HEADER_LEN};
 
 use client::connect;
 use play::{AudioPlayer, VideoPlayer};
@@ -83,8 +83,8 @@ async fn run(payload: &str, no_audio: bool) -> Result<(), Box<dyn std::error::Er
         let header = MediaHeader::decode(&datagram)?;
         if header.channel == CHANNEL_AUDIO {
             if let Some(audio) = audio.as_mut() {
-                if datagram.len() > 16 {
-                    if let Err(e) = audio.push_opus(&datagram[16..]) {
+                if datagram.len() > MEDIA_HEADER_LEN {
+                    if let Err(e) = audio.push_opus(&datagram[MEDIA_HEADER_LEN..]) {
                         if e.kind() != std::io::ErrorKind::BrokenPipe {
                             return Err(e.into());
                         }

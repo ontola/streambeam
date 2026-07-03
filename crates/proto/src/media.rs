@@ -1,8 +1,8 @@
-//! 16-byte little-endian media datagram header.
+//! 18-byte little-endian media datagram header.
 
 use crate::ProtoError;
 
-pub const MEDIA_HEADER_LEN: usize = 16;
+pub const MEDIA_HEADER_LEN: usize = 18;
 
 pub const CHANNEL_VIDEO: u8 = 0;
 pub const CHANNEL_AUDIO: u8 = 1;
@@ -22,8 +22,10 @@ pub struct MediaHeader {
     pub flags: u8,
     pub frame_id: u16,
     pub shard_index: u16,
-    pub k: u8,
-    pub r: u8,
+    /// Data shard count. `u16` (not `u8`) so a single large frame — a big
+    /// keyframe at high resolution — doesn't hit a 255-shard wall.
+    pub k: u16,
+    pub r: u16,
     pub frame_len: u32,
     pub capture_ts_us: u32,
 }
@@ -47,10 +49,10 @@ impl MediaHeader {
         buf[1] = self.flags;
         buf[2..4].copy_from_slice(&self.frame_id.to_le_bytes());
         buf[4..6].copy_from_slice(&self.shard_index.to_le_bytes());
-        buf[6] = self.k;
-        buf[7] = self.r;
-        buf[8..12].copy_from_slice(&self.frame_len.to_le_bytes());
-        buf[12..16].copy_from_slice(&self.capture_ts_us.to_le_bytes());
+        buf[6..8].copy_from_slice(&self.k.to_le_bytes());
+        buf[8..10].copy_from_slice(&self.r.to_le_bytes());
+        buf[10..14].copy_from_slice(&self.frame_len.to_le_bytes());
+        buf[14..18].copy_from_slice(&self.capture_ts_us.to_le_bytes());
         buf
     }
 
@@ -66,10 +68,10 @@ impl MediaHeader {
             flags: buf[1],
             frame_id: u16::from_le_bytes([buf[2], buf[3]]),
             shard_index: u16::from_le_bytes([buf[4], buf[5]]),
-            k: buf[6],
-            r: buf[7],
-            frame_len: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
-            capture_ts_us: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
+            k: u16::from_le_bytes([buf[6], buf[7]]),
+            r: u16::from_le_bytes([buf[8], buf[9]]),
+            frame_len: u32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]),
+            capture_ts_us: u32::from_le_bytes([buf[14], buf[15], buf[16], buf[17]]),
         })
     }
 }
@@ -111,7 +113,7 @@ mod tests {
     #[test]
     fn shard_len_even_and_capped() {
         assert_eq!(shard_payload_len(1400), 1200);
-        assert_eq!(shard_payload_len(500), 484);
+        assert_eq!(shard_payload_len(500), 482);
         assert_eq!(shard_payload_len(16), 0);
     }
 

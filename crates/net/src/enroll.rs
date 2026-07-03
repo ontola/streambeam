@@ -96,6 +96,15 @@ impl PairingStore {
         self.paired.iter().any(|c| &c.pubkey == pubkey)
     }
 
+    /// Remove a previously paired client (host-initiated "remove device").
+    /// Returns `true` if it was found. The client must send a fresh pairing
+    /// proof and be re-approved to reconnect afterwards.
+    pub fn forget(&mut self, pubkey: &[u8; 32]) -> bool {
+        let len = self.paired.len();
+        self.paired.retain(|c| &c.pubkey != pubkey);
+        self.paired.len() != len
+    }
+
     /// Mint a fresh one-time token valid for `ttl_secs`.
     pub fn mint_token(&mut self, ttl_secs: u64) -> [u8; 16] {
         let mut token = [0u8; 16];

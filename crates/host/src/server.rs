@@ -21,6 +21,14 @@ use crate::audio::OpusCatalog;
 use crate::encode::VideoEncoder;
 use crate::mock::MockEncoder;
 
+/// `eprintln!`-alike that also survives into `host.log` — plain `eprintln!`
+/// is invisible once the release build has no console attached.
+macro_rules! log {
+    ($($arg:tt)*) => {
+        crate::logging::log(&format!($($arg)*))
+    };
+}
+
 fn capture_ts_us() -> u32 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -51,12 +59,16 @@ pub struct HostControls {
     discoverable: AtomicBool,
     accept_connections: AtomicBool,
     clients: Mutex<Vec<ClientEntry>>,
+    /// Set once by `run()` so `forget` can also drop the persisted pairing.
+    pairing: Mutex<Option<(Arc<Mutex<PairingStore>>, Option<std::path::PathBuf>)>>,
 }
 
 #[derive(Clone)]
 pub struct ClientEntry {
     pub name: String,
     pub addr: SocketAddr,
+    pub pubkey: [u8; 32],
+    conn: quinn::Connection,
 }
 
 impl HostControls {
@@ -66,7 +78,52 @@ impl HostControls {
             discoverable: AtomicBool::new(true),
             accept_connections: AtomicBool::new(true),
             clients: Mutex::new(Vec::new()),
+            pairing: Mutex::new(None),
         }
+    }
+
+    /// Wire in the pairing store so `forget` can drop the persisted pairing,
+    /// not just close the live connection. Called once from `run()`.
+    fn attach_pairing_store(
+        &self,
+        store: Arc<Mutex<PairingStore>>,
+        paired_path: Option<std::path::PathBuf>,
+    ) {
+        *self.pairing.lock().unwrap() = Some((store, paired_path));
+    }
+
+    /// Close a connected client's connection. It stays paired and can
+    /// reconnect without a new approval.
+    pub fn disconnect(&self, addr: SocketAddr) -> bool {
+        let clients = self.clients.lock().unwrap();
+        let Some(entry) = clients.iter().find(|c| c.addr == addr) else {
+            return false;
+        };
+        entry.conn.close(0u32.into(), b"disconnected by host");
+        true
+    }
+
+    /// Close the connection *and* remove the pairing, so the device needs a
+    /// fresh approval to reconnect.
+    pub fn forget(&self, addr: SocketAddr) -> bool {
+        let pubkey = {
+            let clients = self.clients.lock().unwrap();
+            let Some(entry) = clients.iter().find(|c| c.addr == addr) else {
+                return false;
+            };
+            entry.conn.close(0u32.into(), b"removed by host");
+            entry.pubkey
+        };
+        if let Some((store, path)) = &*self.pairing.lock().unwrap() {
+            let mut store = store.lock().unwrap();
+            store.forget(&pubkey);
+            if let Some(path) = path {
+                if let Err(e) = store.save_to(path) {
+                    log!("failed to persist forgotten client: {e}");
+                }
+            }
+        }
+        true
     }
 
     pub fn is_discoverable(&self) -> bool {
@@ -172,7 +229,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     let encoder = build_encoder(config.fps);
     let (width, height) = encoder.dimensions();
     let codec_config = encoder.codec_config();
-    eprintln!(
+    log!(
         "encoder ready — {width}x{height}, {} opus packets",
         OpusCatalog::bundled().len()
     );
@@ -188,7 +245,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
             .unwrap_or_default(),
     ));
     if let Some(path) = &paired_path {
-        eprintln!(
+        log!(
             "loaded {} paired client(s) from {}",
             store.lock().unwrap().paired_clients().len(),
             path.display()
@@ -205,6 +262,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     let addrs = pairing_addrs(addr);
 
     let controls = config.controls.clone();
+    controls.attach_pairing_store(store.clone(), paired_path.clone());
 
     let _mdns = if std::env::var("STREAMBEAM_NO_MDNS").is_err() {
         let ips: Vec<_> = addrs.iter().map(|a| a.ip()).collect();
@@ -218,9 +276,9 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
             Ok(adv) => {
                 let adv = Arc::new(adv);
                 if let Err(e) = adv.set_visible(controls.is_discoverable()) {
-                    eprintln!("mDNS advertise skipped: {e}");
+                    log!("mDNS advertise skipped: {e}");
                 }
-                eprintln!("mDNS: ready on port {} ({ips:?})", addr.port());
+                log!("mDNS: ready on port {} ({ips:?})", addr.port());
                 // Poll the tray toggle and register/unregister to match it.
                 let watch_adv = adv.clone();
                 let watch_controls = controls.clone();
@@ -230,8 +288,8 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
                         let want = watch_controls.is_discoverable();
                         if want != watch_adv.is_visible() {
                             match watch_adv.set_visible(want) {
-                                Ok(()) => eprintln!("mDNS discoverable = {want}"),
-                                Err(e) => eprintln!("mDNS toggle failed: {e}"),
+                                Ok(()) => log!("mDNS discoverable = {want}"),
+                                Err(e) => log!("mDNS toggle failed: {e}"),
                             }
                         }
                     }
@@ -239,7 +297,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
                 Some(adv)
             }
             Err(e) => {
-                eprintln!("mDNS advertise skipped: {e}");
+                log!("mDNS advertise skipped: {e}");
                 None
             }
         }
@@ -262,10 +320,10 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     if let Some(tx) = &config.pairing_payload_tx {
         let _ = tx.send(payload.clone());
     }
-    eprintln!(
+    log!(
         "streambeam-host listening on {addr} — scan QR or paste sbm1: into the Android app"
     );
-    eprintln!("LAN addresses: {:?}", pairing_addrs(addr));
+    log!("LAN addresses: {:?}", pairing_addrs(addr));
 
     let audio = Arc::new(OpusCatalog::bundled());
     let frame_interval = Duration::from_micros(1_000_000 / u64::from(config.fps.max(1)));
@@ -275,7 +333,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
             break;
         };
         if !controls.accepts_connections() {
-            eprintln!(
+            log!(
                 "refused {} — connections disabled in tray",
                 incoming.remote_address()
             );
@@ -310,7 +368,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
             )
             .await
             {
-                eprintln!("connection failed: {e}");
+                log!("connection failed: {e}");
             }
         });
     }
@@ -346,7 +404,7 @@ async fn handle_client(
     controls: Arc<HostControls>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = incoming.await?;
-    eprintln!("client connected from {}", conn.remote_address());
+    log!("client connected from {}", conn.remote_address());
 
     let (mut send, mut recv) = conn.accept_bi().await?;
     let mut buf = Vec::new();
@@ -381,11 +439,11 @@ async fn handle_client(
 
     match verdict {
         HelloVerdict::AcceptedKnown => {
-            eprintln!("known client: {client_name}");
+            log!("known client: {client_name}");
             write_msg(&mut send, &HostMsg::PairAck).await?;
         }
         HelloVerdict::Rejected(reason) => {
-            eprintln!("pair rejected for {client_name}: {reason}");
+            log!("pair rejected for {client_name}: {reason}");
             write_msg(&mut send, &HostMsg::PairReject { reason }).await?;
             return Ok(());
         }
@@ -397,7 +455,7 @@ async fn handle_client(
             )
             .await;
             if !approved {
-                eprintln!("user declined pairing for {client_name}");
+                log!("user declined pairing for {client_name}");
                 write_msg(
                     &mut send,
                     &HostMsg::PairReject {
@@ -409,7 +467,7 @@ async fn handle_client(
             }
 
             store.lock().unwrap().commit_new_pair(client_pk, &client_name);
-            eprintln!("paired new client: {client_name}");
+            log!("paired new client: {client_name}");
             write_msg(&mut send, &HostMsg::PairAck).await?;
             if let Some(path) = &paired_store {
                 store
@@ -425,6 +483,8 @@ async fn handle_client(
     controls.add_client(ClientEntry {
         name: client_name.clone(),
         addr: conn.remote_address(),
+        pubkey: client_pk,
+        conn: conn.clone(),
     });
     let _client_guard = ClientGuard {
         controls: controls.clone(),
@@ -436,9 +496,9 @@ async fn handle_client(
         loop {
             match input_conn.accept_uni().await {
                 Ok(recv) => {
-                    eprintln!("input stream opened");
+                    log!("input stream opened");
                     if let Err(e) = handle_input_stream(recv).await {
-                        eprintln!("input stream ended: {e}");
+                        log!("input stream ended: {e}");
                     }
                 }
                 Err(_) => break,
@@ -484,7 +544,7 @@ async fn handle_client(
                     },
                 )
                 .await?;
-                eprintln!("session started — streaming to {client_name}");
+                log!("session started — streaming to {client_name}");
 
                 if !streaming {
                     streaming = true;
@@ -495,7 +555,7 @@ async fn handle_client(
                         if let Err(e) =
                             stream_video(media_conn, enc, ctl, frame_interval).await
                         {
-                            eprintln!("video stream ended: {e}");
+                            log!("video stream ended: {e}");
                         }
                     });
                     let audio_conn = conn.clone();
@@ -503,7 +563,7 @@ async fn handle_client(
                     let audio_interval = Duration::from_millis(10);
                     tokio::spawn(async move {
                         if let Err(e) = stream_audio(audio_conn, audio_cat, audio_interval).await {
-                            eprintln!("audio stream ended: {e}");
+                            log!("audio stream ended: {e}");
                         }
                     });
                 }
@@ -519,7 +579,7 @@ async fn handle_client(
                         enc.force_idr();
                     }
                     last_idr = std::time::Instant::now();
-                    eprintln!("IDR scheduled");
+                    log!("IDR scheduled");
                 }
             }
             ClientMsg::Bye => {
@@ -527,7 +587,7 @@ async fn handle_client(
                 break;
             }
             other => {
-                eprintln!("ignored control message: {other:?}");
+                log!("ignored control message: {other:?}");
             }
         }
     }
@@ -570,7 +630,7 @@ async fn request_approval(
         // UI thread is gone — fail closed.
         return false;
     }
-    eprintln!("awaiting host approval for {client_name} ({client_addr})");
+    log!("awaiting host approval for {client_name} ({client_addr})");
     answer.await.unwrap_or(false)
 }
 
@@ -620,7 +680,7 @@ async fn stream_video(
         }
 
         if frame_id % 30 == 0 {
-            eprintln!(
+            log!(
                 "sent frame {frame_id} ({} bytes, keyframe={})",
                 frame.data.len(),
                 frame.keyframe

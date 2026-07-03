@@ -159,12 +159,25 @@ fn run_pipeline(
     }
 }
 
+/// Cap the longest encoded side to this many pixels. The FEC layer addresses
+/// shards with a `u8` count (max 255 per frame, see `MAX_DATA_SHARDS`), and a
+/// native 4K keyframe routinely exceeds that — capturing at native resolution
+/// only to shrink it for a phone screen buys nothing anyway.
+const MAX_ENCODE_DIM: u32 = 1920;
+
 struct Pipeline {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
     staging: ID3D11Texture2D,
     transform: IMFTransform,
+    /// Native desktop resolution — the size of `staging` and of the BGRA data
+    /// `capture_into_nv12` reads.
+    capture_width: u32,
+    capture_height: u32,
+    /// Encoded resolution — `capture_{width,height}` downscaled to
+    /// `MAX_ENCODE_DIM`, preserving aspect ratio. This is what `nv12`, the MF
+    /// encoder, and `EncodedFrame` all use.
     width: u32,
     height: u32,
     fps: u32,
@@ -193,8 +206,14 @@ impl Pipeline {
             ctx(MFStartup(MF_VERSION, MFSTARTUP_FULL), "MFStartup")?;
 
             let (device, context) = create_d3d_device()?;
-            let (duplication, width, height) = create_duplication(&device)?;
-            let staging = create_staging(&device, width, height)?;
+            let (duplication, capture_width, capture_height) = create_duplication(&device)?;
+            let staging = create_staging(&device, capture_width, capture_height)?;
+            let (width, height) = scaled_dimensions(capture_width, capture_height, MAX_ENCODE_DIM);
+            if (width, height) != (capture_width, capture_height) {
+                crate::logging::log(&format!(
+                    "downscaling capture {capture_width}x{capture_height} -> {width}x{height} to stay within FEC shard limits"
+                ));
+            }
             let (transform, codec_config) = create_encoder(width, height, fps)?;
 
             Ok(Self {
@@ -203,6 +222,8 @@ impl Pipeline {
                 duplication,
                 staging,
                 transform,
+                capture_width,
+                capture_height,
                 width,
                 height,
                 fps,
@@ -290,9 +311,19 @@ impl Pipeline {
                 "Map staging",
             )?;
             let stride = mapped.RowPitch as usize;
-            let src =
-                std::slice::from_raw_parts(mapped.pData as *const u8, stride * self.height as usize);
-            bgra_to_nv12(src, stride, self.width, self.height, &mut self.nv12);
+            let src = std::slice::from_raw_parts(
+                mapped.pData as *const u8,
+                stride * self.capture_height as usize,
+            );
+            bgra_to_nv12(
+                src,
+                stride,
+                self.capture_width,
+                self.capture_height,
+                self.width,
+                self.height,
+                &mut self.nv12,
+            );
             self.context.Unmap(&self.staging, 0);
             self.have_last = true;
             Ok(())
@@ -552,18 +583,34 @@ unsafe fn set_codec_bool(transform: &IMFTransform, key: &GUID, value: bool) -> R
 }
 
 /// BGRA (from Desktop Duplication) → NV12 (what the encoder wants), BT.601 limited.
-fn bgra_to_nv12(src: &[u8], stride: usize, width: u32, height: u32, out: &mut [u8]) {
-    let w = width as usize;
-    let h = height as usize;
+/// Convert (and, when `dst` is smaller than `src`, nearest-neighbor downscale)
+/// a captured BGRA desktop frame to NV12 for the encoder.
+#[allow(clippy::too_many_arguments)]
+fn bgra_to_nv12(
+    src: &[u8],
+    stride: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+    out: &mut [u8],
+) {
+    let (sw, sh) = (src_width as usize, src_height as usize);
+    let (w, h) = (dst_width as usize, dst_height as usize);
     let y_plane = w * h;
 
+    // Nearest-neighbor source pixel for destination (x, y); degenerates to an
+    // identity mapping when src and dst are the same size.
+    let pixel_at = |x: usize, y: usize| -> (i32, i32, i32) {
+        let sx = (x * sw / w).min(sw.saturating_sub(1));
+        let sy = (y * sh / h).min(sh.saturating_sub(1));
+        let p = sy * stride + sx * 4;
+        (src[p] as i32, src[p + 1] as i32, src[p + 2] as i32)
+    };
+
     for y in 0..h {
-        let row = y * stride;
         for x in 0..w {
-            let p = row + x * 4;
-            let b = src[p] as i32;
-            let g = src[p + 1] as i32;
-            let r = src[p + 2] as i32;
+            let (b, g, r) = pixel_at(x, y);
             let yy = (66 * r + 129 * g + 25 * b + 128 >> 8) + 16;
             out[y * w + x] = yy.clamp(0, 255) as u8;
         }
@@ -572,12 +619,8 @@ fn bgra_to_nv12(src: &[u8], stride: usize, width: u32, height: u32, out: &mut [u
     // Interleaved UV plane at half resolution (sample top-left of each 2×2 block).
     let mut uv = y_plane;
     for y in (0..h).step_by(2) {
-        let row = y * stride;
         for x in (0..w).step_by(2) {
-            let p = row + x * 4;
-            let b = src[p] as i32;
-            let g = src[p + 1] as i32;
-            let r = src[p + 2] as i32;
+            let (b, g, r) = pixel_at(x, y);
             let u = (-38 * r - 74 * g + 112 * b + 128 >> 8) + 128;
             let v = (112 * r - 94 * g - 18 * b + 128 >> 8) + 128;
             out[uv] = u.clamp(0, 255) as u8;
@@ -585,6 +628,20 @@ fn bgra_to_nv12(src: &[u8], stride: usize, width: u32, height: u32, out: &mut [u
             uv += 2;
         }
     }
+}
+
+/// Scale `(w, h)` down so the longer side is at most `max_dim`, preserving
+/// aspect ratio and keeping both dimensions even (required by NV12/H.264).
+/// A no-op when `(w, h)` already fits.
+fn scaled_dimensions(w: u32, h: u32, max_dim: u32) -> (u32, u32) {
+    let longest = w.max(h);
+    if longest <= max_dim {
+        return (w & !1, h & !1);
+    }
+    let scale = f64::from(max_dim) / f64::from(longest);
+    let sw = ((f64::from(w) * scale) as u32).max(2) & !1;
+    let sh = ((f64::from(h) * scale) as u32).max(2) & !1;
+    (sw, sh)
 }
 
 /// Mean of the Y plane, sampled sparsely for speed. Near 16 means the frame
