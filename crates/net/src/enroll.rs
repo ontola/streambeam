@@ -38,6 +38,21 @@ pub enum HelloDecision {
     Rejected(String),
 }
 
+/// Outcome of validating a Hello *before* the pairing is committed.
+///
+/// [`PairingStore::evaluate_hello`] performs only the cryptographic checks and
+/// leaves the store unchanged, so the caller can prompt the user for approval
+/// before calling [`PairingStore::commit_new_pair`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelloVerdict {
+    /// Client is already enrolled — connect immediately, no approval needed.
+    AcceptedKnown,
+    /// Valid pairing proof from a new client — ask the user to approve.
+    NeedsApproval,
+    /// Proof missing/invalid or token expired — refuse.
+    Rejected(String),
+}
+
 impl PairingStore {
     pub fn new() -> Self {
         Self::default()
@@ -115,6 +130,53 @@ impl PairingStore {
         self.active = None;
     }
 
+    /// Validate a Hello without mutating the store.
+    ///
+    /// Returns [`HelloVerdict::NeedsApproval`] when the proof is valid but the
+    /// client is new, so the host can gate enrollment on a user prompt before
+    /// calling [`commit_new_pair`](Self::commit_new_pair).
+    pub fn evaluate_hello(
+        &self,
+        client_pubkey: [u8; 32],
+        pair_proof: Option<[u8; 32]>,
+        exporter: &[u8; PAIR_EXPORTER_LEN],
+    ) -> HelloVerdict {
+        if self.is_paired(&client_pubkey) {
+            return HelloVerdict::AcceptedKnown;
+        }
+
+        let Some(proof) = pair_proof else {
+            return HelloVerdict::Rejected("unknown client".into());
+        };
+
+        let Some(token) = self.active_token() else {
+            return HelloVerdict::Rejected("pairing token expired".into());
+        };
+
+        if !verify_pair_proof(&token, &client_pubkey, exporter, &proof) {
+            return HelloVerdict::Rejected("invalid pair proof".into());
+        }
+
+        HelloVerdict::NeedsApproval
+    }
+
+    /// Enroll a client the user has approved, consuming the one-time token.
+    ///
+    /// A repeated pubkey is ignored so a double-approval can't duplicate an
+    /// entry.
+    pub fn commit_new_pair(&mut self, client_pubkey: [u8; 32], client_name: &str) {
+        self.burn_token();
+        if self.is_paired(&client_pubkey) {
+            return;
+        }
+        self.paired.push(PairedClient {
+            pubkey: client_pubkey,
+            name: client_name.to_owned(),
+        });
+    }
+
+    /// Validate and (if the proof is valid) enroll in one step, auto-approving
+    /// new clients. Used by headless hosts with no interactive approval UI.
     pub fn handle_hello(
         &mut self,
         client_pubkey: [u8; 32],
@@ -122,28 +184,14 @@ impl PairingStore {
         pair_proof: Option<[u8; 32]>,
         exporter: &[u8; PAIR_EXPORTER_LEN],
     ) -> HelloDecision {
-        if self.is_paired(&client_pubkey) {
-            return HelloDecision::AcceptedKnown;
+        match self.evaluate_hello(client_pubkey, pair_proof, exporter) {
+            HelloVerdict::AcceptedKnown => HelloDecision::AcceptedKnown,
+            HelloVerdict::Rejected(reason) => HelloDecision::Rejected(reason),
+            HelloVerdict::NeedsApproval => {
+                self.commit_new_pair(client_pubkey, client_name);
+                HelloDecision::AcceptedNewPair
+            }
         }
-
-        let Some(proof) = pair_proof else {
-            return HelloDecision::Rejected("unknown client".into());
-        };
-
-        let Some(token) = self.active_token() else {
-            return HelloDecision::Rejected("pairing token expired".into());
-        };
-
-        if !verify_pair_proof(&token, &client_pubkey, exporter, &proof) {
-            return HelloDecision::Rejected("invalid pair proof".into());
-        }
-
-        self.burn_token();
-        self.paired.push(PairedClient {
-            pubkey: client_pubkey,
-            name: client_name.to_owned(),
-        });
-        HelloDecision::AcceptedNewPair
     }
 }
 

@@ -100,6 +100,16 @@ pub fn guess_lan_ip() -> Option<IpAddr> {
 
 /// IPs to publish via mDNS for a bound listen address.
 pub fn advertise_ips(listen: IpAddr) -> Vec<IpAddr> {
+    if let Ok(value) = std::env::var("STREAMBEAM_ADVERTISE_IPS") {
+        let ips: Vec<IpAddr> = value
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if !ips.is_empty() {
+            return ips;
+        }
+    }
+
     if listen.is_unspecified() {
         guess_lan_ip()
             .into_iter()

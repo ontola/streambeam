@@ -7,8 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
     advertise, advertise_ips, export_pairing_secret, peer_pubkey, read_msg, server_config,
-    write_msg, HelloDecision, Identity, PairingStore,
+    write_msg, HelloVerdict, Identity, PairingStore,
 };
+use tokio::sync::oneshot;
 use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
 use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::pair::PairInfo;
@@ -33,6 +34,22 @@ pub struct HostConfig {
     pub token_ttl_secs: u64,
     pub identity_path: std::path::PathBuf,
     pub paired_store: Option<std::path::PathBuf>,
+    /// Pushes the `sbm1:` pairing payload to the UI so it can render the QR.
+    pub pairing_payload_tx: Option<std::sync::mpsc::Sender<String>>,
+    /// Asks the UI to approve each new device before it is enrolled. When
+    /// `None` (headless host) new devices with a valid token are auto-approved.
+    pub pairing_request_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
+}
+
+/// A pending "device wants to link" prompt handed to the UI thread.
+///
+/// The UI shows the prompt and reports the user's choice by sending `true`
+/// (allow) or `false` (deny) on [`respond`](Self::respond). Dropping the
+/// sender counts as a denial.
+pub struct PairApproval {
+    pub client_name: String,
+    pub client_addr: SocketAddr,
+    pub respond: oneshot::Sender<bool>,
 }
 
 struct StreamControl {
@@ -119,6 +136,9 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
 
     println!("{payload}");
     crate::qr::print_terminal(&payload);
+    if let Some(tx) = &config.pairing_payload_tx {
+        let _ = tx.send(payload.clone());
+    }
     eprintln!(
         "streambeam-host listening on {addr} — scan QR or paste sbm1: into the Android app"
     );
@@ -135,6 +155,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         let audio = audio.clone();
         let codec_config = codec_config.clone();
         let paired_path = paired_path.clone();
+        let approval_tx = config.pairing_request_tx.clone();
         let fps = config.fps;
         let width = width as u16;
         let height = height as u16;
@@ -153,6 +174,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
                 fps,
                 frame_interval,
                 paired_path,
+                approval_tx,
             )
             .await
             {
@@ -188,6 +210,7 @@ async fn handle_client(
     fps: u32,
     frame_interval: Duration,
     paired_store: Option<std::path::PathBuf>,
+    approval_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = incoming.await?;
     eprintln!("client connected from {}", conn.remote_address());
@@ -217,13 +240,42 @@ async fn handle_client(
 
     let client_pk = peer_pubkey(&conn)?;
     let exporter = export_pairing_secret(&conn)?;
-    let decision = store
+    // Evaluate under the lock, but never hold it across the user-approval await.
+    let verdict = store
         .lock()
         .unwrap()
-        .handle_hello(client_pk, &client_name, pair_proof, &exporter);
+        .evaluate_hello(client_pk, pair_proof, &exporter);
 
-    match decision {
-        HelloDecision::AcceptedNewPair => {
+    match verdict {
+        HelloVerdict::AcceptedKnown => {
+            eprintln!("known client: {client_name}");
+            write_msg(&mut send, &HostMsg::PairAck).await?;
+        }
+        HelloVerdict::Rejected(reason) => {
+            eprintln!("pair rejected for {client_name}: {reason}");
+            write_msg(&mut send, &HostMsg::PairReject { reason }).await?;
+            return Ok(());
+        }
+        HelloVerdict::NeedsApproval => {
+            let approved = request_approval(
+                approval_tx.as_ref(),
+                &client_name,
+                conn.remote_address(),
+            )
+            .await;
+            if !approved {
+                eprintln!("user declined pairing for {client_name}");
+                write_msg(
+                    &mut send,
+                    &HostMsg::PairReject {
+                        reason: "pairing declined on host".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+
+            store.lock().unwrap().commit_new_pair(client_pk, &client_name);
             eprintln!("paired new client: {client_name}");
             write_msg(&mut send, &HostMsg::PairAck).await?;
             if let Some(path) = &paired_store {
@@ -233,15 +285,6 @@ async fn handle_client(
                     .save_to(path)
                     .map_err(|e| e.to_string())?;
             }
-        }
-        HelloDecision::AcceptedKnown => {
-            eprintln!("known client: {client_name}");
-            write_msg(&mut send, &HostMsg::PairAck).await?;
-        }
-        HelloDecision::Rejected(reason) => {
-            eprintln!("pair rejected for {client_name}: {reason}");
-            write_msg(&mut send, &HostMsg::PairReject { reason }).await?;
-            return Ok(());
         }
     }
 
@@ -333,6 +376,34 @@ async fn handle_client(
 
     conn.close(0u32.into(), b"bye");
     Ok(())
+}
+
+/// Ask the UI to approve a new device and wait for the answer.
+///
+/// With no UI wired (headless host) a valid token is trusted and auto-approved.
+/// If the UI thread hangs up without answering, the request is denied.
+async fn request_approval(
+    approval_tx: Option<&std::sync::mpsc::Sender<PairApproval>>,
+    client_name: &str,
+    client_addr: SocketAddr,
+) -> bool {
+    let Some(tx) = approval_tx else {
+        return true;
+    };
+    let (respond, answer) = oneshot::channel();
+    if tx
+        .send(PairApproval {
+            client_name: client_name.to_owned(),
+            client_addr,
+            respond,
+        })
+        .is_err()
+    {
+        // UI thread is gone — fail closed.
+        return false;
+    }
+    eprintln!("awaiting host approval for {client_name} ({client_addr})");
+    answer.await.unwrap_or(false)
 }
 
 async fn stream_video(

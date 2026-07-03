@@ -3,7 +3,6 @@
 use std::net::SocketAddr;
 
 use clap::Parser;
-use tokio::signal;
 
 pub mod audio;
 pub mod data_dir;
@@ -11,6 +10,8 @@ pub mod encode;
 pub mod mock;
 pub mod qr;
 pub mod server;
+#[cfg(windows)]
+mod tray;
 
 pub use encode::{EncodedFrame, EncodeError, VideoEncoder};
 
@@ -45,8 +46,7 @@ fn default_host_name() -> String {
         .unwrap_or_else(|_| "streambeam".into())
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -55,12 +55,35 @@ async fn main() {
         .init();
 
     let opt = Opt::parse();
+
+    #[cfg(windows)]
+    {
+        if let Err(e) = tray::run(opt) {
+            eprintln!("host error: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Err(e) = run_cli(opt) {
+            eprintln!("host error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn build_config(
+    opt: Opt,
+    pairing_payload_tx: Option<std::sync::mpsc::Sender<String>>,
+    pairing_request_tx: Option<std::sync::mpsc::Sender<server::PairApproval>>,
+) -> server::HostConfig {
     let listen = std::env::var("STREAMBEAM_LISTEN")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(opt.listen);
     let _ = ensure_data_dir();
-    let config = server::HostConfig {
+    server::HostConfig {
         listen,
         host_name: opt
             .name
@@ -70,22 +93,29 @@ async fn main() {
         token_ttl_secs: opt.token_ttl,
         identity_path: identity_path(),
         paired_store: Some(paired_store_path()),
-    };
+        pairing_payload_tx,
+        pairing_request_tx,
+    }
+}
 
+#[cfg(not(windows))]
+fn run_cli(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = build_config(opt, None, None);
     eprintln!(
         "StreamBeam host {} (mock encoder — real capture in M2)",
         env!("CARGO_PKG_VERSION")
     );
 
-    tokio::select! {
-        res = server::run(config) => {
-            if let Err(e) = res {
-                eprintln!("host error: {e}");
-                std::process::exit(1);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async move {
+        tokio::select! {
+            res = server::run(config) => res,
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("shutting down");
+                Ok(())
             }
         }
-        _ = signal::ctrl_c() => {
-            eprintln!("shutting down");
-        }
-    }
+    })
 }
