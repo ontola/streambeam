@@ -4,7 +4,7 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 
 | Milestone | Status | Notes |
 |---|---|---|
-| M0 — Scaffold + secure transport | 🔨 in progress | proto done; net + devtools next |
+| M0 — Scaffold + secure transport | 🔨 in progress | proto + net + devtools done; tag m0 pending |
 | M1 — Media plane vs fakehost | ⬜ | |
 | M2 — Windows capture→encode spike | ⬜ | needs Windows box |
 | M3 — Android video path vs fakehost | ⬜ | needs phone |
@@ -18,9 +18,9 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 
 - [x] git init, workspace `Cargo.toml`, toolchain, README, `docs/PROTOCOL.md`
 - [x] `crates/proto`: media header, FEC, control/input messages, pair payload + tests
-- [ ] `crates/net`: Ed25519 identity, pinned-key mTLS verifiers, quinn endpoint, enrollment
-- [ ] `crates/devtools`: `fakehost` + `devclient`, pairing demo on localhost
-- [ ] Integration tests: pair success / wrong token / unknown key
+- [x] `crates/net`: Ed25519 identity, pinned-key mTLS verifiers, quinn endpoint, enrollment
+- [x] `crates/devtools`: `fakehost` + `devclient`, pairing demo on localhost
+- [x] Integration tests: pair success / wrong token / unknown key
 - [ ] Commit + tag `m0`
 
 ## Decisions log

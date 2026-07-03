@@ -6,3 +6,16 @@ license.workspace = true
 
 [dependencies]
 streambeam-proto = { workspace = true }
+quinn = { workspace = true }
+rustls = { workspace = true }
+rcgen = { workspace = true }
+rustls-pki-types = { workspace = true }
+x509-parser = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
