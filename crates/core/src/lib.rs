@@ -2,6 +2,7 @@
 
 pub mod annex_b;
 pub mod reassemble;
+pub mod saved_host;
 pub mod session;
 
 pub use annex_b::{
@@ -9,4 +10,7 @@ pub use annex_b::{
     AccessUnit,
 };
 pub use reassemble::{FrameReassembler, FrameStats};
-pub use session::{connect, connect_as, request_idr, ClientSession};
+pub use saved_host::{SavedHost, load as load_saved_host, save as save_saved_host};
+pub use session::{
+    connect, connect_as, connect_as_identity, connect_known, request_idr, ClientSession,
+};

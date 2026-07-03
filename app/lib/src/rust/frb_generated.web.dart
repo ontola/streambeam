@@ -40,6 +40,9 @@ abstract class StreambeamFfiApiImplPlatform
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  String? dco_decode_opt_String(dynamic raw);
+
+  @protected
   StreamStats dco_decode_stream_stats(dynamic raw);
 
   @protected
@@ -76,6 +79,9 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   StreamStats sse_decode_stream_stats(SseDeserializer deserializer);
@@ -127,6 +133,9 @@ abstract class StreambeamFfiApiImplPlatform
     Uint8List self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
   void sse_encode_stream_stats(StreamStats self, SseSerializer serializer);

@@ -1,5 +1,7 @@
 //! Terminal QR rendering for the pairing payload.
 
+use std::io::Write;
+
 use qrcode::QrCode;
 
 pub fn print_terminal(payload: &str) {
@@ -12,5 +14,5 @@ pub fn print_terminal(payload: &str) {
         .quiet_zone(false)
         .module_dimensions(1, 2)
         .build();
-    println!("{string}");
+    let _ = writeln!(std::io::stderr(), "{string}");
 }

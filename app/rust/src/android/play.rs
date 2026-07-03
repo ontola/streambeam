@@ -1,24 +1,60 @@
 //! Decode Annex-B H.264 access units to an Android Surface via MediaCodec.
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use ndk::media::media_codec::{MediaCodec, MediaCodecBufferInfo, MediaFormat};
 use ndk::native_window::NativeWindow;
 use streambeam_core::{
     annex_b::{extract_avc_decoder_config, nal_with_start_code},
-    connect_as, request_idr, FrameReassembler,
+    connect_as_identity, connect_known, request_idr, save_saved_host, ClientSession,
+    FrameReassembler, SavedHost,
 };
 use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
 
 use crate::api::StreamStats;
+use crate::store::client_identity_path;
 
 const TIMEOUT_US: i64 = 30_000;
 
 pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> Result<StreamStats, String> {
-    let mut session = connect_as(&payload, "streambeam-android")
-        .await
-        .map_err(|e| e.to_string())?;
+    let session = connect_as_identity(
+        &payload,
+        "streambeam-android",
+        Some(&client_identity_path()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
+    if let Ok(host) = SavedHost::from_pair_payload(&payload) {
+        let _ = save_saved_host(&crate::store::saved_host_path(), &host);
+    }
+
+    play_session(session, native_window, max_video_frames).await
+}
+
+pub async fn run_known(
+    host: SavedHost,
+    addr: SocketAddr,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    let session = connect_known(
+        host.host_pubkey,
+        addr,
+        "streambeam-android",
+        &client_identity_path(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    play_session(session, native_window, max_video_frames).await
+}
+
+async fn play_session(
+    mut session: ClientSession,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
     let _ = request_idr(&mut session).await;
 
     let config = session

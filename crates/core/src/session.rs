@@ -1,5 +1,7 @@
 //! Pairing + session setup shared by devtools and mobile FFI.
 
+use std::net::SocketAddr;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
@@ -30,6 +32,15 @@ pub async fn connect_as(
     payload: &str,
     client_name: &str,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
+    connect_as_identity(payload, client_name, None).await
+}
+
+/// Like [`connect_as`] but persists the client Ed25519 identity at `identity_path` when set.
+pub async fn connect_as_identity(
+    payload: &str,
+    client_name: &str,
+    identity_path: Option<&Path>,
+) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     let info = PairInfo::decode_payload(payload)?;
     if info.version != PROTO_VERSION {
         return Err(format!("unsupported pair version {}", info.version).into());
@@ -37,7 +48,7 @@ pub async fn connect_as(
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     if now > info.expires_unix {
         return Err(
-            "pairing payload expired — restart fakehost and use the new sbm1: line".into(),
+            "pairing payload expired — rescan host QR or use Reconnect if already paired".into(),
         );
     }
 
@@ -47,14 +58,14 @@ pub async fn connect_as(
         .copied()
         .ok_or("pairing payload has no addresses")?;
 
-    let identity = Identity::generate()?;
+    let identity = load_client_identity(identity_path)?;
     let mut endpoint = quinn::Endpoint::client("[::]:0".parse()?)?;
     endpoint.set_default_client_config(client_config(&identity, info.host_pubkey)?);
 
     let conn = endpoint
         .connect(addr, "localhost")?
         .await
-        .map_err(|e| format!("connect failed (is fakehost running?): {e}"))?;
+        .map_err(|e| format!("connect failed (is host running?): {e}"))?;
 
     let exporter = export_pairing_secret(&conn)?;
     let pair_proof = Some(build_pair_proof(
@@ -63,6 +74,47 @@ pub async fn connect_as(
         &exporter,
     ));
 
+    finish_session(
+        endpoint,
+        conn,
+        client_name,
+        pair_proof,
+    )
+    .await
+}
+
+/// Reconnect to a previously paired host (no QR token required).
+pub async fn connect_known(
+    host_pubkey: [u8; 32],
+    addr: SocketAddr,
+    client_name: &str,
+    identity_path: &Path,
+) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
+    let identity = load_client_identity(Some(identity_path))?;
+    let mut endpoint = quinn::Endpoint::client("[::]:0".parse()?)?;
+    endpoint.set_default_client_config(client_config(&identity, host_pubkey)?);
+
+    let conn = endpoint
+        .connect(addr, "localhost")?
+        .await
+        .map_err(|e| format!("connect failed (is host running?): {e}"))?;
+
+    finish_session(endpoint, conn, client_name, None).await
+}
+
+fn load_client_identity(path: Option<&Path>) -> Result<Identity, Box<dyn std::error::Error + Send + Sync>> {
+    match path {
+        Some(p) => Ok(Identity::load_or_generate(p)?),
+        None => Ok(Identity::generate()?),
+    }
+}
+
+async fn finish_session(
+    endpoint: quinn::Endpoint,
+    conn: quinn::Connection,
+    client_name: &str,
+    pair_proof: Option<[u8; 32]>,
+) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     let (mut send, mut recv) = conn.open_bi().await?;
     write_msg(
         &mut send,
@@ -78,10 +130,7 @@ pub async fn connect_as(
     match read_msg::<HostMsg>(&mut recv, &mut buf).await? {
         HostMsg::PairAck => {}
         HostMsg::PairReject { reason } => {
-            return Err(format!(
-                "pair rejected: {reason} (restart fakehost for a fresh token)"
-            )
-            .into());
+            return Err(format!("pair rejected: {reason}").into());
         }
         other => return Err(format!("unexpected host reply: {other:?}").into()),
     }
@@ -140,8 +189,6 @@ pub async fn connect_as(
 pub async fn request_idr(
     session: &mut ClientSession,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use streambeam_net::write_msg;
-    use streambeam_proto::control::ClientMsg;
     write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
     Ok(())
 }

@@ -4,19 +4,18 @@ mod annex_b;
 mod loss;
 mod media;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use clap::Parser;
-use streambeam_core::FrameReassembler;
-use streambeam_proto::control::{AudioCaps, ClientMsg, HostMsg, VideoCaps};
-use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
-use streambeam_proto::pair::PairInfo;
-use streambeam_proto::PROTO_VERSION;
-use streambeam_net::{
-    build_pair_proof, client_config, export_pairing_secret, read_msg, write_msg, Identity,
+use streambeam_core::{
+    connect_as_identity, connect_known, load_saved_host, save_saved_host, ClientSession,
+    FrameReassembler, SavedHost,
 };
+use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
+use streambeam_proto::control::ClientMsg;
+use streambeam_net::write_msg;
 
 #[derive(Parser, Debug)]
 #[command(name = "devclient")]
@@ -24,9 +23,13 @@ struct Opt {
     /// Pairing payload from fakehost (`sbm1:...`).
     payload: String,
 
-    /// Stop after this many complete video frames (0 = until Ctrl+C).
+    /// Stop after this many complete video frames (0 = until `--soak-secs` or Ctrl+C).
     #[arg(long, default_value_t = 120)]
     frames: u32,
+
+    /// Run for this many seconds (overrides `--frames` when > 0).
+    #[arg(long, default_value_t = 0)]
+    soak_secs: u64,
 
     /// Randomly drop this percentage of incoming datagrams (0–100).
     #[arg(long, default_value_t = 0)]
@@ -47,6 +50,10 @@ struct Opt {
     /// Annex-B reference file for hash verify (default: bundled clip).
     #[arg(long)]
     reference: Option<PathBuf>,
+
+    /// Reconnect using saved host + persistent client identity (no QR token).
+    #[arg(long)]
+    reconnect: bool,
 }
 
 #[tokio::main]
@@ -83,99 +90,11 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
         None
     };
 
-    let info = PairInfo::decode_payload(&opt.payload)?;
-    if info.version != PROTO_VERSION {
-        return Err(format!("unsupported pair version {}", info.version).into());
-    }
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    if now > info.expires_unix {
-        return Err(
-            "pairing payload expired — restart fakehost and use the new sbm1: line".into(),
-        );
-    }
-
-    let addr = info
-        .addrs
-        .first()
-        .copied()
-        .ok_or("pairing payload has no addresses")?;
-
-    let identity = Identity::generate()?;
-    let mut client = quinn::Endpoint::client("[::]:0".parse()?)?;
-    client.set_default_client_config(client_config(&identity, info.host_pubkey)?);
-
-    println!("connecting to {} ({addr})…", info.host_name);
-    let conn = client
-        .connect(addr, "localhost")?
-        .await
-        .map_err(|e| format!("connect failed (is fakehost running?): {e}"))?;
-
-    let exporter = export_pairing_secret(&conn)?;
-    let pair_proof = Some(build_pair_proof(
-        &info.token,
-        &identity.public_key(),
-        &exporter,
-    ));
-
-    let (mut send, mut recv) = conn.open_bi().await?;
-    write_msg(
-        &mut send,
-        &ClientMsg::Hello {
-            proto_version: PROTO_VERSION,
-            client_name: "devclient".into(),
-            pair_proof,
-        },
-    )
-    .await?;
-
-    let mut buf = Vec::new();
-    match read_msg::<HostMsg>(&mut recv, &mut buf).await? {
-        HostMsg::PairAck => println!("paired ✓"),
-        HostMsg::PairReject { reason } => {
-            return Err(format!(
-                "pair rejected: {reason} (restart fakehost for a fresh token)"
-            )
-            .into());
-        }
-        other => return Err(format!("unexpected host reply: {other:?}").into()),
-    }
-
-    write_msg(
-        &mut send,
-        &ClientMsg::SessionRequest {
-            video: VideoCaps {
-                h264: true,
-                hevc: false,
-                av1: false,
-                max_width: 1920,
-                max_height: 1080,
-                max_fps: 60,
-            },
-            audio: AudioCaps {
-                opus: true,
-                max_channels: 2,
-            },
-            bitrate_kbps: 20_000,
-        },
-    )
-    .await?;
-
-    loop {
-        match read_msg::<HostMsg>(&mut recv, &mut buf).await? {
-            HostMsg::SessionAccept {
-                width,
-                height,
-                fps,
-                codec,
-                ..
-            } => {
-                println!("session started: {width}x{height} @ {fps} fps ({codec})");
-                break;
-            }
-            HostMsg::CodecConfig { .. } => {}
-            other => return Err(format!("expected SessionAccept, got {other:?}").into()),
-        }
-    }
+    let mut session = open_session(opt).await?;
+    println!(
+        "session started: {}x{} @ {} fps ({})",
+        session.width, session.height, session.fps, session.codec
+    );
 
     if opt.drop > 0 || opt.reorder > 0 {
         println!("loss injection: drop {}%, reorder {}%", opt.drop, opt.reorder);
@@ -194,6 +113,7 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
     let mut asm = FrameReassembler::default();
     let mut loss = loss::LossInjector::new(opt.drop, opt.reorder);
     let target = opt.frames;
+    let soak_deadline = (opt.soak_secs > 0).then(|| std::time::Instant::now() + Duration::from_secs(opt.soak_secs));
     let mut last_report = std::time::Instant::now();
     let mut hash_failures = 0u64;
     let mut hash_ok = 0u64;
@@ -203,14 +123,17 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
         if target > 0 && asm.stats().frames_complete >= u64::from(target) {
             break;
         }
+        if soak_deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            break;
+        }
 
-        let datagram = match tokio::time::timeout(Duration::from_secs(5), conn.read_datagram())
+        let datagram = match tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())
             .await
         {
             Ok(Ok(d)) => d,
             Ok(Err(e)) => return Err(format!("datagram read failed: {e}").into()),
             Err(_) => {
-                eprintln!("no datagrams for 5s — is fakehost still running?");
+                eprintln!("no datagrams for 5s — is host still running?");
                 break 'recv;
             }
         };
@@ -234,7 +157,7 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
                             "hash mismatch frame_id {frame_id} catalog[{catalog_idx}] (got {digest:#018x}, expected {expected:#018x})"
                         );
                         if last_idr.elapsed() >= Duration::from_millis(250) {
-                            write_msg(&mut send, &ClientMsg::RequestIdr).await?;
+                            write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
                             last_idr = std::time::Instant::now();
                         }
                     }
@@ -255,7 +178,7 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
         }
 
         if asm.take_idr_request() && last_idr.elapsed() >= Duration::from_millis(250) {
-            write_msg(&mut send, &ClientMsg::RequestIdr).await?;
+            write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
             last_idr = std::time::Instant::now();
         }
 
@@ -295,8 +218,59 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
         return Err(format!("{hash_failures} frame(s) failed hash verify").into());
     }
 
-    let _ = write_msg(&mut send, &ClientMsg::Bye).await;
-    conn.close(0u32.into(), b"bye");
-    client.wait_idle().await;
+    if soak_deadline.is_some() && asm.stats().frames_complete == 0 {
+        return Err("soak received no complete frames".into());
+    }
+
+    let _ = write_msg(&mut session.send, &ClientMsg::Bye).await;
+    session.conn.close(0u32.into(), b"bye");
+    session._endpoint.wait_idle().await;
     Ok(())
+}
+
+fn client_data_dir() -> Option<PathBuf> {
+    std::env::var("STREAMBEAM_CLIENT_DATA")
+        .ok()
+        .map(PathBuf::from)
+}
+
+fn client_identity_path(dir: &Path) -> PathBuf {
+    dir.join("client_identity.pkcs8")
+}
+
+async fn open_session(opt: &Opt) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
+    if opt.reconnect {
+        let dir = client_data_dir()
+            .ok_or("set STREAMBEAM_CLIENT_DATA for --reconnect")?;
+        let host = load_saved_host(&dir.join("saved_host.json"))?
+            .ok_or("no saved host — pair once without --reconnect")?;
+        let addr = host
+            .primary_addr()
+            .ok_or("saved host has no address")?;
+        println!("reconnecting to {} ({addr})…", host.host_name);
+        return connect_known(
+            host.host_pubkey,
+            addr,
+            "devclient",
+            &client_identity_path(&dir),
+        )
+        .await;
+    }
+
+    let id_path = client_data_dir().as_deref().map(client_identity_path);
+    let session = connect_as_identity(
+        &opt.payload,
+        "devclient",
+        id_path.as_deref(),
+    )
+    .await?;
+    println!("paired ✓");
+
+    if let Some(dir) = client_data_dir() {
+        if let Ok(host) = SavedHost::from_pair_payload(&opt.payload) {
+            save_saved_host(&dir.join("saved_host.json"), &host)?;
+        }
+    }
+
+    Ok(session)
 }

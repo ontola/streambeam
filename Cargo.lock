@@ -1348,6 +1348,8 @@ name = "streambeam-core"
 version = "0.1.0"
 dependencies = [
  "quinn",
+ "serde",
+ "serde_json",
  "streambeam-net",
  "streambeam-proto",
  "tokio",

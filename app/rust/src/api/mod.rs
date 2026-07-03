@@ -1,11 +1,22 @@
 use std::time::Duration;
 
-use streambeam_core::{connect_as, FrameReassembler};
+use streambeam_core::{
+    connect_as_identity, load_saved_host, save_saved_host, FrameReassembler, SavedHost,
+};
 use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
+
+use crate::store::{client_identity_path, saved_host_path};
 
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
+}
+
+/// Call once at startup with the app documents directory (Android/iOS).
+#[flutter_rust_bridge::frb]
+pub fn set_app_data_dir(dir: String) {
+    crate::store::set_data_dir(&dir);
+    let _ = std::fs::create_dir_all(&dir);
 }
 
 #[derive(Debug, Clone)]
@@ -23,7 +34,22 @@ pub fn streambeam_version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
 
-/// LAN hosts advertising via mDNS (pairing still requires scanning host QR).
+#[flutter_rust_bridge::frb(sync)]
+pub fn saved_host_label() -> Option<String> {
+    load_saved_host(&saved_host_path())
+        .ok()
+        .flatten()
+        .map(|h| h.host_name)
+}
+
+/// Persist host pubkey/addrs from a scanned `sbm1:` payload for later reconnect.
+#[flutter_rust_bridge::frb]
+pub fn save_host_from_payload(payload: String) -> Result<(), String> {
+    let host = SavedHost::from_pair_payload(&payload).map_err(|e| e.to_string())?;
+    save_saved_host(&saved_host_path(), &host).map_err(|e| e.to_string())
+}
+
+/// LAN hosts advertising via mDNS (pairing still requires scanning host QR once).
 #[derive(Debug, Clone)]
 pub struct DiscoveredHost {
     pub name: String,
@@ -53,10 +79,64 @@ pub async fn connect_and_receive(
     payload: String,
     max_video_frames: u32,
 ) -> Result<StreamStats, String> {
-    let session = connect_as(&payload, "streambeam-android")
-        .await
-        .map_err(|e| e.to_string())?;
+    let session = connect_as_identity(
+        &payload,
+        "streambeam-android",
+        Some(&client_identity_path()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
+    let _ = save_host_from_payload(payload);
+
+    receive_stats(session, max_video_frames).await
+}
+
+/// Decode and render video to an Android Surface (`native_window` = `ANativeWindow*`).
+#[flutter_rust_bridge::frb]
+pub async fn play_stream(
+    payload: String,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android::play::run(payload, native_window, max_video_frames).await;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (payload, native_window, max_video_frames);
+        Err("play_stream is Android-only — on macOS run: ./scripts/visual-test.sh".into())
+    }
+}
+
+/// Reconnect to the last paired host without rescanning QR (host must still trust this client).
+#[flutter_rust_bridge::frb]
+pub async fn reconnect_play_stream(
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    #[cfg(target_os = "android")]
+    {
+        let host = load_saved_host(&saved_host_path())
+            .map_err(|e| e.to_string())?
+            .ok_or("no saved host — scan QR first")?;
+        let addr = host
+            .primary_addr()
+            .ok_or("saved host has no address")?;
+        return crate::android::play::run_known(host, addr, native_window, max_video_frames).await;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (native_window, max_video_frames);
+        Err("reconnect_play_stream is Android-only".into())
+    }
+}
+
+async fn receive_stats(
+    session: streambeam_core::ClientSession,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
     let mut stats = StreamStats {
         width: session.width,
         height: session.height,
@@ -86,22 +166,4 @@ pub async fn connect_and_receive(
     }
 
     Ok(stats)
-}
-
-/// Decode and render video to an Android Surface (`native_window` = `ANativeWindow*`).
-#[flutter_rust_bridge::frb]
-pub async fn play_stream(
-    payload: String,
-    native_window: i64,
-    max_video_frames: u32,
-) -> Result<StreamStats, String> {
-    #[cfg(target_os = "android")]
-    {
-        return crate::android::play::run(payload, native_window, max_video_frames).await;
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (payload, native_window, max_video_frames);
-        Err("play_stream is Android-only — on macOS run: ./scripts/visual-test.sh".into())
-    }
 }

@@ -6,10 +6,21 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `receive_stats`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
+
+/// Call once at startup with the app documents directory (Android/iOS).
+Future<void> setAppDataDir({required String dir}) =>
+    StreambeamFfi.instance.api.crateApiSetAppDataDir(dir: dir);
 
 String streambeamVersion() =>
     StreambeamFfi.instance.api.crateApiStreambeamVersion();
+
+String? savedHostLabel() => StreambeamFfi.instance.api.crateApiSavedHostLabel();
+
+/// Persist host pubkey/addrs from a scanned `sbm1:` payload for later reconnect.
+Future<void> saveHostFromPayload({required String payload}) =>
+    StreambeamFfi.instance.api.crateApiSaveHostFromPayload(payload: payload);
 
 Future<List<DiscoveredHost>> discoverHosts({required int timeoutMs}) =>
     StreambeamFfi.instance.api.crateApiDiscoverHosts(timeoutMs: timeoutMs);
@@ -34,7 +45,16 @@ Future<StreamStats> playStream({
   maxVideoFrames: maxVideoFrames,
 );
 
-/// LAN hosts advertising via mDNS (pairing still requires scanning host QR).
+/// Reconnect to the last paired host without rescanning QR (host must still trust this client).
+Future<StreamStats> reconnectPlayStream({
+  required PlatformInt64 nativeWindow,
+  required int maxVideoFrames,
+}) => StreambeamFfi.instance.api.crateApiReconnectPlayStream(
+  nativeWindow: nativeWindow,
+  maxVideoFrames: maxVideoFrames,
+);
+
+/// LAN hosts advertising via mDNS (pairing still requires scanning host QR once).
 class DiscoveredHost {
   final String name;
   final int port;

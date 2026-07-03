@@ -72,7 +72,7 @@ class StreambeamFfi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 2011994264;
+  int get rustContentHash => -1476377299;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -97,6 +97,17 @@ abstract class StreambeamFfiApi extends BaseApi {
     required PlatformInt64 nativeWindow,
     required int maxVideoFrames,
   });
+
+  Future<StreamStats> crateApiReconnectPlayStream({
+    required PlatformInt64 nativeWindow,
+    required int maxVideoFrames,
+  });
+
+  Future<void> crateApiSaveHostFromPayload({required String payload});
+
+  String? crateApiSavedHostLabel();
+
+  Future<void> crateApiSetAppDataDir({required String dir});
 
   String crateApiStreambeamVersion();
 }
@@ -236,12 +247,128 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   );
 
   @override
+  Future<StreamStats> crateApiReconnectPlayStream({
+    required PlatformInt64 nativeWindow,
+    required int maxVideoFrames,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(nativeWindow, serializer);
+          sse_encode_u_32(maxVideoFrames, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_stream_stats,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiReconnectPlayStreamConstMeta,
+        argValues: [nativeWindow, maxVideoFrames],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReconnectPlayStreamConstMeta =>
+      const TaskConstMeta(
+        debugName: "reconnect_play_stream",
+        argNames: ["nativeWindow", "maxVideoFrames"],
+      );
+
+  @override
+  Future<void> crateApiSaveHostFromPayload({required String payload}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(payload, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSaveHostFromPayloadConstMeta,
+        argValues: [payload],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSaveHostFromPayloadConstMeta =>
+      const TaskConstMeta(
+        debugName: "save_host_from_payload",
+        argNames: ["payload"],
+      );
+
+  @override
+  String? crateApiSavedHostLabel() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSavedHostLabelConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSavedHostLabelConstMeta =>
+      const TaskConstMeta(debugName: "saved_host_label", argNames: []);
+
+  @override
+  Future<void> crateApiSetAppDataDir({required String dir}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(dir, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSetAppDataDirConstMeta,
+        argValues: [dir],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSetAppDataDirConstMeta =>
+      const TaskConstMeta(debugName: "set_app_data_dir", argNames: ["dir"]);
+
+  @override
   String crateApiStreambeamVersion() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -298,6 +425,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_String(raw);
   }
 
   @protected
@@ -399,6 +532,17 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
   }
 
   @protected
@@ -513,6 +657,16 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_String(self, serializer);
+    }
   }
 
   @protected

@@ -16,6 +16,10 @@ pub fn data_dir() -> PathBuf {
     PathBuf::from(".streambeam-dev")
 }
 
+pub fn identity_path() -> PathBuf {
+    data_dir().join("host_identity.pkcs8")
+}
+
 pub fn paired_store_path() -> PathBuf {
     data_dir().join("paired.json")
 }

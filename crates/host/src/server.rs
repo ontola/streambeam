@@ -31,6 +31,7 @@ pub struct HostConfig {
     pub host_name: String,
     pub fps: u32,
     pub token_ttl_secs: u64,
+    pub identity_path: std::path::PathBuf,
     pub paired_store: Option<std::path::PathBuf>,
 }
 
@@ -64,7 +65,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         OpusCatalog::bundled().len()
     );
 
-    let identity = Identity::generate()?;
+    let identity = Identity::load_or_generate(&config.identity_path)?;
     let paired_path = config.paired_store.clone();
     let store = Arc::new(Mutex::new(
         paired_path

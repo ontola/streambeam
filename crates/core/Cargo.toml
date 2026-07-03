@@ -9,3 +9,5 @@ streambeam-proto = { workspace = true }
 streambeam-net = { workspace = true }
 quinn = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

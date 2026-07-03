@@ -5,12 +5,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'package:path_provider/path_provider.dart';
+
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await StreambeamFfi.init();
+  final dir = await getApplicationDocumentsDirectory();
+  setAppDataDir(dir: dir.path);
   runApp(const StreamBeamApp());
 }
 
@@ -73,10 +77,16 @@ class _WatchPageState extends State<WatchPage> {
   String? _status;
   int? _pendingWindow;
   bool _surfaceReady = false;
+  String? _savedHost;
+
+  void _refreshSavedHost() {
+    setState(() => _savedHost = savedHostLabel());
+  }
 
   @override
   void initState() {
     super.initState();
+    _refreshSavedHost();
     _surfaceChannel.setMethodCallHandler((call) async {
       if (call.method == 'surfaceReady') {
         setState(() {
@@ -126,6 +136,37 @@ class _WatchPageState extends State<WatchPage> {
         nativeWindow: nativeWindow,
         maxVideoFrames: 0,
       );
+      _refreshSavedHost();
+      if (!mounted) return;
+      setState(() {
+        _status =
+            'Stopped — ${stats.videoFrames} video / ${stats.audioPackets} audio';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reconnect() async {
+    if (!Platform.isAndroid) return;
+    setState(() {
+      _busy = true;
+      _status = 'Reconnecting…';
+    });
+    if (_surfaceReady && _pendingWindow != null) {
+      unawaited(_startReconnect(_pendingWindow!));
+    }
+  }
+
+  Future<void> _startReconnect(int nativeWindow) async {
+    try {
+      final stats = await reconnectPlayStream(
+        nativeWindow: nativeWindow,
+        maxVideoFrames: 0,
+      );
       if (!mounted) return;
       setState(() {
         _status =
@@ -171,6 +212,8 @@ class _WatchPageState extends State<WatchPage> {
     );
     if (payload != null && payload.startsWith('sbm1:')) {
       _payloadCtrl.text = payload;
+      saveHostFromPayload(payload: payload);
+      _refreshSavedHost();
       if (mounted) setState(() => _status = 'Payload loaded — tap Play');
     }
   }
@@ -234,12 +277,22 @@ class _WatchPageState extends State<WatchPage> {
                 label: const Text('Scan QR'),
               ),
               OutlinedButton.icon(
+                onPressed: (_busy || _savedHost == null) ? null : _reconnect,
+                icon: const Icon(Icons.link),
+                label: Text(_savedHost == null ? 'Reconnect' : 'Reconnect $_savedHost'),
+              ),
+              OutlinedButton.icon(
                 onPressed: _discoverHosts,
                 icon: const Icon(Icons.wifi_find),
                 label: const Text('Find host'),
               ),
             ],
           ),
+          if (_savedHost != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text('Paired with $_savedHost — Reconnect skips QR after first scan'),
+            ),
           if (_status != null) ...[
             const SizedBox(height: 12),
             Text(_status!),

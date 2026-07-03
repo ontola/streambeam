@@ -14,7 +14,7 @@ pub mod server;
 
 pub use encode::{EncodedFrame, EncodeError, VideoEncoder};
 
-use data_dir::{ensure_data_dir, paired_store_path};
+use data_dir::{ensure_data_dir, identity_path, paired_store_path};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -68,6 +68,7 @@ async fn main() {
             .unwrap_or_else(default_host_name),
         fps: opt.fps,
         token_ttl_secs: opt.token_ttl,
+        identity_path: identity_path(),
         paired_store: Some(paired_store_path()),
     };
 
