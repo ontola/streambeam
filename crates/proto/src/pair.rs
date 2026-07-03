@@ -45,19 +45,25 @@ impl PairInfo {
         let s = Self::normalize_payload(s);
         let b64 = s
             .strip_prefix(PAIR_PREFIX)
-            .ok_or(ProtoError::BadPairPayload("missing sbm1: prefix"))?;
+            .ok_or(ProtoError::BadPairPayload(
+                "Not a pairing code — it should start with sbm1:",
+            ))?;
         if b64.len() < 32 {
             return Err(ProtoError::BadPairPayload(
-                "payload too short — copy the entire sbm1: line from streambeam-host (no line breaks)",
+                "Pairing code looks cut off. Copy the whole sbm1: line from your PC, or scan the QR.",
             ));
         }
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(b64)
-            .map_err(|_| ProtoError::BadPairPayload("invalid base64url in sbm1: payload"))?;
+            .map_err(|_| {
+                ProtoError::BadPairPayload(
+                    "Invalid pairing code. Copy sbm1: exactly from streambeam-host on your PC.",
+                )
+            })?;
         postcard::from_bytes(&bytes).map_err(|e| {
             if matches!(e, postcard::Error::DeserializeUnexpectedEnd) {
                 ProtoError::BadPairPayload(
-                    "payload truncated — rescan the QR or paste the full single-line sbm1: string",
+                    "Pairing code incomplete — only part was copied. Scan the QR or copy the full sbm1: line from your PC.",
                 )
             } else {
                 ProtoError::Postcard(e)
@@ -123,7 +129,7 @@ mod tests {
         let payload = info.encode_payload().unwrap();
         let truncated = &payload[..payload.len() / 2];
         let err = PairInfo::decode_payload(truncated).unwrap_err().to_string();
-        assert!(err.contains("truncated") || err.contains("too short"), "{err}");
+        assert!(err.contains("incomplete") || err.contains("cut off"), "{err}");
     }
 
     #[test]

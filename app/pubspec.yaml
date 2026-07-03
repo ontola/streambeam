@@ -37,6 +37,7 @@ dependencies:
   flutter_rust_bridge: 2.11.1
   mobile_scanner: ^7.2.0
   path_provider: ^2.1.5
+  url_launcher: ^6.3.2
   rust_lib_streambeam:
     path: rust_builder
 

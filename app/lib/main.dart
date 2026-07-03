@@ -6,9 +6,21 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
+
+final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
+final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/releases');
+
+Future<void> openGithubRepo() async {
+  await launchUrl(_githubRepoUrl, mode: LaunchMode.externalApplication);
+}
+
+Future<void> openGithubReleases() async {
+  await launchUrl(_githubReleasesUrl, mode: LaunchMode.externalApplication);
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,21 +54,91 @@ class WatchPage extends StatefulWidget {
   State<WatchPage> createState() => _WatchPageState();
 }
 
-class _WatchPageState extends State<WatchPage> {
+class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   static const _surfaceChannel = MethodChannel('streambeam/video_surface');
   static const _discoveryInterval = Duration(seconds: 12);
+  static const _clipboardPollInterval = Duration(seconds: 2);
 
   final _payloadCtrl = TextEditingController();
   bool _busy = false;
   bool _showVideo = false;
   bool _reconnectPending = false;
   String? _status;
+  bool _statusIsError = false;
   int? _pendingWindow;
   bool _surfaceReady = false;
   String? _savedHost;
   List<DiscoveredHost> _lanHosts = [];
   bool _discoveryBusy = false;
   Timer? _discoveryTimer;
+  late final MobileScannerController _scannerController;
+  String? _lastQrPayload;
+  bool _qrPreviewOpen = false;
+  bool _clipboardReady = false;
+  Timer? _clipboardTimer;
+  Timer? _surfaceTimeout;
+
+  void _setStatus(String message, {bool error = false}) {
+    if (!mounted) return;
+    setState(() {
+      _status = message;
+      _statusIsError = error;
+    });
+  }
+
+  void _reportError(String message) {
+    _setStatus(_humanizeError(message), error: true);
+  }
+
+  String _humanizeError(String raw) {
+    var m = raw.trim();
+    const legacyPrefix = 'bad pairing payload:';
+    if (m.toLowerCase().startsWith(legacyPrefix)) {
+      m = m.substring(legacyPrefix.length).trim();
+    }
+    if (m.startsWith('Error: ')) {
+      m = m.substring('Error: '.length);
+    }
+
+    final lower = m.toLowerCase();
+    if (lower.contains('truncated') ||
+        lower.contains('too short') ||
+        lower.contains('incomplete') ||
+        lower.contains('cut off')) {
+      return 'Pairing code incomplete. Scan the QR on your PC, or copy the entire sbm1: line from the terminal.';
+    }
+    if (lower.contains('missing sbm1') || lower.contains('invalid base64')) {
+      return 'That is not a valid pairing code. Use sbm1: from streambeam-host on your PC, or scan the QR.';
+    }
+    if (lower.contains('expired')) {
+      return 'Pairing code expired. Restart streambeam-host on your PC and scan the new QR.';
+    }
+    return m;
+  }
+
+  Future<void> _copyStatus() async {
+    final text = _status;
+    if (text == null) return;
+    await Clipboard.setData(ClipboardData(text: text));
+  }
+
+  void _cancelSurfaceTimeout() {
+    _surfaceTimeout?.cancel();
+    _surfaceTimeout = null;
+  }
+
+  void _armSurfaceTimeout() {
+    _cancelSurfaceTimeout();
+    _surfaceTimeout = Timer(const Duration(seconds: 12), () {
+      if (!mounted || !_busy || _pendingWindow != null) return;
+      _reportError('Video surface did not start. Try again.');
+      setState(() {
+        _teardownVideo();
+        _busy = false;
+      });
+      unawaited(_syncScanner());
+    });
+  }
 
   void _refreshSavedHost() {
     setState(() => _savedHost = savedHostLabel());
@@ -65,8 +147,18 @@ class _WatchPageState extends State<WatchPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refreshSavedHost();
+    _scannerController = MobileScannerController(
+      autoStart: false,
+      detectionSpeed: DetectionSpeed.noDuplicates,
+      facing: CameraFacing.back,
+    );
     unawaited(_discoverHosts());
+    unawaited(_refreshClipboard());
+    _clipboardTimer = Timer.periodic(_clipboardPollInterval, (_) {
+      if (!_busy && mounted) unawaited(_refreshClipboard());
+    });
     _discoveryTimer = Timer.periodic(_discoveryInterval, (_) {
       if (!_busy && mounted) {
         unawaited(_discoverHosts());
@@ -74,6 +166,7 @@ class _WatchPageState extends State<WatchPage> {
     });
     _surfaceChannel.setMethodCallHandler((call) async {
       if (call.method == 'surfaceReady') {
+        _cancelSurfaceTimeout();
         setState(() {
           _pendingWindow = call.arguments as int?;
           _surfaceReady = _pendingWindow != null;
@@ -91,9 +184,67 @@ class _WatchPageState extends State<WatchPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _discoveryTimer?.cancel();
+    _clipboardTimer?.cancel();
+    _cancelSurfaceTimeout();
+    _scannerController.dispose();
     _payloadCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_busy) {
+      unawaited(_refreshClipboard());
+    }
+  }
+
+  Future<void> _refreshClipboard() async {
+    final payload = await _payloadFromClipboard();
+    final ready = payload != null;
+    if (!mounted || ready == _clipboardReady) return;
+    setState(() => _clipboardReady = ready);
+  }
+
+  Future<void> _syncScanner() async {
+    if (!Platform.isAndroid) return;
+    try {
+      if (_qrPreviewOpen && !_busy) {
+        await _scannerController.start();
+      } else {
+        await _scannerController.stop();
+      }
+    } catch (_) {
+      // Camera may be unavailable briefly while streaming stops.
+    }
+  }
+
+  Future<void> _toggleQrPreview() async {
+    if (_busy) return;
+    setState(() => _qrPreviewOpen = !_qrPreviewOpen);
+    await _syncScanner();
+  }
+
+  void _closeQrPreview() {
+    if (!_qrPreviewOpen) return;
+    setState(() => _qrPreviewOpen = false);
+    unawaited(_syncScanner());
+  }
+
+  void _handleQrDetect(BarcodeCapture capture) {
+    if (_busy) return;
+    for (final b in capture.barcodes) {
+      final raw = b.rawValue;
+      if (raw == null || !raw.startsWith('sbm1:')) continue;
+      final normalized = _normalizePayload(raw);
+      if (normalized.length < 48) continue;
+      if (normalized == _lastQrPayload) continue;
+      _lastQrPayload = normalized;
+      _closeQrPreview();
+      unawaited(_applyPayload(normalized));
+      return;
+    }
   }
 
   void _teardownVideo() {
@@ -118,15 +269,15 @@ class _WatchPageState extends State<WatchPage> {
     }
   }
 
-  Future<void> _applyPayload(String normalized, {bool autoPlay = false}) async {
-    _payloadCtrl.text = normalized;
-    await saveHostFromPayload(payload: normalized);
-    _refreshSavedHost();
-    if (!mounted) return;
-    if (autoPlay) {
+  Future<void> _applyPayload(String normalized) async {
+    try {
+      _payloadCtrl.text = normalized;
+      await saveHostFromPayload(payload: normalized);
+      _refreshSavedHost();
+      if (!mounted) return;
       await _play();
-    } else {
-      setState(() => _status = 'Paired — tap Play');
+    } catch (e) {
+      _reportError(e.toString());
     }
   }
 
@@ -142,33 +293,45 @@ class _WatchPageState extends State<WatchPage> {
 
   Future<void> _pasteFromClipboard() async {
     if (_busy) return;
-    final payload = await _payloadFromClipboard();
-    if (payload == null) {
-      setState(() => _status = 'Clipboard empty or missing sbm1: payload');
-      return;
+    try {
+      final payload = await _payloadFromClipboard();
+      if (payload == null) {
+        _reportError('Clipboard empty. Copy sbm1: from streambeam-host on your PC, or scan the QR.');
+        return;
+      }
+      if (payload.length < 48) {
+        _reportError(
+          'Pairing code incomplete. Copy the entire sbm1: line from your PC, or scan the QR.',
+        );
+        return;
+      }
+      await _applyPayload(payload);
+      await _refreshClipboard();
+    } catch (e) {
+      _reportError(e.toString());
     }
-    if (payload.length < 48) {
-      setState(() => _status =
-          'sbm1: in clipboard looks truncated — copy the full line from the host');
-      return;
-    }
-    await _applyPayload(payload, autoPlay: true);
   }
 
   Future<void> _beginSession({required bool reconnect}) async {
     if (!Platform.isAndroid) {
-      setState(() => _status = 'Playback is Android-only.');
+      _reportError('Playback is Android-only.');
       return;
     }
+    _cancelSurfaceTimeout();
     setState(() {
       _busy = true;
       _showVideo = true;
       _reconnectPending = reconnect;
       _surfaceReady = false;
       _pendingWindow = null;
+      _qrPreviewOpen = false;
       _status = reconnect ? 'Reconnecting…' : 'Connecting…';
+      _statusIsError = false;
     });
+    unawaited(_syncScanner());
+    _armSurfaceTimeout();
     if (_surfaceReady && _pendingWindow != null) {
+      _cancelSurfaceTimeout();
       if (reconnect) {
         unawaited(_startReconnect(_pendingWindow!));
       } else {
@@ -183,7 +346,10 @@ class _WatchPageState extends State<WatchPage> {
       _payloadCtrl.text = payload;
     }
     try {
-      setState(() => _status = 'Streaming…');
+      setState(() {
+        _status = 'Streaming…';
+        _statusIsError = false;
+      });
       final stats = await playStream(
         payload: payload,
         nativeWindow: nativeWindow,
@@ -194,22 +360,28 @@ class _WatchPageState extends State<WatchPage> {
       setState(() {
         _status =
             'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
+        _statusIsError = false;
         _teardownVideo();
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _status = 'Error: $e';
-        _teardownVideo();
-      });
+      _reportError(e.toString());
+      setState(() => _teardownVideo());
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _cancelSurfaceTimeout();
+      if (mounted) {
+        setState(() => _busy = false);
+        unawaited(_syncScanner());
+      }
     }
   }
 
   Future<void> _startReconnect(int nativeWindow) async {
     try {
-      setState(() => _status = 'Streaming…');
+      setState(() {
+        _status = 'Streaming…';
+        _statusIsError = false;
+      });
       final stats = await reconnectPlayStream(
         nativeWindow: nativeWindow,
         maxVideoFrames: 0,
@@ -218,16 +390,19 @@ class _WatchPageState extends State<WatchPage> {
       setState(() {
         _status =
             'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
+        _statusIsError = false;
         _teardownVideo();
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _status = 'Error: $e';
-        _teardownVideo();
-      });
+      _reportError(e.toString());
+      setState(() => _teardownVideo());
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _cancelSurfaceTimeout();
+      if (mounted) {
+        setState(() => _busy = false);
+        unawaited(_syncScanner());
+      }
     }
   }
 
@@ -237,41 +412,21 @@ class _WatchPageState extends State<WatchPage> {
       _payloadCtrl.text = payload;
     }
     if (!payload.startsWith('sbm1:')) {
-      setState(() => _status = 'Scan the QR from streambeam-host on your PC');
+      _reportError('No pairing code found. Copy sbm1: from streambeam-host or scan the QR.');
       return;
     }
     if (payload.length < 48) {
-      setState(() => _status =
-          'sbm1: payload looks truncated — copy the full single line from the host');
+      _reportError(
+        'Pairing code incomplete. Copy the entire sbm1: line from your PC, or scan the QR.',
+      );
       return;
     }
     await _beginSession(reconnect: false);
   }
 
-  Future<void> _reconnect() async {
+  Future<void> _watch() async {
     if (_savedHost == null) return;
     await _beginSession(reconnect: true);
-  }
-
-  Future<void> _scanQr() async {
-    final payload = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => const QrScanPage()),
-    );
-    if (payload != null) {
-      final normalized = _normalizePayload(payload);
-      if (!normalized.startsWith('sbm1:')) {
-        if (mounted) {
-          setState(() => _status = 'QR did not contain sbm1: — scan the host terminal QR');
-        }
-        return;
-      }
-      _payloadCtrl.text = normalized;
-      await saveHostFromPayload(payload: normalized);
-      _refreshSavedHost();
-      if (mounted) {
-        setState(() => _status = 'Paired — tap Play');
-      }
-    }
   }
 
   String _normalizePayload(String raw) {
@@ -286,6 +441,11 @@ class _WatchPageState extends State<WatchPage> {
       appBar: AppBar(
         title: const Text('StreamBeam'),
         actions: [
+          TextButton.icon(
+            onPressed: openGithubRepo,
+            icon: const Icon(Icons.open_in_new, size: 18),
+            label: const Text('GitHub'),
+          ),
           if (_savedHost != null)
             Padding(
               padding: const EdgeInsets.only(right: 8),
@@ -298,7 +458,9 @@ class _WatchPageState extends State<WatchPage> {
       ),
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: _discoverHosts,
+          onRefresh: () async {
+            await Future.wait([_discoverHosts(), _refreshClipboard()]);
+          },
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(16),
@@ -306,96 +468,223 @@ class _WatchPageState extends State<WatchPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_showVideo && Platform.isAndroid)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        AndroidView(
-                          viewType: 'streambeam/video',
-                          layoutDirection: TextDirection.ltr,
-                        ),
-                        if (_busy && _status != 'Streaming…')
-                          ColoredBox(
-                            color: Colors.black54,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const CircularProgressIndicator(
-                                    color: Colors.white,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    _status ?? 'Connecting…',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          AndroidView(
+                            viewType: 'streambeam/video',
+                            layoutDirection: TextDirection.ltr,
+                          ),
+                          if (_busy && _status != 'Streaming…')
+                            ColoredBox(
+                              color: Colors.black54,
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const CircularProgressIndicator(
                                       color: Colors.white,
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      _status ?? 'Connecting…',
+                                      style:
+                                          theme.textTheme.bodyMedium?.copyWith(
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
+                  )
+                else
+                  _IdleHero(
+                    busy: _busy,
+                    hosts: _lanHosts,
+                    discovering: _discoveryBusy,
+                    savedHost: _savedHost,
                   ),
-                )
-              else
-                _IdleHero(
-                  busy: _busy,
-                  hosts: _lanHosts,
-                  discovering: _discoveryBusy,
+                const SizedBox(height: 20),
+                if (Platform.isAndroid && _qrPreviewOpen) ...[
+                  _QrScanPreview(
+                    controller: _scannerController,
+                    paused: _busy,
+                    onDetect: _handleQrDetect,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: _clipboardReady
+                          ? FilledButton.icon(
+                              onPressed: _busy ? null : _pasteFromClipboard,
+                              icon: const Icon(Icons.content_paste),
+                              label: const Text('Paste & play'),
+                            )
+                          : OutlinedButton.icon(
+                              onPressed: null,
+                              icon: const Icon(Icons.content_paste_outlined),
+                              label: const Text('Paste'),
+                            ),
+                    ),
+                    if (Platform.isAndroid) ...[
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        onPressed: _busy ? null : _toggleQrPreview,
+                        tooltip: _qrPreviewOpen
+                            ? 'Hide QR scanner'
+                            : 'Scan host QR',
+                        isSelected: _qrPreviewOpen,
+                        icon: const Icon(Icons.qr_code_scanner),
+                      ),
+                    ],
+                  ],
                 ),
-              const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: _busy ? null : _scanQr,
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan host QR'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _pasteFromClipboard,
-                icon: const Icon(Icons.content_paste),
-                label: const Text('Paste & play'),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: _busy ? null : _play,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('Play'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: (_busy || _savedHost == null) ? null : _reconnect,
-                      icon: const Icon(Icons.link),
-                      label: const Text('Reconnect'),
-                    ),
+                if (_savedHost != null) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _watch,
+                    icon: const Icon(Icons.play_arrow),
+                    label: Text('Watch $_savedHost'),
                   ),
                 ],
-              ),
-              if (_status != null && !_showVideo) ...[
-                const SizedBox(height: 12),
-                Material(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(_status!),
+                if (_status != null) ...[
+                  const SizedBox(height: 12),
+                  _StatusNotice(
+                    message: _status!,
+                    isError: _statusIsError,
+                    onCopy: () => unawaited(_copyStatus()),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-    ),
+    );
+  }
+}
+
+class _StatusNotice extends StatelessWidget {
+  const _StatusNotice({
+    required this.message,
+    required this.isError,
+    required this.onCopy,
+  });
+
+  final String message;
+  final bool isError;
+  final VoidCallback onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = isError
+        ? theme.colorScheme.onErrorContainer
+        : theme.colorScheme.onSurfaceVariant;
+
+    return Material(
+      color: isError
+          ? theme.colorScheme.errorContainer
+          : theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isError) ...[
+              Icon(Icons.error_outline, color: fg, size: 20),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: SelectableText(
+                message,
+                style: theme.textTheme.bodyMedium?.copyWith(color: fg),
+              ),
+            ),
+            if (isError)
+              IconButton(
+                onPressed: onCopy,
+                tooltip: 'Copy error',
+                icon: Icon(Icons.copy, size: 20, color: fg),
+                visualDensity: VisualDensity.compact,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QrScanPreview extends StatelessWidget {
+  const _QrScanPreview({
+    required this.controller,
+    required this.onDetect,
+    required this.paused,
+  });
+
+  final MobileScannerController controller;
+  final void Function(BarcodeCapture capture) onDetect;
+  final bool paused;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        height: 128,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            MobileScanner(
+              controller: controller,
+              onDetect: paused ? null : onDetect,
+              fit: BoxFit.cover,
+            ),
+            if (paused)
+              const ColoredBox(
+                color: Color(0x88000000),
+                child: Center(
+                  child: Icon(Icons.videocam, color: Colors.white70, size: 32),
+                ),
+              ),
+            Positioned(
+              left: 8,
+              bottom: 8,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  child: Text(
+                    paused ? 'Scanner paused while streaming' : 'Point at host QR',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -405,11 +694,13 @@ class _IdleHero extends StatelessWidget {
     required this.busy,
     required this.hosts,
     required this.discovering,
+    this.savedHost,
   });
 
   final bool busy;
   final List<DiscoveredHost> hosts;
   final bool discovering;
+  final String? savedHost;
 
   @override
   Widget build(BuildContext context) {
@@ -436,11 +727,19 @@ class _IdleHero extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Copy sbm1: from the host terminal, paste, or scan QR.',
+            savedHost != null
+                ? 'Pair once with paste or QR, then tap Watch below.'
+                : 'Run streambeam-host on your PC, then scan the QR or paste sbm1:.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: openGithubReleases,
+            icon: const Icon(Icons.download),
+            label: const Text('Download StreamBeam for Windows'),
           ),
           const SizedBox(height: 16),
           Row(
@@ -500,37 +799,6 @@ class _IdleHero extends StatelessWidget {
             const CircularProgressIndicator(),
           ],
         ],
-      ),
-    );
-  }
-}
-
-class QrScanPage extends StatefulWidget {
-  const QrScanPage({super.key});
-
-  @override
-  State<QrScanPage> createState() => _QrScanPageState();
-}
-
-class _QrScanPageState extends State<QrScanPage> {
-  bool _done = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Scan host QR')),
-      body: MobileScanner(
-        onDetect: (capture) {
-          if (_done) return;
-          for (final b in capture.barcodes) {
-            final raw = b.rawValue;
-            if (raw != null && raw.startsWith('sbm1:')) {
-              _done = true;
-              Navigator.pop(context, raw);
-              return;
-            }
-          }
-        },
       ),
     );
   }

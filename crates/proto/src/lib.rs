@@ -34,6 +34,6 @@ pub enum ProtoError {
     ReedSolomon(#[from] reed_solomon_simd::Error),
     #[error("postcard: {0}")]
     Postcard(#[from] postcard::Error),
-    #[error("bad pairing payload: {0}")]
+    #[error("{0}")]
     BadPairPayload(&'static str),
 }
