@@ -1,0 +1,6 @@
+# CMake 4.x removed compatibility with cmake_minimum_required(VERSION < 3.5).
+# The bundled opus source (audiopus_sys) still declares an old minimum, so we
+# opt into the compatibility shim for every build (no-op where opus isn't built
+# from source with a modern cmake).
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

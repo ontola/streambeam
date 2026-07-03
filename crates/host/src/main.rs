@@ -77,6 +77,7 @@ fn build_config(
     opt: Opt,
     pairing_payload_tx: Option<std::sync::mpsc::Sender<String>>,
     pairing_request_tx: Option<std::sync::mpsc::Sender<server::PairApproval>>,
+    controls: std::sync::Arc<server::HostControls>,
 ) -> server::HostConfig {
     let listen = std::env::var("STREAMBEAM_LISTEN")
         .ok()
@@ -95,12 +96,14 @@ fn build_config(
         paired_store: Some(paired_store_path()),
         pairing_payload_tx,
         pairing_request_tx,
+        controls,
     }
 }
 
 #[cfg(not(windows))]
 fn run_cli(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = build_config(opt, None, None);
+    let controls = std::sync::Arc::new(server::HostControls::new());
+    let config = build_config(opt, None, None, controls);
     eprintln!(
         "StreamBeam host {} (mock encoder — real capture in M2)",
         env!("CARGO_PKG_VERSION")

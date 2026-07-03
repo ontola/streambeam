@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
@@ -10,6 +11,70 @@ use crate::NetError;
 
 /// Service type from PROTOCOL.md / PLAN.md.
 pub const SERVICE_TYPE: &str = "_streambeam._udp.local.";
+
+/// A registerable mDNS advertisement whose visibility can be toggled at runtime.
+///
+/// Unlike [`advertise`], which registers immediately for the whole session, this
+/// keeps the daemon alive and lets the host flip discoverability on and off (e.g.
+/// from a tray checkbox) via [`set_visible`](Self::set_visible).
+pub struct Advertiser {
+    daemon: ServiceDaemon,
+    info: ServiceInfo,
+    fullname: String,
+    registered: AtomicBool,
+}
+
+impl Advertiser {
+    /// Build the advertisement (initially *not* registered — call `set_visible`).
+    pub fn new(
+        instance: &str,
+        host_name: &str,
+        port: u16,
+        ips: &[IpAddr],
+    ) -> Result<Self, NetError> {
+        if ips.is_empty() {
+            return Err(NetError::Discovery("no IP addresses to advertise".into()));
+        }
+        let daemon = ServiceDaemon::new().map_err(|e| NetError::Discovery(e.to_string()))?;
+        let info = ServiceInfo::new(
+            SERVICE_TYPE,
+            instance,
+            &format!("{host_name}.local."),
+            ips,
+            port,
+            None::<HashMap<String, String>>,
+        )
+        .map_err(|e| NetError::Discovery(e.to_string()))?;
+        let fullname = info.get_fullname().to_string();
+        Ok(Self {
+            daemon,
+            info,
+            fullname,
+            registered: AtomicBool::new(false),
+        })
+    }
+
+    /// Register (advertise on the LAN) or unregister. Idempotent.
+    pub fn set_visible(&self, visible: bool) -> Result<(), NetError> {
+        let was = self.registered.load(Ordering::Relaxed);
+        if visible && !was {
+            self.daemon
+                .register(self.info.clone())
+                .map_err(|e| NetError::Discovery(e.to_string()))?;
+            self.registered.store(true, Ordering::Relaxed);
+        } else if !visible && was {
+            self.daemon
+                .unregister(&self.fullname)
+                .map_err(|e| NetError::Discovery(e.to_string()))?;
+            self.registered.store(false, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.registered.load(Ordering::Relaxed)
+    }
+}
 
 /// Register this host on the LAN. Returns the daemon; keep it alive for the session.
 pub fn advertise(

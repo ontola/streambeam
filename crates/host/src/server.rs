@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
-    advertise, advertise_ips, export_pairing_secret, peer_pubkey, read_msg, server_config,
-    write_msg, HelloVerdict, Identity, PairingStore,
+    advertise_ips, export_pairing_secret, peer_pubkey, read_msg, server_config, write_msg,
+    Advertiser, HelloVerdict, Identity, PairingStore,
 };
 use tokio::sync::oneshot;
 use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
@@ -39,6 +39,75 @@ pub struct HostConfig {
     /// Asks the UI to approve each new device before it is enrolled. When
     /// `None` (headless host) new devices with a valid token are auto-approved.
     pub pairing_request_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
+    /// Live toggles + connected-client list shared with the UI.
+    pub controls: Arc<HostControls>,
+}
+
+/// Runtime state the tray GUI reads and flips: discoverability, whether new
+/// connections are accepted, and the list of currently connected clients.
+#[derive(Default)]
+pub struct HostControls {
+    discoverable: AtomicBool,
+    accept_connections: AtomicBool,
+    clients: Mutex<Vec<ClientEntry>>,
+}
+
+#[derive(Clone)]
+pub struct ClientEntry {
+    pub name: String,
+    pub addr: SocketAddr,
+}
+
+impl HostControls {
+    /// Both toggles start enabled.
+    pub fn new() -> Self {
+        Self {
+            discoverable: AtomicBool::new(true),
+            accept_connections: AtomicBool::new(true),
+            clients: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn is_discoverable(&self) -> bool {
+        self.discoverable.load(Ordering::Relaxed)
+    }
+
+    pub fn set_discoverable(&self, on: bool) {
+        self.discoverable.store(on, Ordering::Relaxed);
+    }
+
+    pub fn accepts_connections(&self) -> bool {
+        self.accept_connections.load(Ordering::Relaxed)
+    }
+
+    pub fn set_accepts_connections(&self, on: bool) {
+        self.accept_connections.store(on, Ordering::Relaxed);
+    }
+
+    /// Snapshot of currently connected clients for display.
+    pub fn clients(&self) -> Vec<ClientEntry> {
+        self.clients.lock().unwrap().clone()
+    }
+
+    fn add_client(&self, entry: ClientEntry) {
+        self.clients.lock().unwrap().push(entry);
+    }
+
+    fn remove_client(&self, addr: SocketAddr) {
+        self.clients.lock().unwrap().retain(|c| c.addr != addr);
+    }
+}
+
+/// Removes a client from the shared list when the connection handler exits.
+struct ClientGuard {
+    controls: Arc<HostControls>,
+    addr: SocketAddr,
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        self.controls.remove_client(self.addr);
+    }
 }
 
 /// A pending "device wants to link" prompt handed to the UI thread.
@@ -108,12 +177,33 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     let addr = endpoint.local_addr()?;
     let addrs = pairing_addrs(addr);
 
+    let controls = config.controls.clone();
+
     let _mdns = if std::env::var("STREAMBEAM_NO_MDNS").is_err() {
         let ips: Vec<_> = addrs.iter().map(|a| a.ip()).collect();
-        match advertise(&config.host_name, &config.host_name, addr.port(), &ips) {
-            Ok(daemon) => {
-                eprintln!("mDNS: broadcasting on port {} ({ips:?})", addr.port());
-                Some(daemon)
+        match Advertiser::new(&config.host_name, &config.host_name, addr.port(), &ips) {
+            Ok(adv) => {
+                let adv = Arc::new(adv);
+                if let Err(e) = adv.set_visible(controls.is_discoverable()) {
+                    eprintln!("mDNS advertise skipped: {e}");
+                }
+                eprintln!("mDNS: ready on port {} ({ips:?})", addr.port());
+                // Poll the tray toggle and register/unregister to match it.
+                let watch_adv = adv.clone();
+                let watch_controls = controls.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                        let want = watch_controls.is_discoverable();
+                        if want != watch_adv.is_visible() {
+                            match watch_adv.set_visible(want) {
+                                Ok(()) => eprintln!("mDNS discoverable = {want}"),
+                                Err(e) => eprintln!("mDNS toggle failed: {e}"),
+                            }
+                        }
+                    }
+                });
+                Some(adv)
             }
             Err(e) => {
                 eprintln!("mDNS advertise skipped: {e}");
@@ -151,11 +241,20 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         let Some(incoming) = endpoint.accept().await else {
             break;
         };
+        if !controls.accepts_connections() {
+            eprintln!(
+                "refused {} — connections disabled in tray",
+                incoming.remote_address()
+            );
+            incoming.refuse();
+            continue;
+        }
         let store = store.clone();
         let audio = audio.clone();
         let codec_config = codec_config.clone();
         let paired_path = paired_path.clone();
         let approval_tx = config.pairing_request_tx.clone();
+        let controls = controls.clone();
         let fps = config.fps;
         let width = width as u16;
         let height = height as u16;
@@ -175,6 +274,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
                 frame_interval,
                 paired_path,
                 approval_tx,
+                controls,
             )
             .await
             {
@@ -211,6 +311,7 @@ async fn handle_client(
     frame_interval: Duration,
     paired_store: Option<std::path::PathBuf>,
     approval_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
+    controls: Arc<HostControls>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = incoming.await?;
     eprintln!("client connected from {}", conn.remote_address());
@@ -287,6 +388,16 @@ async fn handle_client(
             }
         }
     }
+
+    // Accepted — track it in the shared list until this handler returns.
+    controls.add_client(ClientEntry {
+        name: client_name.clone(),
+        addr: conn.remote_address(),
+    });
+    let _client_guard = ClientGuard {
+        controls: controls.clone(),
+        addr: conn.remote_address(),
+    };
 
     let stream_ctl = Arc::new(StreamControl::new());
     let mut streaming = false;
