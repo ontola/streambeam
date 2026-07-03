@@ -16,6 +16,10 @@ pub const PAIR_PREFIX: &str = "sbm1:";
 pub const PAIR_EXPORTER_LABEL: &[u8] = b"streambeam-pair";
 pub const PAIR_EXPORTER_LEN: usize = 32;
 
+/// The payload rides in the URL *fragment*: browsers never send fragments to
+/// the server, so the one-time token can't leak into streambeam.eu access logs.
+pub const PAIR_URL_BASE: &str = "https://streambeam.eu/session/#";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairInfo {
     pub version: u8,
@@ -33,6 +37,12 @@ impl PairInfo {
         Ok(format!("{PAIR_PREFIX}{b64}"))
     }
 
+    /// URL form for QR codes: opens the app directly when installed (Android
+    /// App Link), or the download/fallback page when not.
+    pub fn encode_url(&self) -> Result<String, ProtoError> {
+        Ok(format!("{PAIR_URL_BASE}{}", self.encode_payload()?))
+    }
+
     /// Strip whitespace and validate before decode (Windows terminal wraps often truncate copies).
     pub fn normalize_payload(s: &str) -> String {
         s.trim()
@@ -41,8 +51,15 @@ impl PairInfo {
             .collect()
     }
 
+    /// Accepts both the raw `sbm1:` form and the QR URL form
+    /// (`https://streambeam.eu/session/#sbm1:…`). A raw payload never contains
+    /// `#` (base64url alphabet), so splitting on the last `#` is unambiguous.
     pub fn decode_payload(s: &str) -> Result<Self, ProtoError> {
         let s = Self::normalize_payload(s);
+        let s = match s.rsplit_once('#') {
+            Some((_, fragment)) => fragment.to_owned(),
+            None => s,
+        };
         let b64 = s
             .strip_prefix(PAIR_PREFIX)
             .ok_or(ProtoError::BadPairPayload(
@@ -146,6 +163,26 @@ mod tests {
         assert!(payload.starts_with(PAIR_PREFIX));
         let decoded = PairInfo::decode_payload(&payload).unwrap();
         assert_eq!(decoded, info);
+    }
+
+    #[test]
+    fn url_form_roundtrip() {
+        let info = PairInfo {
+            version: 1,
+            host_name: "host".into(),
+            host_pubkey: [1u8; 32],
+            addrs: vec!["192.168.0.10:47989".parse().unwrap()],
+            token: [2u8; 16],
+            expires_unix: 1_700_000_000,
+        };
+        let url = info.encode_url().unwrap();
+        assert!(url.starts_with("https://streambeam.eu/session/#sbm1:"));
+        assert_eq!(PairInfo::decode_payload(&url).unwrap(), info);
+        // QR scanners sometimes hand over the URL with stray whitespace.
+        assert_eq!(
+            PairInfo::decode_payload(&format!(" {url}\n")).unwrap(),
+            info
+        );
     }
 
     #[test]

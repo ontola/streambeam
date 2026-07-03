@@ -59,6 +59,7 @@ class WatchPage extends StatefulWidget {
 
 class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   static const _surfaceChannel = MethodChannel('streambeam/video_surface');
+  static const _deepLinkChannel = MethodChannel('streambeam/deeplink');
   static const _discoveryInterval = Duration(seconds: 12);
   static const _clipboardPollInterval = Duration(seconds: 2);
 
@@ -196,6 +197,18 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         unawaited(_discoverHosts());
       }
     });
+    _deepLinkChannel.setMethodCallHandler((call) async {
+      if (call.method == 'link') {
+        await _handleIncomingLink(call.arguments as String?);
+      }
+    });
+    // Link that cold-started the app (QR scanned before the app was running).
+    unawaited(
+      _deepLinkChannel
+          .invokeMethod<String>('getInitialLink')
+          .then(_handleIncomingLink)
+          .catchError((_) {}),
+    );
     _surfaceChannel.setMethodCallHandler((call) async {
       if (call.method == 'surfaceReady') {
         _cancelSurfaceTimeout();
@@ -270,15 +283,38 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (_busy) return;
     for (final b in capture.barcodes) {
       final raw = b.rawValue;
-      if (raw == null || !raw.startsWith('sbm1:')) continue;
-      final normalized = _normalizePayload(raw);
-      if (normalized.length < 48) continue;
-      if (normalized == _lastQrPayload) continue;
-      _lastQrPayload = normalized;
+      if (raw == null) continue;
+      final payload = _extractPayload(raw);
+      if (payload == null || payload.length < 48) continue;
+      if (payload == _lastQrPayload) continue;
+      _lastQrPayload = payload;
       _closeQrPreview();
-      unawaited(_applyPayload(normalized));
+      unawaited(_applyPayload(payload));
       return;
     }
+  }
+
+  /// Pulls the `sbm1:` pairing code out of raw QR text, a
+  /// streambeam.eu/session/#… link, or a streambeam:// link.
+  String? _extractPayload(String raw) {
+    final normalized = _normalizePayload(raw);
+    if (normalized.startsWith('sbm1:')) return normalized;
+    return RegExp(r'sbm1:[A-Za-z0-9_-]+').firstMatch(normalized)?.group(0);
+  }
+
+  Future<void> _handleIncomingLink(String? link) async {
+    if (link == null || _busy || !mounted) return;
+    final payload = _extractPayload(link);
+    if (payload == null || payload.length < 48) {
+      _reportError(
+        'That link has no pairing code. Scan the QR on your PC for a fresh one.',
+      );
+      return;
+    }
+    if (payload == _lastQrPayload) return;
+    _lastQrPayload = payload;
+    _closeQrPreview();
+    await _applyPayload(payload);
   }
 
   void _teardownVideo() {
@@ -320,10 +356,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     if (text == null || text.isEmpty) return null;
-    final normalized = _normalizePayload(text);
-    if (normalized.startsWith('sbm1:')) return normalized;
-    final match = RegExp(r'sbm1:[A-Za-z0-9_-]+').firstMatch(normalized);
-    return match?.group(0);
+    return _extractPayload(text);
   }
 
   Future<void> _pasteFromClipboard() async {

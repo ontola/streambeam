@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open stream — StreamBeam</title>
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    --beam: #6C7BFF; --beam-strong: #8591FF; --live: #3DD68C;
+    --bg: #0D0F1A; --card: #151827; --ink: #E9EAF2; --muted: #9CA0B8; --line: #262A3F;
+    color-scheme: dark light;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #FAFAFD; --card: #FFFFFF; --ink: #14161F; --muted: #5A5E75;
+            --line: #E3E5EF; --beam: #5563E8; --beam-strong: #4351DB; }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0D0F1A; --card: #151827; --ink: #E9EAF2; --muted: #9CA0B8;
+    --line: #262A3F; --beam: #6C7BFF; --beam-strong: #8591FF;
+  }
+  :root[data-theme="light"] {
+    --bg: #FAFAFD; --card: #FFFFFF; --ink: #14161F; --muted: #5A5E75;
+    --line: #E3E5EF; --beam: #5563E8; --beam-strong: #4351DB;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 400 1rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh; display: grid; place-items: center; padding: 24px;
+  }
+  .mono { font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    max-width: 26rem; width: 100%; padding: 32px 28px; text-align: center;
+  }
+  .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; margin-bottom: 22px; }
+  h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; margin-bottom: 10px; }
+  p { color: var(--muted); font-size: 0.95rem; }
+  .actions { display: grid; gap: 10px; margin-top: 24px; }
+  .btn {
+    display: block; padding: 13px 18px; border-radius: 10px; font-weight: 600;
+    font-size: 0.98rem; text-decoration: none; border: 1px solid transparent;
+    cursor: pointer; background: none; color: var(--ink); font-family: inherit;
+  }
+  .btn-beam { background: var(--beam); color: #FFFFFF; }
+  .btn-beam:hover { background: var(--beam-strong); }
+  .btn-ghost { border-color: var(--line); }
+  .btn-ghost:hover { border-color: var(--beam); }
+  .btn:focus-visible { outline: 2px solid var(--beam); outline-offset: 3px; }
+  .hint { font-size: 0.82rem; margin-top: 18px; }
+  .hint a { color: var(--beam-strong); }
+  .ok { color: var(--live); }
+  #copied { visibility: hidden; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <span class="brand">
+      <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
+        <rect x="1.5" y="4" width="14" height="10" rx="2" fill="none" stroke="var(--beam)" stroke-width="2"/>
+        <rect x="16" y="12" width="8.5" height="13" rx="2" fill="var(--beam)"/>
+        <path d="M8 17 L15 21" stroke="var(--beam)" stroke-width="2" stroke-dasharray="2.5 3" stroke-linecap="round"/>
+      </svg>
+      StreamBeam
+    </span>
+
+    <div id="ready" hidden>
+      <h1>Your stream is ready</h1>
+      <p>If StreamBeam is installed, it should open by itself. If nothing
+         happened, use the buttons below.</p>
+      <div class="actions">
+        <button class="btn btn-beam" id="open">Open in StreamBeam</button>
+        <button class="btn btn-ghost" id="copy">Copy pairing code</button>
+        <a class="btn btn-ghost" href="https://github.com/joepio/streambeam/releases">Get the app</a>
+      </div>
+      <p class="hint" id="copied"><span class="ok">Copied.</span> Open StreamBeam and tap <strong>Paste &amp; play</strong>.</p>
+      <p class="hint">Pairing codes expire after a few minutes — if this one has,
+         just scan the QR on your PC again.</p>
+    </div>
+
+    <div id="empty" hidden>
+      <h1>This link opens a stream</h1>
+      <p>Links like this come from the QR code that StreamBeam shows on your PC.
+         This one is missing its pairing code — scan the QR on your PC to get a
+         fresh one.</p>
+      <div class="actions">
+        <a class="btn btn-beam" href="https://github.com/joepio/streambeam/releases">Get StreamBeam</a>
+        <a class="btn btn-ghost" href="/">What is StreamBeam?</a>
+      </div>
+    </div>
+  </div>
+
+<script>
+  var frag = decodeURIComponent(location.hash.slice(1));
+  var valid = /^sbm1:[A-Za-z0-9_-]{32,}$/.test(frag);
+  document.getElementById(valid ? 'ready' : 'empty').hidden = false;
+
+  if (valid) {
+    // Fallback for phones where the https App Link isn't verified (e.g. app
+    // sideloaded): the custom scheme reaches the app with the code intact.
+    var appUrl = 'streambeam://pair#' + frag;
+    document.getElementById('open').addEventListener('click', function () {
+      location.href = appUrl;
+    });
+    document.getElementById('copy').addEventListener('click', function () {
+      navigator.clipboard.writeText(frag).then(function () {
+        document.getElementById('copied').style.visibility = 'visible';
+      });
+    });
+  }
+</script>
+</body>
+</html>

@@ -109,17 +109,18 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None
     };
 
-    let payload = PairInfo {
+    let info = PairInfo {
         version: 1,
         host_name: "fakehost".into(),
         host_pubkey: identity.public_key(),
         addrs,
         token,
         expires_unix,
-    }
-    .encode_payload()?;
+    };
 
-    println!("{payload}");
+    // stdout stays the raw payload (scripts pipe it); the QR/link form is info.
+    println!("{}", info.encode_payload()?);
+    eprintln!("QR/link form: {}", info.encode_url()?);
     eprintln!("fakehost listening on {addr} — paste the sbm1: line into devclient");
 
     loop {

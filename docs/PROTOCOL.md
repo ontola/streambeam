@@ -16,7 +16,16 @@ pinned Ed25519 keys. `PROTO_VERSION = 1`.
 
 ## Pairing
 
-QR content: `sbm1:` + base64url(postcard(PairInfo))
+Payload: `sbm1:` + base64url(postcard(PairInfo))
+
+QR content is the **URL form**: `https://streambeam.eu/session/#sbm1:…` — one QR
+both opens the app directly (Android App Link, verified via
+`/.well-known/assetlinks.json`) and routes phones without the app to a
+download/fallback page. The payload rides in the URL *fragment* so it is never
+sent to the streambeam.eu server (no token in access logs). Decoders accept both
+forms (`PairInfo::decode_payload` splits on the last `#`; base64url contains no
+`#`). A `streambeam://pair#sbm1:…` custom-scheme fallback exists for sideloaded
+builds where the https link isn't verified.
 
 ```rust
 PairInfo {

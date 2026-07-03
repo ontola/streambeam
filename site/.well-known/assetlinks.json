@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.streambeam.streambeam",
+      "sha256_cert_fingerprints": [
+        "D8:94:C2:4C:ED:9E:08:B2:29:92:EC:7B:DA:64:BA:48:E5:66:3E:FB:DF:B9:9E:D9:7B:DE:69:D4:06:4C:C6:50",
+        "REPLACE_WITH_RELEASE_KEY_SHA256_FINGERPRINT"
+      ]
+    }
+  }
+]

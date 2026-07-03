@@ -25,6 +25,25 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- App Link: QR codes point at https://streambeam.eu/session/#sbm1:…
+                 autoVerify requires /.well-known/assetlinks.json on streambeam.eu
+                 to list this app's signing cert (see site/README.md). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                      android:host="streambeam.eu"
+                      android:pathPrefix="/session"/>
+            </intent-filter>
+            <!-- Fallback used by the session page's "Open in StreamBeam" button
+                 when the https link isn't verified (e.g. sideloaded build). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="streambeam" android:host="pair"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
