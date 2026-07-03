@@ -1,0 +1,8 @@
+[package]
+name = "streambeam-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+streambeam-proto = { workspace = true }
