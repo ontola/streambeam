@@ -44,6 +44,7 @@ class WatchPage extends StatefulWidget {
 
 class _WatchPageState extends State<WatchPage> {
   static const _surfaceChannel = MethodChannel('streambeam/video_surface');
+  static const _discoveryInterval = Duration(seconds: 12);
 
   final _payloadCtrl = TextEditingController();
   bool _busy = false;
@@ -53,6 +54,9 @@ class _WatchPageState extends State<WatchPage> {
   int? _pendingWindow;
   bool _surfaceReady = false;
   String? _savedHost;
+  List<DiscoveredHost> _lanHosts = [];
+  bool _discoveryBusy = false;
+  Timer? _discoveryTimer;
 
   void _refreshSavedHost() {
     setState(() => _savedHost = savedHostLabel());
@@ -62,6 +66,12 @@ class _WatchPageState extends State<WatchPage> {
   void initState() {
     super.initState();
     _refreshSavedHost();
+    unawaited(_discoverHosts());
+    _discoveryTimer = Timer.periodic(_discoveryInterval, (_) {
+      if (!_busy && mounted) {
+        unawaited(_discoverHosts());
+      }
+    });
     _surfaceChannel.setMethodCallHandler((call) async {
       if (call.method == 'surfaceReady') {
         setState(() {
@@ -81,6 +91,7 @@ class _WatchPageState extends State<WatchPage> {
 
   @override
   void dispose() {
+    _discoveryTimer?.cancel();
     _payloadCtrl.dispose();
     super.dispose();
   }
@@ -93,24 +104,55 @@ class _WatchPageState extends State<WatchPage> {
   }
 
   Future<void> _discoverHosts() async {
-    setState(() => _status = 'Searching LAN…');
+    if (_discoveryBusy) return;
+    if (mounted) setState(() => _discoveryBusy = true);
     try {
-      final hosts = await discoverHosts(timeoutMs: 3000);
+      final hosts = await discoverHosts(timeoutMs: 2500);
+      if (!mounted) return;
       setState(() {
-        if (hosts.isEmpty) {
-          _status =
-              'No hosts on this network.\n'
-              'Start streambeam-host on your PC (same Wi‑Fi).';
-        } else {
-          final lines = hosts
-              .map((h) => '${h.name}  ${h.addrs.join(", ")}:${h.port}')
-              .join('\n');
-          _status = 'Found ${hosts.length} host(s):\n$lines\n\nScan the host QR to pair.';
-        }
+        _lanHosts = hosts;
+        _discoveryBusy = false;
       });
-    } catch (e) {
-      setState(() => _status = 'Discovery error: $e');
+    } catch (_) {
+      if (mounted) setState(() => _discoveryBusy = false);
     }
+  }
+
+  Future<void> _applyPayload(String normalized, {bool autoPlay = false}) async {
+    _payloadCtrl.text = normalized;
+    await saveHostFromPayload(payload: normalized);
+    _refreshSavedHost();
+    if (!mounted) return;
+    if (autoPlay) {
+      await _play();
+    } else {
+      setState(() => _status = 'Paired — tap Play');
+    }
+  }
+
+  Future<String?> _payloadFromClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return null;
+    final normalized = _normalizePayload(text);
+    if (normalized.startsWith('sbm1:')) return normalized;
+    final match = RegExp(r'sbm1:[A-Za-z0-9_-]+').firstMatch(normalized);
+    return match?.group(0);
+  }
+
+  Future<void> _pasteFromClipboard() async {
+    if (_busy) return;
+    final payload = await _payloadFromClipboard();
+    if (payload == null) {
+      setState(() => _status = 'Clipboard empty or missing sbm1: payload');
+      return;
+    }
+    if (payload.length < 48) {
+      setState(() => _status =
+          'sbm1: in clipboard looks truncated — copy the full line from the host');
+      return;
+    }
+    await _applyPayload(payload, autoPlay: true);
   }
 
   Future<void> _beginSession({required bool reconnect}) async {
@@ -224,7 +266,7 @@ class _WatchPageState extends State<WatchPage> {
         return;
       }
       _payloadCtrl.text = normalized;
-      saveHostFromPayload(payload: normalized);
+      await saveHostFromPayload(payload: normalized);
       _refreshSavedHost();
       if (mounted) {
         setState(() => _status = 'Paired — tap Play');
@@ -255,12 +297,15 @@ class _WatchPageState extends State<WatchPage> {
         ],
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_showVideo && Platform.isAndroid)
+        child: RefreshIndicator(
+          onRefresh: _discoverHosts,
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_showVideo && Platform.isAndroid)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: AspectRatio(
@@ -298,12 +343,22 @@ class _WatchPageState extends State<WatchPage> {
                   ),
                 )
               else
-                _IdleHero(busy: _busy),
+                _IdleHero(
+                  busy: _busy,
+                  hosts: _lanHosts,
+                  discovering: _discoveryBusy,
+                ),
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: _busy ? null : _scanQr,
                 icon: const Icon(Icons.qr_code_scanner),
                 label: const Text('Scan host QR'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _pasteFromClipboard,
+                icon: const Icon(Icons.content_paste),
+                label: const Text('Paste & play'),
               ),
               const SizedBox(height: 8),
               Row(
@@ -325,30 +380,6 @@ class _WatchPageState extends State<WatchPage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _discoverHosts,
-                icon: const Icon(Icons.wifi_find),
-                label: const Text('Find hosts on LAN'),
-              ),
-              const SizedBox(height: 16),
-              ExpansionTile(
-                title: const Text('Paste pairing payload'),
-                subtitle: const Text('sbm1:… from host terminal'),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: TextField(
-                      controller: _payloadCtrl,
-                      decoration: const InputDecoration(
-                        hintText: 'sbm1:…',
-                        border: OutlineInputBorder(),
-                      ),
-                      maxLines: 3,
-                    ),
-                  ),
-                ],
-              ),
               if (_status != null && !_showVideo) ...[
                 const SizedBox(height: 12),
                 Material(
@@ -364,14 +395,21 @@ class _WatchPageState extends State<WatchPage> {
           ),
         ),
       ),
+    ),
     );
   }
 }
 
 class _IdleHero extends StatelessWidget {
-  const _IdleHero({required this.busy});
+  const _IdleHero({
+    required this.busy,
+    required this.hosts,
+    required this.discovering,
+  });
 
   final bool busy;
+  final List<DiscoveredHost> hosts;
+  final bool discovering;
 
   @override
   Widget build(BuildContext context) {
@@ -398,12 +436,65 @@ class _IdleHero extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Run streambeam-host on Windows or Mac, then scan the QR code.',
+            'Copy sbm1: from the host terminal, paste, or scan QR.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
           ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (discovering)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ),
+              Icon(
+                Icons.wifi_find,
+                size: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                hosts.isEmpty
+                    ? 'Searching LAN for hosts…'
+                    : '${hosts.length} host(s) on LAN',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          if (hosts.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            ...hosts.map(
+              (h) => Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${h.name}  ${h.addrs.join(", ")}:${h.port}',
+                  style: theme.textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Scan QR on the host to pair.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
           if (busy) ...[
             const SizedBox(height: 20),
             const CircularProgressIndicator(),
