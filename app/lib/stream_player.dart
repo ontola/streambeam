@@ -41,11 +41,14 @@ class StreamPlayerScreen extends StatefulWidget {
 class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     with SingleTickerProviderStateMixin {
   static const _menuWidth = 260.0;
-  static const _edgeGrabWidth = 28.0;
-  static const _openThreshold = 72.0;
+  static const _openThreshold = 48.0;
   static const _hintPeek = 72.0;
   /// Extra slide-off so shadows / sub-pixel rounding don't peek at the edge.
   static const _hideSlack = 32.0;
+
+  /// Width of the right-edge zone that opens the menu (~14% of screen, 64–96 logical px).
+  double _edgeGrabFor(double screenW) =>
+      (screenW * 0.14).clamp(64.0, 96.0);
 
   final _transformController = TransformationController();
   late final AnimationController _hintController;
@@ -166,7 +169,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   void _onEdgeDragStart(DragStartDetails details) {
     final screenW = MediaQuery.sizeOf(context).width;
-    final fromRightEdge = details.globalPosition.dx >= screenW - _edgeGrabWidth;
+    final grab = _edgeGrabFor(screenW);
+    final fromRightEdge = details.globalPosition.dx >= screenW - grab;
     if (fromRightEdge || _menuOpen || _menuDrag > 0) {
       _hintController.stop();
       _edgeDragActive = true;
@@ -188,8 +192,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (!_edgeDragActive) return;
     _edgeDragActive = false;
     final velocity = details.primaryVelocity ?? 0;
-    final flingOpen = velocity < -350;
-    final flingClose = velocity > 350;
+    final flingOpen = velocity < -250;
+    final flingClose = velocity > 250;
     final shouldOpen =
         !flingClose && (_menuDrag > _openThreshold || flingOpen);
     setState(() {
@@ -254,6 +258,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         child: LayoutBuilder(
           builder: (context, constraints) {
             final menuSlide = _menuSlideOff;
+            final edgeGrab = _edgeGrabFor(constraints.maxWidth);
 
             return Stack(
               clipBehavior: Clip.hardEdge,
@@ -297,6 +302,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                           refWidth: widget.streamWidth,
                           refHeight: widget.streamHeight,
                           mode: _pointerMode,
+                          screenEdgeGrab: edgeGrab,
                           onCaptureChanged: (capturing) {
                             if (_blockViewerGestures != capturing) {
                               setState(() => _blockViewerGestures = capturing);
@@ -376,12 +382,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
             right: 0,
             top: 0,
             bottom: 0,
-            width: _edgeGrabWidth,
+            width: edgeGrab,
             child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
+              behavior: HitTestBehavior.opaque,
               onHorizontalDragStart: _onEdgeDragStart,
               onHorizontalDragUpdate: _onEdgeDragUpdate,
               onHorizontalDragEnd: _onEdgeDragEnd,
+              child: const SizedBox.expand(),
             ),
           ),
           if (_keyboardOpen) ...[
@@ -440,6 +447,7 @@ class _StreamTouchSurface extends StatefulWidget {
     required this.refWidth,
     required this.refHeight,
     required this.mode,
+    required this.screenEdgeGrab,
     required this.onCaptureChanged,
   });
 
@@ -447,6 +455,7 @@ class _StreamTouchSurface extends StatefulWidget {
   final int refWidth;
   final int refHeight;
   final PointerMode mode;
+  final double screenEdgeGrab;
   final ValueChanged<bool> onCaptureChanged;
 
   @override
@@ -503,7 +512,13 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
     widget.onCaptureChanged(on);
   }
 
+  bool _isInMenuEdgeZone(Offset global) {
+    final screenW = MediaQuery.sizeOf(context).width;
+    return global.dx >= screenW - widget.screenEdgeGrab;
+  }
+
   void _onPointerDown(PointerDownEvent event) {
+    if (_isInMenuEdgeZone(event.position)) return;
     _pointers[event.pointer] = event.localPosition;
     if (_pointers.length == 1) {
       _singleOrigin = event.localPosition;
