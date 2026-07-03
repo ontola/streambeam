@@ -65,7 +65,8 @@ class WatchPage extends StatefulWidget {
 class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   static const _surfaceChannel = MethodChannel('streambeam/video_surface');
   static const _deepLinkChannel = MethodChannel('streambeam/deeplink');
-  static const _discoveryInterval = Duration(seconds: 12);
+  static const _discoveryChannel = MethodChannel('streambeam/discovery');
+  static const _discoveryInterval = Duration(seconds: 8);
   static const _clipboardPollInterval = Duration(seconds: 2);
 
   final _payloadCtrl = TextEditingController();
@@ -76,11 +77,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   bool _statusIsError = false;
   int? _pendingWindow;
   bool _surfaceReady = false;
-  String? _savedHost;
+  SavedHostInfo? _savedHostInfo;
   List<DiscoveredHost> _lanHosts = [];
   DiscoveredHost? _pendingLanHost;
   String? _pendingLanAddr;
   bool _discoveryBusy = false;
+  String? _discoveryError;
   Timer? _discoveryTimer;
   late final MobileScannerController _scannerController;
   String? _lastQrPayload;
@@ -181,7 +183,87 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   void _refreshSavedHost() {
-    setState(() => _savedHost = savedHostLabel());
+    setState(() {
+      _savedHostInfo = loadSavedHostInfo();
+    });
+  }
+
+  bool _pubkeysEqual(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  List<_HostListEntry> _hostEntries() {
+    final entries = <_HostListEntry>[];
+    final matchedLan = <int>{};
+
+    final saved = _savedHostInfo;
+    if (saved != null) {
+      DiscoveredHost? lanMatch;
+      int? lanIndex;
+      for (var i = 0; i < _lanHosts.length; i++) {
+        final h = _lanHosts[i];
+        if (h.name == saved.name ||
+            (saved.hostPubkey.length == 32 &&
+                h.hostPubkey.length == 32 &&
+                _pubkeysEqual(saved.hostPubkey, h.hostPubkey))) {
+          lanMatch = h;
+          lanIndex = i;
+          break;
+        }
+      }
+      if (lanIndex != null) matchedLan.add(lanIndex);
+      entries.add(
+        _HostListEntry(
+          name: saved.name,
+          addrs: lanMatch?.addrs ?? saved.addrs,
+          port: lanMatch?.port ?? saved.port,
+          hostPubkey: saved.hostPubkey.isNotEmpty
+              ? saved.hostPubkey
+              : (lanMatch?.hostPubkey ?? const []),
+          online: lanMatch != null,
+          isSaved: true,
+          discovered: lanMatch,
+        ),
+      );
+    }
+
+    for (var i = 0; i < _lanHosts.length; i++) {
+      if (matchedLan.contains(i)) continue;
+      final h = _lanHosts[i];
+      entries.add(
+        _HostListEntry(
+          name: h.name,
+          addrs: h.addrs,
+          port: h.port,
+          hostPubkey: h.hostPubkey,
+          online: true,
+          isSaved: false,
+          discovered: h,
+        ),
+      );
+    }
+
+    return entries;
+  }
+
+  Future<void> _connectHostEntry(_HostListEntry entry) async {
+    if (_busy) return;
+    if (!entry.online) {
+      _reportError('${entry.name} is offline.');
+      return;
+    }
+    final discovered = entry.discovered;
+    if (discovered != null) {
+      await _connectLanHost(discovered);
+      return;
+    }
+    if (entry.isSaved) {
+      await _beginSession(reconnect: true);
+    }
   }
 
   @override
@@ -194,6 +276,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       detectionSpeed: DetectionSpeed.noDuplicates,
       facing: CameraFacing.back,
     );
+    unawaited(_ensureMdnsLock());
     unawaited(_discoverHosts());
     unawaited(_refreshClipboard());
     _clipboardTimer = Timer.periodic(_clipboardPollInterval, (_) {
@@ -242,6 +325,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _discoveryTimer?.cancel();
     _clipboardTimer?.cancel();
     _cancelSurfaceTimeout();
+    unawaited(_releaseMdnsLock());
     _scannerController.dispose();
     _payloadCtrl.dispose();
     super.dispose();
@@ -332,18 +416,45 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _playInFlight = false;
   }
 
+  Future<void> _ensureMdnsLock() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _discoveryChannel.invokeMethod<void>('acquireMulticastLock');
+    } catch (_) {
+      // Best-effort; discovery may still work on some devices.
+    }
+  }
+
+  Future<void> _releaseMdnsLock() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _discoveryChannel.invokeMethod<void>('releaseMulticastLock');
+    } catch (_) {}
+  }
+
   Future<void> _discoverHosts() async {
     if (_discoveryBusy) return;
-    if (mounted) setState(() => _discoveryBusy = true);
+    if (mounted) {
+      setState(() {
+        _discoveryBusy = true;
+        _discoveryError = null;
+      });
+    }
     try {
-      final hosts = await discoverHosts(timeoutMs: 2500);
+      await _ensureMdnsLock();
+      final hosts = await discoverHosts(timeoutMs: 6000);
       if (!mounted) return;
       setState(() {
         _lanHosts = hosts;
         _discoveryBusy = false;
       });
-    } catch (_) {
-      if (mounted) setState(() => _discoveryBusy = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _discoveryBusy = false;
+          _discoveryError = e.toString();
+        });
+      }
     }
   }
 
@@ -571,12 +682,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   String? _bestLanAddr(DiscoveredHost host) {
     if (host.addrs.isEmpty) return null;
+    for (final addr in host.addrs) {
+      if (!addr.startsWith('127.') && addr != '::1') {
+        return '$addr:${host.port}';
+      }
+    }
     return '${host.addrs.first}:${host.port}';
-  }
-
-  Future<void> _watch() async {
-    if (_savedHost == null) return;
-    await _beginSession(reconnect: true);
   }
 
   void _stopStreaming() {
@@ -643,12 +754,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               children: [
                 _IdleHero(
                   busy: _busy,
-                  hosts: _lanHosts,
+                  hosts: _hostEntries(),
                   discovering: _discoveryBusy,
-                  savedHost: _savedHost,
+                  discoveryError: _discoveryError,
                   onHostTap: _busy
                       ? null
-                      : (h) => unawaited(_connectLanHost(h)),
+                      : (h) => unawaited(_connectHostEntry(h)),
+                  onForgetHost: _busy
+                      ? null
+                      : (_) => unawaited(_forgetSavedHost()),
                 ),
                 const SizedBox(height: 20),
                 if (Platform.isAndroid && _qrPreviewOpen) ...[
@@ -687,26 +801,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     ],
                   ],
                 ),
-                if (_savedHost != null) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: _busy ? null : _watch,
-                          icon: const Icon(Icons.play_arrow),
-                          label: Text('Watch $_savedHost'),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        onPressed: _busy ? null : () => unawaited(_forgetSavedHost()),
-                        tooltip: 'Forget $_savedHost',
-                        icon: const Icon(Icons.delete_outline),
-                      ),
-                    ],
-                  ),
-                ],
                 if (_status != null) ...[
                   const SizedBox(height: 12),
                   _StatusNotice(
@@ -862,20 +956,50 @@ class _QrScanPreview extends StatelessWidget {
   }
 }
 
+class _HostListEntry {
+  const _HostListEntry({
+    required this.name,
+    required this.addrs,
+    required this.port,
+    required this.hostPubkey,
+    required this.online,
+    required this.isSaved,
+    this.discovered,
+  });
+
+  final String name;
+  final List<String> addrs;
+  final int port;
+  final List<int> hostPubkey;
+  final bool online;
+  final bool isSaved;
+  final DiscoveredHost? discovered;
+
+  String get addressLabel {
+    if (addrs.isEmpty) return online ? 'On LAN' : 'Not on LAN';
+    final ips = addrs.join(', ');
+    return online ? '$ips:$port' : 'Last seen at $ips:$port';
+  }
+}
+
 class _IdleHero extends StatelessWidget {
   const _IdleHero({
     required this.busy,
     required this.hosts,
     required this.discovering,
-    this.savedHost,
+    this.discoveryError,
     this.onHostTap,
+    this.onForgetHost,
   });
 
   final bool busy;
-  final List<DiscoveredHost> hosts;
+  final List<_HostListEntry> hosts;
   final bool discovering;
-  final String? savedHost;
-  final void Function(DiscoveredHost host)? onHostTap;
+  final String? discoveryError;
+  final void Function(_HostListEntry host)? onHostTap;
+  final void Function(_HostListEntry host)? onForgetHost;
+
+  bool get _hasSavedHost => hosts.any((h) => h.isSaved);
 
   @override
   Widget build(BuildContext context) {
@@ -902,8 +1026,8 @@ class _IdleHero extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            savedHost != null
-                ? 'Tap a host below or Watch to reconnect.'
+            _hasSavedHost
+                ? 'Tap an online host to connect.'
                 : 'Run streambeam-host on your PC, then tap a host on your LAN or scan the QR.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
@@ -939,15 +1063,39 @@ class _IdleHero extends StatelessWidget {
               ),
               const SizedBox(width: 6),
               Text(
-                hosts.isEmpty
+                discovering
                     ? 'Searching LAN for hosts…'
-                    : '${hosts.length} host(s) on LAN',
+                    : hosts.isEmpty
+                    ? 'No hosts found on LAN'
+                    : '${hosts.where((h) => h.online).length} online · ${hosts.length} listed',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
             ],
           ),
+          if (discoveryError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              discoveryError!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          if (!discovering && hosts.isEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Phone and PC must be on the same Wi‑Fi (not guest). '
+              'In streambeam-host, check Discoverable is on. '
+              'Pull down to search again.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
           if (hosts.isNotEmpty) ...[
             const SizedBox(height: 12),
             ...hosts.map(
@@ -958,31 +1106,46 @@ class _IdleHero extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                   child: ListTile(
                     dense: true,
-                    enabled: onHostTap != null && h.hostPubkey.length == 32,
+                    enabled: onHostTap != null && h.online,
                     leading: Icon(
                       Icons.computer,
-                      color: theme.colorScheme.primary,
+                      color: h.online
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
                     ),
                     title: Text(h.name),
-                    subtitle: Text('${h.addrs.join(", ")}:${h.port}'),
-                    trailing: onHostTap == null
-                        ? null
-                        : Icon(
-                            h.hostPubkey.length == 32
-                                ? Icons.play_circle_outline
-                                : Icons.info_outline,
-                            color: theme.colorScheme.onSurfaceVariant,
+                    subtitle: Text(h.addressLabel),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _HostStatusChip(online: h.online),
+                        if (h.isSaved && onForgetHost != null) ...[
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'Forget ${h.name}',
+                            onPressed: busy ? null : () => onForgetHost!(h),
                           ),
-                    onTap: onHostTap == null ? null : () => onHostTap!(h),
+                        ] else if (h.online && onHostTap != null)
+                          Icon(
+                            Icons.play_circle_outline,
+                            color: theme.colorScheme.primary,
+                          ),
+                      ],
+                    ),
+                    onTap: onHostTap == null || !h.online
+                        ? null
+                        : () => onHostTap!(h),
                   ),
                 ),
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              hosts.any((h) => h.hostPubkey.length != 32)
+              hosts.any((h) => h.isSaved && !h.online)
+                  ? 'Saved PCs stay listed when offline.'
+                  : hosts.any((h) => h.hostPubkey.length != 32)
                   ? 'Update streambeam-host on your PC for tap-to-connect.'
-                  : 'Tap a host to connect. Approve on your PC if this is the first time.',
+                  : 'Tap an online host to connect. Approve on your PC if this is the first time.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -994,6 +1157,34 @@ class _IdleHero extends StatelessWidget {
             const CircularProgressIndicator(),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _HostStatusChip extends StatelessWidget {
+  const _HostStatusChip({required this.online});
+
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bg = online
+        ? theme.colorScheme.primaryContainer
+        : theme.colorScheme.surfaceContainerHighest;
+    final fg = online
+        ? theme.colorScheme.onPrimaryContainer
+        : theme.colorScheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        online ? 'Online' : 'Offline',
+        style: theme.textTheme.labelSmall?.copyWith(color: fg),
       ),
     );
   }

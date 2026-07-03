@@ -23,6 +23,9 @@ abstract class StreambeamFfiApiImplPlatform
   String dco_decode_String(dynamic raw);
 
   @protected
+  SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw);
+
+  @protected
   DiscoveredHost dco_decode_discovered_host(dynamic raw);
 
   @protected
@@ -47,6 +50,12 @@ abstract class StreambeamFfiApiImplPlatform
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  SavedHostInfo? dco_decode_opt_box_autoadd_saved_host_info(dynamic raw);
+
+  @protected
+  SavedHostInfo dco_decode_saved_host_info(dynamic raw);
+
+  @protected
   StreamStats dco_decode_stream_stats(dynamic raw);
 
   @protected
@@ -66,6 +75,11 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  SavedHostInfo sse_decode_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  );
 
   @protected
   DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
@@ -94,6 +108,14 @@ abstract class StreambeamFfiApiImplPlatform
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  SavedHostInfo? sse_decode_opt_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SavedHostInfo sse_decode_saved_host_info(SseDeserializer deserializer);
+
+  @protected
   StreamStats sse_decode_stream_stats(SseDeserializer deserializer);
 
   @protected
@@ -119,6 +141,12 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_saved_host_info(
+    SavedHostInfo self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_discovered_host(
@@ -152,6 +180,15 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_saved_host_info(
+    SavedHostInfo? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_saved_host_info(SavedHostInfo self, SseSerializer serializer);
 
   @protected
   void sse_encode_stream_stats(StreamStats self, SseSerializer serializer);

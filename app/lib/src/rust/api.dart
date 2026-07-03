@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `receive_stats`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
     StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
@@ -41,6 +41,9 @@ String streambeamVersion() =>
     StreambeamFfi.instance.api.crateApiStreambeamVersion();
 
 String? savedHostLabel() => StreambeamFfi.instance.api.crateApiSavedHostLabel();
+
+SavedHostInfo? loadSavedHostInfo() =>
+    StreambeamFfi.instance.api.crateApiLoadSavedHostInfo();
 
 /// Persist host pubkey/addrs from a scanned `sbm1:` payload for later reconnect.
 Future<void> saveHostFromPayload({required String payload}) =>
@@ -121,6 +124,35 @@ class DiscoveredHost {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is DiscoveredHost &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          port == other.port &&
+          addrs == other.addrs &&
+          hostPubkey == other.hostPubkey;
+}
+
+/// Saved host details for the device list (shown even when offline).
+class SavedHostInfo {
+  final String name;
+  final int port;
+  final List<String> addrs;
+  final Uint8List hostPubkey;
+
+  const SavedHostInfo({
+    required this.name,
+    required this.port,
+    required this.addrs,
+    required this.hostPubkey,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^ port.hashCode ^ addrs.hashCode ^ hostPubkey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SavedHostInfo &&
           runtimeType == other.runtimeType &&
           name == other.name &&
           port == other.port &&

@@ -95,6 +95,35 @@ pub fn saved_host_label() -> Option<String> {
         .map(|h| h.host_name)
 }
 
+/// Saved host details for the device list (shown even when offline).
+#[derive(Debug, Clone)]
+pub struct SavedHostInfo {
+    pub name: String,
+    pub port: u16,
+    pub addrs: Vec<String>,
+    pub host_pubkey: Vec<u8>,
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn load_saved_host_info() -> Option<SavedHostInfo> {
+    load_saved_host(&saved_host_path())
+        .ok()
+        .flatten()
+        .map(|h| {
+            let primary = h.primary_addr();
+            SavedHostInfo {
+                name: h.host_name,
+                port: primary.map(|a| a.port()).unwrap_or(47989),
+                addrs: h
+                    .addrs
+                    .iter()
+                    .map(|a| a.ip().to_string())
+                    .collect(),
+                host_pubkey: h.host_pubkey.to_vec(),
+            }
+        })
+}
+
 /// Persist host pubkey/addrs from a scanned `sbm1:` payload for later reconnect.
 #[flutter_rust_bridge::frb]
 pub fn save_host_from_payload(payload: String) -> Result<(), String> {
@@ -122,8 +151,10 @@ pub struct DiscoveredHost {
 pub async fn discover_hosts(timeout_ms: u32) -> Result<Vec<DiscoveredHost>, String> {
     use std::time::Duration;
 
-    let hosts = streambeam_net::browse(Duration::from_millis(u64::from(timeout_ms)))
-        .map_err(|e| e.to_string())?;
+    let timeout = Duration::from_millis(u64::from(timeout_ms.max(1000)));
+    log::info!("discover_hosts: browsing for {timeout_ms} ms");
+    let hosts = streambeam_net::browse(timeout).map_err(|e| e.to_string())?;
+    log::info!("discover_hosts: found {} host(s)", hosts.len());
     Ok(hosts
         .into_iter()
         .map(|h| DiscoveredHost {

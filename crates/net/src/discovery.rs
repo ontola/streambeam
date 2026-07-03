@@ -166,7 +166,8 @@ pub fn browse(timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
                 let fullname = info.get_fullname().to_string();
                 let name = instance_name_from_fullname(&fullname);
                 let port = info.get_port();
-                let addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
+                let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
+                addrs.sort_by_key(|ip| ip.is_loopback());
                 let host_pubkey = parse_pubkey(&info);
                 seen.insert(
                     fullname.clone(),

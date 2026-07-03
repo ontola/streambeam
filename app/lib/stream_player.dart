@@ -41,11 +41,15 @@ class StreamPlayerScreen extends StatefulWidget {
 
 class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     with SingleTickerProviderStateMixin {
-  static const _menuWidth = 260.0;
   static const _openThreshold = 48.0;
   static const _hintPeek = 72.0;
   /// Extra slide-off so shadows / sub-pixel rounding don't peek at the edge.
   static const _hideSlack = 32.0;
+
+  double _menuWidthFor(double screenW) =>
+      (screenW * 0.78).clamp(220.0, 300.0);
+
+  double get _menuWidth => _menuWidthFor(MediaQuery.sizeOf(context).width);
 
   /// Width of the right-edge zone that opens the menu (~14% of screen, 64–96 logical px).
   double _edgeGrabFor(double screenW) =>
@@ -344,6 +348,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                           !_menuBlocksPointer &&
                           !_keyboardOpen)
                         _StreamTouchSurface(
+                          key: ValueKey(_pointerMode),
                           videoSize: videoSize,
                           refWidth: widget.streamWidth,
                           refHeight: widget.streamHeight,
@@ -460,19 +465,27 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
             width: _menuWidth,
             child: Transform.translate(
               offset: Offset(menuSlide, 0),
-              child: GestureDetector(
-                onHorizontalDragStart: _onEdgeDragStart,
-                onHorizontalDragUpdate: _onEdgeDragUpdate,
-                onHorizontalDragEnd: _onEdgeDragEnd,
-                child: _StreamMenu(
-                  pointerMode: _pointerMode,
-                  onPointerModeChanged: (mode) {
-                    setState(() => _pointerMode = mode);
-                    _closeMenu();
-                  },
-                  onStop: _handleStop,
-                  onKeyboard: _openKeyboard,
-                ),
+              child: Row(
+                children: [
+                  // Drag handle only — don't wrap the whole menu or taps won't reach it.
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragStart: _onEdgeDragStart,
+                    onHorizontalDragUpdate: _onEdgeDragUpdate,
+                    onHorizontalDragEnd: _onEdgeDragEnd,
+                    child: const SizedBox(width: 20),
+                  ),
+                  Expanded(
+                    child: _StreamMenu(
+                      pointerMode: _pointerMode,
+                      onPointerModeChanged: (mode) {
+                        setState(() => _pointerMode = mode);
+                      },
+                      onStop: _handleStop,
+                      onKeyboard: _openKeyboard,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -541,6 +554,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 /// Maps touch on the video area to PC mouse events (when not zoomed).
 class _StreamTouchSurface extends StatefulWidget {
   const _StreamTouchSurface({
+    super.key,
     required this.videoSize,
     required this.refWidth,
     required this.refHeight,
@@ -778,8 +792,17 @@ class _StreamMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final topPad = math.max(MediaQuery.paddingOf(context).top, 16.0);
+    final size = MediaQuery.sizeOf(context);
+    final insets = MediaQuery.paddingOf(context);
+    final compact = size.height < 640 || size.width < 360;
+    final metrics = _MenuMetrics(compact: compact, screenWidth: size.width, insets: insets);
     final trackpad = pointerMode == PointerMode.trackpad;
+    final tileDensity =
+        compact ? VisualDensity.compact : VisualDensity.standard;
+    final tilePadding = EdgeInsets.symmetric(
+      horizontal: metrics.horizontal,
+      vertical: compact ? 0 : 2,
+    );
 
     return Material(
       color: theme.colorScheme.surface.withValues(alpha: 0.96),
@@ -789,66 +812,156 @@ class _StreamMenu extends StatelessWidget {
       ),
       child: SafeArea(
         left: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(8, topPad, 8, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                child: Text(
-                  'StreamBeam',
-                  style: theme.textTheme.titleMedium,
-                ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                metrics.horizontal + 4,
+                metrics.top,
+                metrics.horizontal + 4,
+                compact ? 4 : 8,
               ),
-              ListTile(
-                leading: Icon(trackpad ? Icons.swipe : Icons.touch_app),
-                title: Text(trackpad ? 'Trackpad' : 'Direct touch'),
-                subtitle: Text(
-                  trackpad
-                      ? 'Drag moves cursor · tap clicks'
-                      : 'Finger maps to screen · tap clicks',
-                  style: theme.textTheme.bodySmall,
+              child: Text(
+                'StreamBeam',
+                style: (compact
+                        ? theme.textTheme.titleSmall
+                        : theme.textTheme.titleMedium)
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(
+                  metrics.horizontal,
+                  0,
+                  metrics.horizontal,
+                  metrics.bottom,
                 ),
-                trailing: Switch(
-                  value: trackpad,
-                  onChanged: (on) => onPointerModeChanged(
-                    on ? PointerMode.trackpad : PointerMode.direct,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.horizontal + 4,
+                      compact ? 4 : 8,
+                      metrics.horizontal + 4,
+                      compact ? 2 : 4,
+                    ),
+                    child: Text(
+                      'Pointer mode',
+                      style: theme.textTheme.titleSmall,
+                    ),
                   ),
-                ),
-                onTap: () => onPointerModeChanged(
-                  trackpad ? PointerMode.direct : PointerMode.trackpad,
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.stop_circle_outlined),
-                title: const Text('Stop'),
-                onTap: onStop,
-              ),
-              ListTile(
-                leading: const Icon(Icons.keyboard_outlined),
-                title: const Text('Keyboard'),
-                subtitle: Text(
-                  'Send text to your PC',
-                  style: theme.textTheme.bodySmall,
-                ),
-                onTap: onKeyboard,
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                child: Text(
-                  'Drag from the right edge for menu\n'
-                  '1 finger: move · tap: left click\n'
-                  '2 fingers: scroll · tap: right click',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                    child: SegmentedButton<PointerMode>(
+                      segments: [
+                        ButtonSegment(
+                          value: PointerMode.direct,
+                          icon: Icon(Icons.touch_app, size: compact ? 18 : 20),
+                          label: compact ? null : const Text('Direct'),
+                          tooltip: 'Direct touch — finger maps to screen',
+                        ),
+                        ButtonSegment(
+                          value: PointerMode.trackpad,
+                          icon: Icon(Icons.swipe, size: compact ? 18 : 20),
+                          label: compact ? null : const Text('Trackpad'),
+                          tooltip: 'Trackpad — drag moves cursor',
+                        ),
+                      ],
+                      selected: {pointerMode},
+                      emptySelectionAllowed: false,
+                      showSelectedIcon: false,
+                      onSelectionChanged: (selected) {
+                        if (selected.isNotEmpty) {
+                          onPointerModeChanged(selected.first);
+                        }
+                      },
+                    ),
                   ),
-                ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.horizontal + 4,
+                      compact ? 2 : 6,
+                      metrics.horizontal + 4,
+                      compact ? 4 : 8,
+                    ),
+                    child: Text(
+                      trackpad
+                          ? 'Drag to move the cursor · tap to click'
+                          : 'Your finger position maps to the PC screen · tap to click',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(
+                      Icons.stop_circle_outlined,
+                      size: compact ? 22 : 24,
+                    ),
+                    title: const Text('Stop'),
+                    visualDensity: tileDensity,
+                    contentPadding: tilePadding,
+                    onTap: onStop,
+                  ),
+                  ListTile(
+                    leading: Icon(
+                      Icons.keyboard_outlined,
+                      size: compact ? 22 : 24,
+                    ),
+                    title: const Text('Keyboard'),
+                    subtitle: Text(
+                      'Send text to your PC',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    visualDensity: tileDensity,
+                    contentPadding: tilePadding,
+                    onTap: onKeyboard,
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.horizontal + 4,
+                      compact ? 4 : 8,
+                      metrics.horizontal + 4,
+                      compact ? 4 : 8,
+                    ),
+                    child: Text(
+                      'Drag from the right edge for menu\n'
+                      '1 finger: move · tap: left click\n'
+                      '2 fingers: scroll · tap: right click',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: compact ? 1.25 : 1.35,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+class _MenuMetrics {
+  const _MenuMetrics({
+    required this.compact,
+    required this.screenWidth,
+    required this.insets,
+  });
+
+  final bool compact;
+  final double screenWidth;
+  final EdgeInsets insets;
+
+  double get horizontal => compact
+      ? 4
+      : (screenWidth * 0.025).clamp(6.0, 14.0);
+
+  double get top => math.max(insets.top, compact ? 6 : 12);
+
+  double get bottom => math.max(insets.bottom, compact ? 8 : 16);
 }

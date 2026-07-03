@@ -265,7 +265,16 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     controls.attach_pairing_store(store.clone(), paired_path.clone());
 
     let _mdns = if std::env::var("STREAMBEAM_NO_MDNS").is_err() {
-        let ips: Vec<_> = addrs.iter().map(|a| a.ip()).collect();
+        let ips: Vec<_> = addrs
+            .iter()
+            .map(|a| a.ip())
+            .filter(|ip| !ip.is_loopback())
+            .collect();
+        let ips: Vec<_> = if ips.is_empty() {
+            addrs.iter().map(|a| a.ip()).collect()
+        } else {
+            ips
+        };
         match Advertiser::new(
             &config.host_name,
             &config.host_name,

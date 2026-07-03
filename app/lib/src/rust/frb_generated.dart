@@ -72,7 +72,7 @@ class StreambeamFfi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -568169454;
+  int get rustContentHash => -1345365450;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -93,6 +93,8 @@ abstract class StreambeamFfiApi extends BaseApi {
   Future<void> crateApiForgetSavedHost();
 
   Future<void> crateApiInitApp();
+
+  SavedHostInfo? crateApiLoadSavedHostInfo();
 
   Future<StreamStats> crateApiPlayDiscoveredHost({
     required String hostName,
@@ -263,6 +265,28 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  SavedHostInfo? crateApiLoadSavedHostInfo() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_saved_host_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiLoadSavedHostInfoConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLoadSavedHostInfoConstMeta =>
+      const TaskConstMeta(debugName: "load_saved_host_info", argNames: []);
+
+  @override
   Future<StreamStats> crateApiPlayDiscoveredHost({
     required String hostName,
     required List<int> hostPubkey,
@@ -282,7 +306,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -324,7 +348,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -350,7 +374,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_64,
@@ -380,7 +404,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -411,7 +435,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -438,7 +462,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_String,
@@ -469,7 +493,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           sse_encode_u_16(y, serializer);
           sse_encode_u_16(refW, serializer);
           sse_encode_u_16(refH, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -494,7 +518,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_u_8(button, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -518,7 +542,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_16(dx, serializer);
           sse_encode_i_16(dy, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -542,7 +566,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_i_16(dx, serializer);
           sse_encode_i_16(dy, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -570,7 +594,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -594,7 +618,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -614,6 +638,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_saved_host_info(raw);
   }
 
   @protected
@@ -673,6 +703,26 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   }
 
   @protected
+  SavedHostInfo? dco_decode_opt_box_autoadd_saved_host_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_saved_host_info(raw);
+  }
+
+  @protected
+  SavedHostInfo dco_decode_saved_host_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return SavedHostInfo(
+      name: dco_decode_String(arr[0]),
+      port: dco_decode_u_16(arr[1]),
+      addrs: dco_decode_list_String(arr[2]),
+      hostPubkey: dco_decode_list_prim_u_8_strict(arr[3]),
+    );
+  }
+
+  @protected
   StreamStats dco_decode_stream_stats(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -723,6 +773,14 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
+  }
+
+  @protected
+  SavedHostInfo sse_decode_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_saved_host_info(deserializer));
   }
 
   @protected
@@ -804,6 +862,34 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   }
 
   @protected
+  SavedHostInfo? sse_decode_opt_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_saved_host_info(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  SavedHostInfo sse_decode_saved_host_info(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_port = sse_decode_u_16(deserializer);
+    var var_addrs = sse_decode_list_String(deserializer);
+    var var_hostPubkey = sse_decode_list_prim_u_8_strict(deserializer);
+    return SavedHostInfo(
+      name: var_name,
+      port: var_port,
+      addrs: var_addrs,
+      hostPubkey: var_hostPubkey,
+    );
+  }
+
+  @protected
   StreamStats sse_decode_stream_stats(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_width = sse_decode_u_16(deserializer);
@@ -867,6 +953,15 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_saved_host_info(
+    SavedHostInfo self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_saved_host_info(self, serializer);
   }
 
   @protected
@@ -944,6 +1039,31 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     if (self != null) {
       sse_encode_String(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_saved_host_info(
+    SavedHostInfo? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_saved_host_info(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_saved_host_info(
+    SavedHostInfo self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_u_16(self.port, serializer);
+    sse_encode_list_String(self.addrs, serializer);
+    sse_encode_list_prim_u_8_strict(self.hostPubkey, serializer);
   }
 
   @protected
