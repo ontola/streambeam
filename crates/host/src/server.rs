@@ -314,20 +314,24 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         None
     };
 
-    let payload = PairInfo {
+    let info = PairInfo {
         version: 1,
         host_name: config.host_name.clone(),
         host_pubkey: identity.public_key(),
         addrs,
         token,
         expires_unix,
-    }
-    .encode_payload()?;
+    };
+    let payload = info.encode_payload()?;
+    // The QR carries the streambeam.eu link form: it opens the app directly
+    // when installed, or the download/fallback page when not. The raw sbm1:
+    // line stays on stdout for piping into devclient/playclient.
+    let link = info.encode_url()?;
 
     println!("{payload}");
-    crate::qr::print_terminal(&payload);
+    crate::qr::print_terminal(&link);
     if let Some(tx) = &config.pairing_payload_tx {
-        let _ = tx.send(payload.clone());
+        let _ = tx.send(link);
     }
     log!(
         "streambeam-host listening on {addr} — scan QR or paste sbm1: into the Android app"

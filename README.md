@@ -8,8 +8,12 @@ No web UI, no browser certificate warnings, no PIN dance.
 - **Client:** Android (Flutter UI, Rust core, MediaCodec → Surface decode)
 - **Protocol:** clean-slate over QUIC — unreliable datagrams for media with per-frame
   Reed-Solomon FEC, reliable streams for control/input, mutual TLS with pinned Ed25519 keys.
+- **One QR does everything:** the host's QR is a link
+  (`https://streambeam.eu/session/#sbm1:…`). Phone with the app → opens the stream
+  directly (Android App Link). Phone without → download page, then connects. The
+  pairing code rides in the URL *fragment*, so it never reaches the web server.
 
-Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (full design & milestones) · [PROGRESS.md](docs/PROGRESS.md) (live status & decisions log)
+Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (original design & milestones) · [PROGRESS.md](docs/PROGRESS.md) (live status & decisions log) · [WAN.md](docs/WAN.md) (internet/NAT roadmap) · [AGENTS.md](AGENTS.md) (working conventions)
 
 ## Workspace
 
@@ -18,9 +22,10 @@ Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (
 | `crates/proto` | Pure wire types, media framing, FEC. No I/O; builds everywhere. |
 | `crates/net` | QUIC endpoint, Ed25519 identity, pinned-key mTLS, pairing enrollment. |
 | `crates/core` | Client session logic (reassembly, IDR policy, input coalescing). FRB-free. |
-| `crates/host` | Windows host binary (capture, encode, inject, egui panel). LAN server works today with mock encoder. |
-| `crates/devtools` | `fakehost` + `playclient` — macOS dev loop; no Windows box needed. |
-| `app/` | Flutter Android client (added in M3). |
+| `crates/host` | Windows host binary (WGC capture, encoder trait + mock, input injection, tray icon, terminal/GUI QR). LAN server works today with mock encoder. |
+| `crates/devtools` | `fakehost`, `devclient`, `playclient`, `streamdemo`, `hostdisc` — the macOS dev loop; no Windows box needed. |
+| `app/` | Flutter Android client (Rust core via flutter_rust_bridge). |
+| `site/` | streambeam.eu — landing page, `session/` deep-link fallback, `assetlinks.json`. Static, no build step (see [site/README.md](site/README.md)). |
 
 ## Watch it stream (macOS)
 
