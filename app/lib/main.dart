@@ -15,6 +15,7 @@ import 'stream_player.dart';
 
 final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
 final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/releases');
+final _ontolaUrl = Uri.parse('https://ontola.io');
 const _logoAsset = 'assets/streambeam-logo.svg';
 
 Future<void> openGithubRepo() async {
@@ -23,6 +24,10 @@ Future<void> openGithubRepo() async {
 
 Future<void> openGithubReleases() async {
   await launchUrl(_githubReleasesUrl, mode: LaunchMode.externalApplication);
+}
+
+Future<void> openOntola() async {
+  await launchUrl(_ontolaUrl, mode: LaunchMode.externalApplication);
 }
 
 Future<void> main() async {
@@ -640,6 +645,18 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     onDismiss: _statusIsError ? _dismissStatus : null,
                   ),
                 ],
+                const SizedBox(height: 24),
+                Center(
+                  child: TextButton(
+                    onPressed: openOntola,
+                    style: TextButton.styleFrom(
+                      foregroundColor:
+                          Theme.of(context).colorScheme.onSurfaceVariant,
+                      textStyle: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    child: const Text('Made with <3 by Ontola.io'),
+                  ),
+                ),
               ],
             ),
           ),
