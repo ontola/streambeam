@@ -9,4 +9,4 @@ pub use annex_b::{
     AccessUnit,
 };
 pub use reassemble::{FrameReassembler, FrameStats};
-pub use session::{connect, connect_as, ClientSession};
+pub use session::{connect, connect_as, request_idr, ClientSession};

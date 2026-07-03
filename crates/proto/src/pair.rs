@@ -6,6 +6,7 @@ use base64::Engine;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 use crate::ProtoError;
 
@@ -63,7 +64,7 @@ pub fn verify_pair_proof(
     proof: &[u8; 32],
 ) -> bool {
     let expected = compute_pair_proof(token, client_pubkey, exporter);
-    expected == *proof
+    expected.ct_eq(proof).into()
 }
 
 #[cfg(test)]

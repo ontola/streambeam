@@ -12,6 +12,7 @@ reed-solomon-simd = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }
+subtle = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }

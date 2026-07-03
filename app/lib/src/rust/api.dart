@@ -6,10 +6,13 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
 String streambeamVersion() =>
     StreambeamFfi.instance.api.crateApiStreambeamVersion();
+
+Future<List<DiscoveredHost>> discoverHosts({required int timeoutMs}) =>
+    StreambeamFfi.instance.api.crateApiDiscoverHosts(timeoutMs: timeoutMs);
 
 /// Pair, start session, and receive up to `max_video_frames` (for M3 stats / soak).
 Future<StreamStats> connectAndReceive({
@@ -30,6 +33,31 @@ Future<StreamStats> playStream({
   nativeWindow: nativeWindow,
   maxVideoFrames: maxVideoFrames,
 );
+
+/// LAN hosts advertising via mDNS (pairing still requires scanning host QR).
+class DiscoveredHost {
+  final String name;
+  final int port;
+  final List<String> addrs;
+
+  const DiscoveredHost({
+    required this.name,
+    required this.port,
+    required this.addrs,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ port.hashCode ^ addrs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DiscoveredHost &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          port == other.port &&
+          addrs == other.addrs;
+}
 
 class StreamStats {
   final int width;

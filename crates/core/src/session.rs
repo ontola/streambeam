@@ -135,3 +135,13 @@ pub async fn connect_as(
         codec_config,
     })
 }
+
+/// Ask the host to send an IDR (keyframe) on the next video frame.
+pub async fn request_idr(
+    session: &mut ClientSession,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use streambeam_net::write_msg;
+    use streambeam_proto::control::ClientMsg;
+    write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
+    Ok(())
+}

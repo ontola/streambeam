@@ -231,6 +231,16 @@ async fn handle(
 
         match msg {
             ClientMsg::SessionRequest { .. } => {
+                // CodecConfig before SessionAccept so clients can prime decoders.
+                if let Some(first) = catalog.frames.first() {
+                    write_msg(
+                        &mut send,
+                        &HostMsg::CodecConfig {
+                            data: first.data.clone(),
+                        },
+                    )
+                    .await?;
+                }
                 write_msg(
                     &mut send,
                     &HostMsg::SessionAccept {
@@ -247,16 +257,6 @@ async fn handle(
                     },
                 )
                 .await?;
-                // Send SPS/PPS from first keyframe AU for decoders (M3+).
-                if let Some(first) = catalog.frames.first() {
-                    write_msg(
-                        &mut send,
-                        &HostMsg::CodecConfig {
-                            data: first.data.clone(),
-                        },
-                    )
-                    .await?;
-                }
                 eprintln!("session started — streaming video + audio");
 
                 if !streaming {

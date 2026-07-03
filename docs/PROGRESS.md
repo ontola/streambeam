@@ -5,9 +5,9 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 | Milestone | Status | Notes |
 |---|---|---|
 | M0 — Scaffold + secure transport | ✅ done | proto + net + devtools; tag m0 pending |
-| M1 — Media plane vs fakehost | ✅ done | e2e stream tests, playclient, mDNS |
-| M2 — Windows capture→encode spike | 🔨 in progress | `VideoEncoder` trait + mock encoder |
-| M3 — Android video path vs fakehost | 🔨 in progress | Flutter + FRB scaffold |
+| M1 — Media plane vs fakehost | ✅ done (core) | e2e + 5% FEC verified; loss sweep / 10-min soak still open |
+| M2 — Windows capture→encode spike | 🔨 in progress | `streambeam-host` LAN server + mock encoder; WGC/NVENC next |
+| M3 — Android video path vs fakehost | 🔨 in progress | MediaCodec path, QR scan, mDNS discover |
 | M4 — End-to-end video | ⬜ | |
 | M5 — Audio | ⬜ | |
 | M6 — Input | ⬜ | |
@@ -40,18 +40,20 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 ## M2 checklist
 
 - [x] `VideoEncoder` trait + `MockEncoder` (bundled Annex-B clip)
+- [x] `streambeam-host` — LAN listener, QR pairing, mDNS, H.264 + Opus stream (mock encoder)
 - [ ] WGC → hwcodec NVENC spike on Windows box
 
 ## M3 checklist
 
 - [x] Flutter app skeleton + FRB `connect_and_receive` stats API
 - [x] QR scan UI (`mobile_scanner`)
-- [ ] MediaCodec → Surface video path
-- [ ] Real playback on device (not just stats)
+- [x] MediaCodec → Surface video path (Rust `play_stream`)
+- [x] mDNS host discovery from Android (`discover_hosts`)
+- [ ] Verified playback on physical device vs `streambeam-host`
 
 ## Decisions log
 
 - 2026-07-03 — Performance expectation set: Moonlight-class latency (same HW path), UX is the differentiator. Clean-slate protocol over QUIC.
 - 2026-07-03 — Host authorizes clients at the `Hello` message rather than inside the TLS client-cert verifier (equivalent security, far simpler; nothing is sent before `Hello` verification).
 - 2026-07-03 — `hwcodec` has **no declared license** → M2 treats it as a swappable spike behind the `VideoEncoder` trait; verify before public distribution.
-- 2026-07-03 — Hash verify keys off QUIC `frame_id`, not completion order (datagrams can arrive out of order). IDR rewind uses the previous keyframe in the catalog, not wrap-forward.
+- 2026-07-03 — PairingStore persists enrolled clients to `paired.json` under the host data dir (token remains session-scoped).

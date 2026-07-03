@@ -6,18 +6,20 @@ use ndk::media::media_codec::{MediaCodec, MediaCodecBufferInfo, MediaFormat};
 use ndk::native_window::NativeWindow;
 use streambeam_core::{
     annex_b::{extract_avc_decoder_config, nal_with_start_code},
-    connect_as, FrameReassembler,
+    connect_as, request_idr, FrameReassembler,
 };
 use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
 
 use crate::api::StreamStats;
 
-const TIMEOUT_US: i64 = 10_000;
+const TIMEOUT_US: i64 = 30_000;
 
 pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> Result<StreamStats, String> {
-    let session = connect_as(&payload, "streambeam-android")
+    let mut session = connect_as(&payload, "streambeam-android")
         .await
         .map_err(|e| e.to_string())?;
+
+    let _ = request_idr(&mut session).await;
 
     let config = session
         .codec_config
@@ -44,6 +46,9 @@ pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> 
         .set_i32("height", i32::from(session.height))
         .map_err(|e| e.to_string())?;
     format
+        .set_i32("max-input-size", 512 * 1024)
+        .map_err(|e| e.to_string())?;
+    format
         .set_buffer("csd-0", &csd0, 0, csd0.len())
         .map_err(|e| e.to_string())?;
     format
@@ -65,10 +70,14 @@ pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> 
     };
 
     let mut asm = FrameReassembler::default();
-    let target = max_video_frames.max(1);
+    let target = if max_video_frames == 0 {
+        u64::MAX
+    } else {
+        u64::from(max_video_frames.max(1))
+    };
     let mut pts_us: i64 = 0;
 
-    while stats.video_frames < u64::from(target) {
+    while stats.video_frames < target {
         drain_output(&mut codec)?;
 
         let datagram = tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())

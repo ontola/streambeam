@@ -1579,6 +1579,7 @@ dependencies = [
  "jni",
  "ndk",
  "streambeam-core",
+ "streambeam-net",
  "streambeam-proto",
  "tokio",
 ]

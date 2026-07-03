@@ -41,7 +41,7 @@ fn main() {
         }
     };
 
-    eprintln!("launching playclient…");
+    eprintln!("launching playclient (video window should appear in ~1s)…");
     let status = Command::new(bin("playclient"))
         .arg(&payload)
         .status()

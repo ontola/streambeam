@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -56,7 +57,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// Android: MediaCodec → Surface. macOS/desktop: instructions for visual-test.sh.
+/// Android: MediaCodec → Surface. Pair with Windows/macOS host via QR.
 class WatchPage extends StatefulWidget {
   const WatchPage({super.key});
 
@@ -83,7 +84,7 @@ class _WatchPageState extends State<WatchPage> {
           _surfaceReady = _pendingWindow != null;
         });
         if (_busy && _pendingWindow != null) {
-          await _startPlayback(_pendingWindow!);
+          unawaited(_startPlayback(_pendingWindow!));
         }
       }
     });
@@ -95,45 +96,72 @@ class _WatchPageState extends State<WatchPage> {
     super.dispose();
   }
 
+  Future<void> _discoverHosts() async {
+    setState(() => _status = 'Searching LAN…');
+    try {
+      final hosts = await discoverHosts(timeoutMs: 3000);
+      setState(() {
+        if (hosts.isEmpty) {
+          _status =
+              'No hosts found.\n'
+              'On Windows: cargo run -p streambeam-host --release\n'
+              'Phone and PC must be on the same Wi‑Fi.';
+        } else {
+          final lines = hosts
+              .map((h) => '${h.name}  ${h.addrs.join(", ")}:${h.port}')
+              .join('\n');
+          _status = 'Found ${hosts.length} host(s):\n$lines\n\nScan QR on the host to pair.';
+        }
+      });
+    } catch (e) {
+      setState(() => _status = 'Discovery error: $e');
+    }
+  }
+
   Future<void> _startPlayback(int nativeWindow) async {
     final payload = _payloadCtrl.text.trim();
     try {
       final stats = await playStream(
         payload: payload,
         nativeWindow: nativeWindow,
-        maxVideoFrames: 120,
+        maxVideoFrames: 0,
       );
+      if (!mounted) return;
       setState(() {
         _status =
-            'Played ${stats.videoFrames} video / ${stats.audioPackets} audio';
+            'Stopped — ${stats.videoFrames} video / ${stats.audioPackets} audio';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _status = 'Error: $e');
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _play() async {
     final payload = _payloadCtrl.text.trim();
     if (!payload.startsWith('sbm1:')) {
-      setState(() => _status = 'Paste a valid sbm1: payload from fakehost');
+      setState(() => _status = 'Scan the QR from streambeam-host on your PC');
       return;
     }
     if (!Platform.isAndroid) {
       setState(() {
         _status =
-            'Visual test on Mac:\n  ./scripts/visual-test.sh\n\n'
-            '(starts fakehost + ffplay window)';
+            'Android playback only.\n'
+            'Mac dev loop: ./scripts/visual-test.sh';
       });
       return;
     }
     setState(() {
       _busy = true;
-      _status = 'Waiting for surface…';
+      _status = 'Connecting…';
     });
     if (_surfaceReady && _pendingWindow != null) {
-      await _startPlayback(_pendingWindow!);
+      setState(() => _status = 'Streaming…');
+      unawaited(_startPlayback(_pendingWindow!));
+    } else {
+      setState(() => _status = 'Waiting for video surface…');
     }
   }
 
@@ -143,6 +171,7 @@ class _WatchPageState extends State<WatchPage> {
     );
     if (payload != null && payload.startsWith('sbm1:')) {
       _payloadCtrl.text = payload;
+      if (mounted) setState(() => _status = 'Payload loaded — tap Play');
     }
   }
 
@@ -156,22 +185,31 @@ class _WatchPageState extends State<WatchPage> {
           if (Platform.isAndroid)
             AspectRatio(
               aspectRatio: 16 / 9,
-              child: AndroidView(
-                viewType: 'streambeam/video',
-                layoutDirection: TextDirection.ltr,
+              child: ColoredBox(
+                color: Colors.black,
+                child: AndroidView(
+                  viewType: 'streambeam/video',
+                  layoutDirection: TextDirection.ltr,
+                ),
               ),
             )
           else
             Container(
-              height: 180,
+              height: 120,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 border: Border.all(color: Theme.of(context).dividerColor),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Text('Video preview on Android\nMac → ./scripts/visual-test.sh'),
+              child: const Text('Watch tab is for Android'),
             ),
           const SizedBox(height: 12),
+          Text(
+            '1. Run streambeam-host on Windows (same Wi‑Fi)\n'
+            '2. Scan QR → Play',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
           TextField(
             controller: _payloadCtrl,
             decoration: const InputDecoration(
@@ -181,18 +219,24 @@ class _WatchPageState extends State<WatchPage> {
             maxLines: 2,
           ),
           const SizedBox(height: 8),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               FilledButton.icon(
                 onPressed: _busy ? null : _play,
                 icon: const Icon(Icons.play_arrow),
                 label: const Text('Play'),
               ),
-              const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: _scanQr,
                 icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan'),
+                label: const Text('Scan QR'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _discoverHosts,
+                icon: const Icon(Icons.wifi_find),
+                label: const Text('Find host'),
               ),
             ],
           ),

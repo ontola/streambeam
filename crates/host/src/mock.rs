@@ -28,6 +28,14 @@ impl MockEncoder {
     pub fn frame_count(&self) -> usize {
         self.frames.len()
     }
+
+    /// First keyframe access unit (SPS/PPS + IDR) for `CodecConfig`.
+    pub fn codec_config(&self) -> Option<Vec<u8>> {
+        self.frames
+            .iter()
+            .find(|(_, kf)| *kf)
+            .map(|(data, _)| data.clone())
+    }
 }
 
 impl VideoEncoder for MockEncoder {

@@ -25,7 +25,16 @@ abstract class StreambeamFfiApiImplPlatform
   String dco_decode_String(dynamic raw);
 
   @protected
+  DiscoveredHost dco_decode_discovered_host(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<DiscoveredHost> dco_decode_list_discovered_host(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -52,7 +61,18 @@ abstract class StreambeamFfiApiImplPlatform
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<DiscoveredHost> sse_decode_list_discovered_host(
+    SseDeserializer deserializer,
+  );
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -85,7 +105,22 @@ abstract class StreambeamFfiApiImplPlatform
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_discovered_host(
+    DiscoveredHost self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_discovered_host(
+    List<DiscoveredHost> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_strict(

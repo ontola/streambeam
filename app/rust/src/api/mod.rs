@@ -23,6 +23,30 @@ pub fn streambeam_version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
 
+/// LAN hosts advertising via mDNS (pairing still requires scanning host QR).
+#[derive(Debug, Clone)]
+pub struct DiscoveredHost {
+    pub name: String,
+    pub port: u16,
+    pub addrs: Vec<String>,
+}
+
+#[flutter_rust_bridge::frb]
+pub async fn discover_hosts(timeout_ms: u32) -> Result<Vec<DiscoveredHost>, String> {
+    use std::time::Duration;
+
+    let hosts = streambeam_net::browse(Duration::from_millis(u64::from(timeout_ms)))
+        .map_err(|e| e.to_string())?;
+    Ok(hosts
+        .into_iter()
+        .map(|h| DiscoveredHost {
+            name: h.instance.trim_end_matches('.').to_string(),
+            port: h.port,
+            addrs: h.addrs.iter().map(|a| a.to_string()).collect(),
+        })
+        .collect())
+}
+
 /// Pair, start session, and receive up to `max_video_frames` (for M3 stats / soak).
 #[flutter_rust_bridge::frb]
 pub async fn connect_and_receive(

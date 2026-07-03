@@ -17,6 +17,9 @@ use play::{AudioPlayer, VideoPlayer};
 struct Opt {
     /// Pairing payload from fakehost (`sbm1:...`).
     payload: String,
+    /// Video only (skip audio ffplay).
+    #[arg(long)]
+    no_audio: bool,
 }
 
 #[tokio::main]
@@ -29,23 +32,37 @@ async fn main() {
         .init();
 
     let opt = Opt::parse();
-    if let Err(e) = run(&opt.payload).await {
+    if let Err(e) = run(&opt.payload, opt.no_audio).await {
         eprintln!("playclient error: {e}");
         std::process::exit(1);
     }
 }
 
-async fn run(payload: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let session = connect(payload).await?;
+async fn run(payload: &str, no_audio: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut session = connect(payload).await?;
     eprintln!(
-        "paired — playing {}x{} @ {} fps ({}) + 48 kHz stereo audio",
-        session.width, session.height, session.fps, session.codec
+        "paired — playing {}x{} @ {} fps ({}){}",
+        session.width,
+        session.height,
+        session.fps,
+        session.codec,
+        if no_audio { " (video only)" } else { " + 48 kHz stereo audio" }
     );
     eprintln!("close the video window or press Ctrl+C to stop");
 
+    let _ = streambeam_core::request_idr(&mut session).await;
+
     let title = format!("StreamBeam {}x{}", session.width, session.height);
-    let mut video = VideoPlayer::spawn(&title)?;
-    let mut audio = AudioPlayer::spawn()?;
+    let mut video = VideoPlayer::spawn(&title, session.width, session.height)?;
+    if let Some(config) = &session.codec_config {
+        video.prime(config)?;
+        eprintln!("primed decoder with SPS/PPS ({} bytes)", config.len());
+    }
+    let mut audio = if no_audio {
+        None
+    } else {
+        Some(AudioPlayer::spawn()?)
+    };
     let mut asm = FrameReassembler::default();
     let mut frames = 0u64;
 
@@ -65,10 +82,12 @@ async fn run(payload: &str) -> Result<(), Box<dyn std::error::Error + Send + Syn
 
         let header = MediaHeader::decode(&datagram)?;
         if header.channel == CHANNEL_AUDIO {
-            if datagram.len() > 16 {
-                if let Err(e) = audio.push_opus(&datagram[16..]) {
-                    if e.kind() != std::io::ErrorKind::BrokenPipe {
-                        return Err(e.into());
+            if let Some(audio) = audio.as_mut() {
+                if datagram.len() > 16 {
+                    if let Err(e) = audio.push_opus(&datagram[16..]) {
+                        if e.kind() != std::io::ErrorKind::BrokenPipe {
+                            return Err(e.into());
+                        }
                     }
                 }
             }

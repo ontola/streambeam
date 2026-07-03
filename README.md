@@ -18,7 +18,7 @@ Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (
 | `crates/proto` | Pure wire types, media framing, FEC. No I/O; builds everywhere. |
 | `crates/net` | QUIC endpoint, Ed25519 identity, pinned-key mTLS, pairing enrollment. |
 | `crates/core` | Client session logic (reassembly, IDR policy, input coalescing). FRB-free. |
-| `crates/host` | Windows host binary (capture, encode, inject, egui panel). |
+| `crates/host` | Windows host binary (capture, encode, inject, egui panel). LAN server works today with mock encoder. |
 | `crates/devtools` | `fakehost` + `playclient` — macOS dev loop; no Windows box needed. |
 | `app/` | Flutter Android client (added in M3). |
 
@@ -33,6 +33,24 @@ cargo run -p streambeam-devtools --bin streamdemo
 ```
 
 Close the ffplay window or Ctrl+C to stop.
+
+### Windows / LAN host → Android phone
+
+On the **host PC** (Windows, or macOS for dev):
+
+```sh
+cargo run -p streambeam-host --release
+# or: ./scripts/run-host.sh
+```
+
+This listens on `0.0.0.0:47989`, prints a **QR code** and `sbm1:…` payload, and advertises via mDNS.
+
+On **Android** (same Wi‑Fi):
+
+1. `cd app && flutter run` (release build recommended on device)
+2. **Watch** tab → **Scan QR** from the host terminal → **Play**
+
+Allow the Windows firewall inbound rule for UDP/TCP port **47989** when prompted.
 
 ### Two machines (A → B on your LAN)
 
