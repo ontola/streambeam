@@ -6,8 +6,9 @@ pub mod saved_host;
 pub mod session;
 
 pub use annex_b::{
-    extract_avc_decoder_config, nal_with_start_code, split_access_units, split_nal_units,
-    AccessUnit,
+    access_unit_is_keyframe, access_unit_to_avcc_sample, access_unit_without_sei,
+    avcc_from_sps_pps, extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code,
+    split_access_units, split_nal_units, AccessUnit,
 };
 pub use reassemble::{FrameReassembler, FrameStats};
 pub use saved_host::{SavedHost, load as load_saved_host, save as save_saved_host};

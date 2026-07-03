@@ -16,6 +16,7 @@ class StreamPlatformView(
 ) : PlatformView, SurfaceHolder.Callback {
     private val surfaceView = SurfaceView(context)
     private val channel = MethodChannel(messenger, "streambeam/video_surface")
+    private var lastWindowPtr: Long = 0L
 
     init {
         surfaceView.holder.addCallback(this)
@@ -25,21 +26,29 @@ class StreamPlatformView(
 
     override fun dispose() {
         surfaceView.holder.removeCallback(this)
+        lastWindowPtr = 0L
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        val ptr = NativeStream.nativeWindowFromSurface(holder.surface)
-        channel.invokeMethod("surfaceReady", ptr)
+        notifySurfaceReady(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (width > 0 && height > 0) {
-            val ptr = NativeStream.nativeWindowFromSurface(holder.surface)
-            channel.invokeMethod("surfaceReady", ptr)
+            notifySurfaceReady(holder.surface)
         }
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {}
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        lastWindowPtr = 0L
+    }
+
+    private fun notifySurfaceReady(surface: Surface) {
+        val ptr = NativeStream.nativeWindowFromSurface(surface)
+        if (ptr == lastWindowPtr) return
+        lastWindowPtr = ptr
+        channel.invokeMethod("surfaceReady", ptr)
+    }
 }
 
 class StreamViewFactory(private val messenger: BinaryMessenger) :

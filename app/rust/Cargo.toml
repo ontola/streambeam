@@ -10,12 +10,14 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
+log = "0.4"
 streambeam-core = { path = "../../crates/core" }
 streambeam-proto = { path = "../../crates/proto" }
 streambeam-net = { path = "../../crates/net" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
 jni = "0.21"
 ndk = { version = "0.9", features = ["media", "nativewindow"] }
 ndk-sys = "0.6"

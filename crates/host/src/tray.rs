@@ -457,7 +457,7 @@ unsafe fn draw_clients(hdc: HDC, client: &RECT) {
     }
     let mut y = 434;
     for entry in clients.iter().take(7) {
-        let line = format!("•  {}   {}", entry.name, entry.addr);
+        let line = format!("•  {}   {}", entry.name, entry.addr.ip());
         draw_text_left(hdc, 32, y, client.right - 24, y + 22, &line);
         y += 22;
     }

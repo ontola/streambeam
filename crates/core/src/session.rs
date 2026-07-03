@@ -185,6 +185,14 @@ async fn finish_session(
     })
 }
 
+impl Drop for ClientSession {
+    fn drop(&mut self) {
+        // Close the QUIC session so the host drops stale "connected client" entries
+        // immediately instead of waiting for a control-stream read timeout.
+        let _ = self.conn.close(0u32.into(), b"client session ended");
+    }
+}
+
 /// Ask the host to send an IDR (keyframe) on the next video frame.
 pub async fn request_idr(
     session: &mut ClientSession,

@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
+import 'stream_player.dart';
 
 final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
 final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/releases');
@@ -79,6 +80,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   bool _clipboardReady = false;
   Timer? _clipboardTimer;
   Timer? _surfaceTimeout;
+  int _sessionId = 0;
+  bool _playInFlight = false;
+  int _streamWidth = 640;
+  int _streamHeight = 360;
 
   void _setStatus(String message, {bool error = false}) {
     if (!mounted) return;
@@ -91,6 +96,25 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   void _reportError(String message) {
     _setStatus(_humanizeError(message), error: true);
   }
+
+  void _dismissStatus() {
+    if (!mounted) return;
+    setState(() {
+      _status = null;
+      _statusIsError = false;
+    });
+  }
+
+  void _rememberStreamSize(StreamStats stats) {
+    if (stats.width > 0 && stats.height > 0) {
+      _streamWidth = stats.width;
+      _streamHeight = stats.height;
+    }
+  }
+
+  double get _streamAspectRatio => _streamWidth / _streamHeight;
+
+  bool _sessionAlive(int sessionId) => mounted && sessionId == _sessionId;
 
   String _humanizeError(String raw) {
     var m = raw.trim();
@@ -114,6 +138,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
     if (lower.contains('expired')) {
       return 'Pairing code expired. Restart streambeam-host on your PC and scan the new QR.';
+    }
+    if (lower.contains('errorunknown') || lower.contains('video decoder')) {
+      return m;
+    }
+    if (lower.contains('could not reach host') || lower.contains('connect failed')) {
+      return 'Could not reach your PC. Check that streambeam-host is running and both devices are on the same Wi‑Fi.';
     }
     return m;
   }
@@ -169,15 +199,17 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _surfaceChannel.setMethodCallHandler((call) async {
       if (call.method == 'surfaceReady') {
         _cancelSurfaceTimeout();
+        final window = call.arguments as int?;
         setState(() {
-          _pendingWindow = call.arguments as int?;
-          _surfaceReady = _pendingWindow != null;
+          _pendingWindow = window;
+          _surfaceReady = window != null;
         });
-        if (_busy && _pendingWindow != null) {
+        if (_busy && window != null && !_playInFlight) {
+          _playInFlight = true;
           if (_reconnectPending) {
-            unawaited(_startReconnect(_pendingWindow!));
+            unawaited(_startReconnect(window));
           } else {
-            unawaited(_startPlayback(_pendingWindow!));
+            unawaited(_startPlayback(window));
           }
         }
       }
@@ -254,6 +286,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _reconnectPending = false;
     _surfaceReady = false;
     _pendingWindow = null;
+    _playInFlight = false;
   }
 
   Future<void> _discoverHosts() async {
@@ -320,20 +353,23 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       return;
     }
     _cancelSurfaceTimeout();
+    ++_sessionId;
     setState(() {
       _busy = true;
       _showVideo = true;
       _reconnectPending = reconnect;
       _surfaceReady = false;
       _pendingWindow = null;
+      _playInFlight = false;
       _qrPreviewOpen = false;
       _status = reconnect ? 'Reconnecting…' : 'Connecting…';
       _statusIsError = false;
     });
     unawaited(_syncScanner());
     _armSurfaceTimeout();
-    if (_surfaceReady && _pendingWindow != null) {
+    if (_surfaceReady && _pendingWindow != null && !_playInFlight) {
       _cancelSurfaceTimeout();
+      _playInFlight = true;
       if (reconnect) {
         unawaited(_startReconnect(_pendingWindow!));
       } else {
@@ -343,11 +379,13 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   Future<void> _startPlayback(int nativeWindow) async {
+    final sessionId = _sessionId;
     final payload = _normalizePayload(_payloadCtrl.text);
     if (payload != _payloadCtrl.text) {
       _payloadCtrl.text = payload;
     }
     try {
+      if (!_sessionAlive(sessionId)) return;
       setState(() {
         _status = 'Streaming…';
         _statusIsError = false;
@@ -357,8 +395,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         nativeWindow: nativeWindow,
         maxVideoFrames: 0,
       );
+      if (!_sessionAlive(sessionId)) return;
+      _rememberStreamSize(stats);
       _refreshSavedHost();
-      if (!mounted) return;
       setState(() {
         _status =
             'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
@@ -366,20 +405,28 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         _teardownVideo();
       });
     } catch (e) {
-      if (!mounted) return;
-      _reportError(e.toString());
-      setState(() => _teardownVideo());
+      if (!_sessionAlive(sessionId)) return;
+      setState(() {
+        _status = _humanizeError(e.toString());
+        _statusIsError = true;
+        _teardownVideo();
+      });
     } finally {
       _cancelSurfaceTimeout();
-      if (mounted) {
-        setState(() => _busy = false);
+      if (_sessionAlive(sessionId)) {
+        setState(() {
+          _busy = false;
+          _playInFlight = false;
+        });
         unawaited(_syncScanner());
       }
     }
   }
 
   Future<void> _startReconnect(int nativeWindow) async {
+    final sessionId = _sessionId;
     try {
+      if (!_sessionAlive(sessionId)) return;
       setState(() {
         _status = 'Streaming…';
         _statusIsError = false;
@@ -388,7 +435,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         nativeWindow: nativeWindow,
         maxVideoFrames: 0,
       );
-      if (!mounted) return;
+      if (!_sessionAlive(sessionId)) return;
+      _rememberStreamSize(stats);
       setState(() {
         _status =
             'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
@@ -396,13 +444,19 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         _teardownVideo();
       });
     } catch (e) {
-      if (!mounted) return;
-      _reportError(e.toString());
-      setState(() => _teardownVideo());
+      if (!_sessionAlive(sessionId)) return;
+      setState(() {
+        _status = _humanizeError(e.toString());
+        _statusIsError = true;
+        _teardownVideo();
+      });
     } finally {
       _cancelSurfaceTimeout();
-      if (mounted) {
-        setState(() => _busy = false);
+      if (_sessionAlive(sessionId)) {
+        setState(() {
+          _busy = false;
+          _playInFlight = false;
+        });
         unawaited(_syncScanner());
       }
     }
@@ -431,13 +485,33 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     await _beginSession(reconnect: true);
   }
 
+  void _stopStreaming() {
+    _cancelSurfaceTimeout();
+    ++_sessionId;
+    setState(() {
+      _teardownVideo();
+      _busy = false;
+      _status = 'Stopped';
+      _statusIsError = false;
+    });
+    unawaited(_syncScanner());
+  }
+
   String _normalizePayload(String raw) {
     return raw.replaceAll(RegExp(r'\s+'), '');
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    if (_showVideo && Platform.isAndroid) {
+      return StreamPlayerScreen(
+        status: _status,
+        statusIsError: _statusIsError,
+        isStreaming: _status == 'Streaming…',
+        aspectRatio: _streamAspectRatio,
+        onStop: _stopStreaming,
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -458,14 +532,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
             icon: const Icon(Icons.open_in_new, size: 18),
             label: const Text('GitHub'),
           ),
-          if (_savedHost != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Chip(
-                avatar: const Icon(Icons.check_circle, size: 18),
-                label: Text(_savedHost!, style: theme.textTheme.labelMedium),
-              ),
-            ),
         ],
       ),
       body: SafeArea(
@@ -479,51 +545,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (_showVideo && Platform.isAndroid)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          AndroidView(
-                            viewType: 'streambeam/video',
-                            layoutDirection: TextDirection.ltr,
-                          ),
-                          if (_busy && _status != 'Streaming…')
-                            ColoredBox(
-                              color: Colors.black54,
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const CircularProgressIndicator(
-                                      color: Colors.white,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      _status ?? 'Connecting…',
-                                      style:
-                                          theme.textTheme.bodyMedium?.copyWith(
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  _IdleHero(
-                    busy: _busy,
-                    hosts: _lanHosts,
-                    discovering: _discoveryBusy,
-                    savedHost: _savedHost,
-                  ),
+                _IdleHero(
+                  busy: _busy,
+                  hosts: _lanHosts,
+                  discovering: _discoveryBusy,
+                  savedHost: _savedHost,
+                ),
                 const SizedBox(height: 20),
                 if (Platform.isAndroid && _qrPreviewOpen) ...[
                   _QrScanPreview(
@@ -575,6 +602,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     message: _status!,
                     isError: _statusIsError,
                     onCopy: () => unawaited(_copyStatus()),
+                    onDismiss: _statusIsError ? _dismissStatus : null,
                   ),
                 ],
               ],
@@ -591,11 +619,13 @@ class _StatusNotice extends StatelessWidget {
     required this.message,
     required this.isError,
     required this.onCopy,
+    this.onDismiss,
   });
 
   final String message;
   final bool isError;
   final VoidCallback onCopy;
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -624,13 +654,21 @@ class _StatusNotice extends StatelessWidget {
                 style: theme.textTheme.bodyMedium?.copyWith(color: fg),
               ),
             ),
-            if (isError)
+            if (isError) ...[
               IconButton(
                 onPressed: onCopy,
                 tooltip: 'Copy error',
                 icon: Icon(Icons.copy, size: 20, color: fg),
                 visualDensity: VisualDensity.compact,
               ),
+              if (onDismiss != null)
+                IconButton(
+                  onPressed: onDismiss,
+                  tooltip: 'Dismiss',
+                  icon: Icon(Icons.close, size: 20, color: fg),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
           ],
         ),
       ),

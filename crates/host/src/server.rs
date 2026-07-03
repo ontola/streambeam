@@ -90,7 +90,10 @@ impl HostControls {
     }
 
     fn add_client(&self, entry: ClientEntry) {
-        self.clients.lock().unwrap().push(entry);
+        let mut clients = self.clients.lock().unwrap();
+        // Same device reconnecting gets a new ephemeral UDP port — keep one row per name.
+        clients.retain(|c| c.name != entry.name);
+        clients.push(entry);
     }
 
     fn remove_client(&self, addr: SocketAddr) {
@@ -404,13 +407,13 @@ async fn handle_client(
     let mut last_idr = std::time::Instant::now();
 
     loop {
-        let msg: ClientMsg =
-            match tokio::time::timeout(Duration::from_secs(120), read_msg(&mut recv, &mut buf))
-                .await
-            {
-                Ok(Ok(m)) => m,
-                Ok(Err(_)) | Err(_) => break,
-            };
+        let msg: ClientMsg = tokio::select! {
+            _ = conn.closed() => break,
+            read = read_msg(&mut recv, &mut buf) => match read {
+                Ok(m) => m,
+                Err(_) => break,
+            },
+        };
 
         match msg {
             ClientMsg::SessionRequest { .. } => {

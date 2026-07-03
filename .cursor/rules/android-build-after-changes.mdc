@@ -1,0 +1,17 @@
+---
+description: Build and adb-install the Android app after client changes
+globs: app/**/*
+alwaysApply: false
+---
+
+# Android build after changes
+
+After editing anything under `app/` (Flutter UI, Android native, or `app/rust/`), finish by building and installing on the connected phone:
+
+```sh
+cd app && flutter build apk --debug && adb install -r build/app/outputs/flutter-apk/app-debug.apk
+```
+
+- Do this without waiting for the user to ask for `adb` or a rebuild.
+- If no device is attached, still run the build and report that install was skipped.
+- If the build fails, fix the error before ending the task.

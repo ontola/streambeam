@@ -10,6 +10,14 @@ use crate::store::{client_identity_path, saved_host_path};
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
+    #[cfg(target_os = "android")]
+    {
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Info)
+                .with_tag("StreamBeam"),
+        );
+    }
 }
 
 /// Call once at startup with the app documents directory (Android/iOS).
