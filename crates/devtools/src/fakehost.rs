@@ -95,7 +95,7 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let _mdns = if std::env::var("STREAMBEAM_NO_MDNS").is_err() {
         let ips: Vec<_> = addrs.iter().map(|a| a.ip()).collect();
-        match advertise("fakehost", "fakehost", addr.port(), &ips) {
+        match advertise("fakehost", "fakehost", addr.port(), &ips, Some(identity.public_key())) {
             Ok(daemon) => {
                 eprintln!("mDNS: broadcasting on port {} ({ips:?})", addr.port());
                 Some(daemon)

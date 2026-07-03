@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use streambeam_core::{
-    connect_as_identity, load_saved_host, save_saved_host, FrameReassembler, SavedHost,
+    clear_saved_host, connect_as_identity, load_saved_host, save_saved_host, FrameReassembler,
+    SavedHost,
 };
 use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
 
@@ -101,12 +102,20 @@ pub fn save_host_from_payload(payload: String) -> Result<(), String> {
     save_saved_host(&saved_host_path(), &host).map_err(|e| e.to_string())
 }
 
-/// LAN hosts advertising via mDNS (pairing still requires scanning host QR once).
+/// Remove the saved host so Watch / reconnect is unavailable until paired again.
+#[flutter_rust_bridge::frb]
+pub fn forget_saved_host() -> Result<(), String> {
+    clear_saved_host(&saved_host_path()).map_err(|e| e.to_string())
+}
+
+/// LAN hosts advertising via mDNS.
 #[derive(Debug, Clone)]
 pub struct DiscoveredHost {
     pub name: String,
     pub port: u16,
     pub addrs: Vec<String>,
+    /// Host Ed25519 public key (32 bytes) from mDNS; empty if host is too old.
+    pub host_pubkey: Vec<u8>,
 }
 
 #[flutter_rust_bridge::frb]
@@ -118,11 +127,45 @@ pub async fn discover_hosts(timeout_ms: u32) -> Result<Vec<DiscoveredHost>, Stri
     Ok(hosts
         .into_iter()
         .map(|h| DiscoveredHost {
-            name: h.instance.trim_end_matches('.').to_string(),
+            name: h.name,
             port: h.port,
             addrs: h.addrs.iter().map(|a| a.to_string()).collect(),
+            host_pubkey: h.host_pubkey.map(|pk| pk.to_vec()).unwrap_or_default(),
         })
         .collect())
+}
+
+/// Connect to a host found on the LAN (QR not required; approve on PC if new).
+#[flutter_rust_bridge::frb]
+pub async fn play_discovered_host(
+    host_name: String,
+    host_pubkey: Vec<u8>,
+    addr: String,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android::play::run_discovered(
+            host_name,
+            host_pubkey,
+            addr,
+            native_window,
+            max_video_frames,
+        )
+        .await;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (
+            host_name,
+            host_pubkey,
+            addr,
+            native_window,
+            max_video_frames,
+        );
+        Err("play_discovered_host is Android-only".into())
+    }
 }
 
 /// Pair, start session, and receive up to `max_video_frames` (for M3 stats / soak).

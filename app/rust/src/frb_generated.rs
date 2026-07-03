@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1175468729;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -568169454;
 
 // Section: executor
 
@@ -120,6 +120,38 @@ fn wire__crate__api__discover_hosts_impl(
         },
     )
 }
+fn wire__crate__api__forget_saved_host_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "forget_saved_host",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::forget_saved_host()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__init_app_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -150,6 +182,53 @@ fn wire__crate__api__init_app_impl(
                     })?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__play_discovered_host_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "play_discovered_host",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_host_name = <String>::sse_decode(&mut deserializer);
+            let api_host_pubkey = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_addr = <String>::sse_decode(&mut deserializer);
+            let api_native_window = <i64>::sse_decode(&mut deserializer);
+            let api_max_video_frames = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::play_discovered_host(
+                            api_host_name,
+                            api_host_pubkey,
+                            api_addr,
+                            api_native_window,
+                            api_max_video_frames,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
             }
         },
     )
@@ -543,10 +622,12 @@ impl SseDecode for crate::api::DiscoveredHost {
         let mut var_name = <String>::sse_decode(deserializer);
         let mut var_port = <u16>::sse_decode(deserializer);
         let mut var_addrs = <Vec<String>>::sse_decode(deserializer);
+        let mut var_hostPubkey = <Vec<u8>>::sse_decode(deserializer);
         return crate::api::DiscoveredHost {
             name: var_name,
             port: var_port,
             addrs: var_addrs,
+            host_pubkey: var_hostPubkey,
         };
     }
 }
@@ -690,11 +771,13 @@ fn pde_ffi_dispatcher_primary_impl(
     match func_id {
         1 => wire__crate__api__connect_and_receive_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__discover_hosts_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__play_stream_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__reconnect_play_stream_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__save_host_from_payload_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__forget_saved_host_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__play_discovered_host_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__play_stream_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__reconnect_play_stream_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__save_host_from_payload_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -707,13 +790,13 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        5 => wire__crate__api__playback_frames_rendered_impl(ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__saved_host_label_impl(ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__send_mouse_abs_impl(ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__playback_frames_rendered_impl(ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__saved_host_label_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__send_mouse_abs_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -727,6 +810,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::DiscoveredHost {
             self.name.into_into_dart().into_dart(),
             self.port.into_into_dart().into_dart(),
             self.addrs.into_into_dart().into_dart(),
+            self.host_pubkey.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -771,6 +855,7 @@ impl SseEncode for crate::api::DiscoveredHost {
         <String>::sse_encode(self.name, serializer);
         <u16>::sse_encode(self.port, serializer);
         <Vec<String>>::sse_encode(self.addrs, serializer);
+        <Vec<u8>>::sse_encode(self.host_pubkey, serializer);
     }
 }
 

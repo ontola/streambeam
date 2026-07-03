@@ -44,3 +44,10 @@ pub fn save(path: &Path, host: &SavedHost) -> Result<(), Box<dyn std::error::Err
     std::fs::write(path, data)?;
     Ok(())
 }
+
+pub fn clear(path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}

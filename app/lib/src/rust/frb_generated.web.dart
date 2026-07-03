@@ -40,6 +40,9 @@ abstract class StreambeamFfiApiImplPlatform
   List<DiscoveredHost> dco_decode_list_discovered_host(dynamic raw);
 
   @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -82,6 +85,9 @@ abstract class StreambeamFfiApiImplPlatform
   List<DiscoveredHost> sse_decode_list_discovered_host(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -136,6 +142,9 @@ abstract class StreambeamFfiApiImplPlatform
     List<DiscoveredHost> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(

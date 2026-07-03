@@ -23,10 +23,13 @@ fn main() {
         Ok(hosts) => {
             for h in hosts {
                 println!(
-                    "{}  port {}  addrs {:?}",
-                    h.instance.trim_end_matches('.'),
+                    "{}  port {}  addrs {:?}{}",
+                    h.name,
                     h.port,
-                    h.addrs
+                    h.addrs,
+                    h.host_pubkey
+                        .map(|_| "  pk=yes")
+                        .unwrap_or_default()
                 );
             }
         }

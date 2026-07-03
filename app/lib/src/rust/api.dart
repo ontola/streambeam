@@ -46,8 +46,27 @@ String? savedHostLabel() => StreambeamFfi.instance.api.crateApiSavedHostLabel();
 Future<void> saveHostFromPayload({required String payload}) =>
     StreambeamFfi.instance.api.crateApiSaveHostFromPayload(payload: payload);
 
+/// Remove the saved host so Watch / reconnect is unavailable until paired again.
+Future<void> forgetSavedHost() =>
+    StreambeamFfi.instance.api.crateApiForgetSavedHost();
+
 Future<List<DiscoveredHost>> discoverHosts({required int timeoutMs}) =>
     StreambeamFfi.instance.api.crateApiDiscoverHosts(timeoutMs: timeoutMs);
+
+/// Connect to a host found on the LAN (QR not required; approve on PC if new).
+Future<StreamStats> playDiscoveredHost({
+  required String hostName,
+  required List<int> hostPubkey,
+  required String addr,
+  required PlatformInt64 nativeWindow,
+  required int maxVideoFrames,
+}) => StreambeamFfi.instance.api.crateApiPlayDiscoveredHost(
+  hostName: hostName,
+  hostPubkey: hostPubkey,
+  addr: addr,
+  nativeWindow: nativeWindow,
+  maxVideoFrames: maxVideoFrames,
+);
 
 /// Pair, start session, and receive up to `max_video_frames` (for M3 stats / soak).
 Future<StreamStats> connectAndReceive({
@@ -78,20 +97,25 @@ Future<StreamStats> reconnectPlayStream({
   maxVideoFrames: maxVideoFrames,
 );
 
-/// LAN hosts advertising via mDNS (pairing still requires scanning host QR once).
+/// LAN hosts advertising via mDNS.
 class DiscoveredHost {
   final String name;
   final int port;
   final List<String> addrs;
 
+  /// Host Ed25519 public key (32 bytes) from mDNS; empty if host is too old.
+  final Uint8List hostPubkey;
+
   const DiscoveredHost({
     required this.name,
     required this.port,
     required this.addrs,
+    required this.hostPubkey,
   });
 
   @override
-  int get hashCode => name.hashCode ^ port.hashCode ^ addrs.hashCode;
+  int get hashCode =>
+      name.hashCode ^ port.hashCode ^ addrs.hashCode ^ hostPubkey.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -100,7 +124,8 @@ class DiscoveredHost {
           runtimeType == other.runtimeType &&
           name == other.name &&
           port == other.port &&
-          addrs == other.addrs;
+          addrs == other.addrs &&
+          hostPubkey == other.hostPubkey;
 }
 
 class StreamStats {

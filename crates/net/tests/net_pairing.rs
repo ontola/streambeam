@@ -31,14 +31,14 @@ fn enroll_rejects_bad_token() {
 }
 
 #[test]
-fn enroll_rejects_unknown_without_proof() {
-    let mut store = PairingStore::new();
+fn enroll_allows_unknown_without_proof_for_lan_approval() {
+    let store = PairingStore::new();
     let client_pk = [9u8; 32];
     let exporter = [1u8; PAIR_EXPORTER_LEN];
-    assert!(matches!(
-        store.handle_hello(client_pk, "phone", None, &exporter),
-        HelloDecision::Rejected(_)
-    ));
+    assert_eq!(
+        store.evaluate_hello(client_pk, None, &exporter),
+        HelloVerdict::NeedsApproval
+    );
 }
 
 #[test]

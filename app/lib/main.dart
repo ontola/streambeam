@@ -78,6 +78,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   bool _surfaceReady = false;
   String? _savedHost;
   List<DiscoveredHost> _lanHosts = [];
+  DiscoveredHost? _pendingLanHost;
+  String? _pendingLanAddr;
   bool _discoveryBusy = false;
   Timer? _discoveryTimer;
   late final MobileScannerController _scannerController;
@@ -418,21 +420,36 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   Future<void> _startPlayback(int nativeWindow) async {
     final sessionId = _sessionId;
-    final payload = _normalizePayload(_payloadCtrl.text);
-    if (payload != _payloadCtrl.text) {
-      _payloadCtrl.text = payload;
-    }
+    final lanHost = _pendingLanHost;
+    final lanAddr = _pendingLanAddr;
+    _pendingLanHost = null;
+    _pendingLanAddr = null;
     try {
       if (!_sessionAlive(sessionId)) return;
       setState(() {
         _status = 'Streaming…';
         _statusIsError = false;
       });
-      final stats = await playStream(
-        payload: payload,
-        nativeWindow: nativeWindow,
-        maxVideoFrames: 0,
-      );
+      final StreamStats stats;
+      if (lanHost != null && lanAddr != null) {
+        stats = await playDiscoveredHost(
+          hostName: lanHost.name,
+          hostPubkey: lanHost.hostPubkey,
+          addr: lanAddr,
+          nativeWindow: nativeWindow,
+          maxVideoFrames: 0,
+        );
+      } else {
+        final payload = _normalizePayload(_payloadCtrl.text);
+        if (payload != _payloadCtrl.text) {
+          _payloadCtrl.text = payload;
+        }
+        stats = await playStream(
+          payload: payload,
+          nativeWindow: nativeWindow,
+          maxVideoFrames: 0,
+        );
+      }
       if (!_sessionAlive(sessionId)) return;
       _rememberStreamSize(stats);
       _refreshSavedHost();
@@ -518,6 +535,45 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     await _beginSession(reconnect: false);
   }
 
+  Future<void> _forgetSavedHost() async {
+    if (_busy) return;
+    try {
+      await forgetSavedHost();
+      _refreshSavedHost();
+      if (!mounted) return;
+      setState(() {
+        if (_status != null && !_statusIsError) {
+          _status = null;
+        }
+      });
+    } catch (e) {
+      _reportError(e.toString());
+    }
+  }
+
+  Future<void> _connectLanHost(DiscoveredHost host) async {
+    if (_busy) return;
+    if (host.hostPubkey.length != 32) {
+      _reportError(
+        '${host.name} does not support LAN connect yet. Update streambeam-host on your PC, then try again.',
+      );
+      return;
+    }
+    final addr = _bestLanAddr(host);
+    if (addr == null) {
+      _reportError('No network address for ${host.name}.');
+      return;
+    }
+    _pendingLanHost = host;
+    _pendingLanAddr = addr;
+    await _beginSession(reconnect: false);
+  }
+
+  String? _bestLanAddr(DiscoveredHost host) {
+    if (host.addrs.isEmpty) return null;
+    return '${host.addrs.first}:${host.port}';
+  }
+
   Future<void> _watch() async {
     if (_savedHost == null) return;
     await _beginSession(reconnect: true);
@@ -590,6 +646,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   hosts: _lanHosts,
                   discovering: _discoveryBusy,
                   savedHost: _savedHost,
+                  onHostTap: _busy
+                      ? null
+                      : (h) => unawaited(_connectLanHost(h)),
                 ),
                 const SizedBox(height: 20),
                 if (Platform.isAndroid && _qrPreviewOpen) ...[
@@ -630,10 +689,22 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 ),
                 if (_savedHost != null) ...[
                   const SizedBox(height: 8),
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _watch,
-                    icon: const Icon(Icons.play_arrow),
-                    label: Text('Watch $_savedHost'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _busy ? null : _watch,
+                          icon: const Icon(Icons.play_arrow),
+                          label: Text('Watch $_savedHost'),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        onPressed: _busy ? null : () => unawaited(_forgetSavedHost()),
+                        tooltip: 'Forget $_savedHost',
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
                   ),
                 ],
                 if (_status != null) ...[
@@ -797,12 +868,14 @@ class _IdleHero extends StatelessWidget {
     required this.hosts,
     required this.discovering,
     this.savedHost,
+    this.onHostTap,
   });
 
   final bool busy;
   final List<DiscoveredHost> hosts;
   final bool discovering;
   final String? savedHost;
+  final void Function(DiscoveredHost host)? onHostTap;
 
   @override
   Widget build(BuildContext context) {
@@ -830,8 +903,8 @@ class _IdleHero extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             savedHost != null
-                ? 'Pair once with paste or QR, then tap Watch below.'
-                : 'Run streambeam-host on your PC, then scan the QR or paste sbm1:.',
+                ? 'Tap a host below or Watch to reconnect.'
+                : 'Run streambeam-host on your PC, then tap a host on your LAN or scan the QR.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -880,16 +953,36 @@ class _IdleHero extends StatelessWidget {
             ...hosts.map(
               (h) => Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  '${h.name}  ${h.addrs.join(", ")}:${h.port}',
-                  style: theme.textTheme.bodySmall,
-                  textAlign: TextAlign.center,
+                child: Material(
+                  color: theme.colorScheme.surface,
+                  borderRadius: BorderRadius.circular(8),
+                  child: ListTile(
+                    dense: true,
+                    enabled: onHostTap != null && h.hostPubkey.length == 32,
+                    leading: Icon(
+                      Icons.computer,
+                      color: theme.colorScheme.primary,
+                    ),
+                    title: Text(h.name),
+                    subtitle: Text('${h.addrs.join(", ")}:${h.port}'),
+                    trailing: onHostTap == null
+                        ? null
+                        : Icon(
+                            h.hostPubkey.length == 32
+                                ? Icons.play_circle_outline
+                                : Icons.info_outline,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                    onTap: onHostTap == null ? null : () => onHostTap!(h),
+                  ),
                 ),
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              'Scan QR on the host to pair.',
+              hosts.any((h) => h.hostPubkey.length != 32)
+                  ? 'Update streambeam-host on your PC for tap-to-connect.'
+                  : 'Tap a host to connect. Approve on your PC if this is the first time.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

@@ -11,7 +11,9 @@ pub use annex_b::{
     split_access_units, split_nal_units, AccessUnit,
 };
 pub use reassemble::{FrameReassembler, FrameStats};
-pub use saved_host::{SavedHost, load as load_saved_host, save as save_saved_host};
+pub use saved_host::{
+    clear as clear_saved_host, load as load_saved_host, save as save_saved_host, SavedHost,
+};
 pub use session::{
     connect, connect_as, connect_as_identity, connect_known, request_idr, send_input,
     ClientSession,

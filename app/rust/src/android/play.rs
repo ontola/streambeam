@@ -159,6 +159,43 @@ pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> 
     play_session(session, native_window, max_video_frames).await
 }
 
+pub async fn run_discovered(
+    host_name: String,
+    host_pubkey: Vec<u8>,
+    addr: String,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    let pubkey: [u8; 32] = host_pubkey
+        .try_into()
+        .map_err(|_| "host public key must be 32 bytes".to_string())?;
+    let addr: SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("invalid host address: {e}"))?;
+
+    log::info!("streambeam connecting to LAN host {host_name} at {addr}");
+    let session = connect_known(
+        pubkey,
+        addr,
+        "streambeam-android",
+        &client_identity_path(),
+    )
+    .await
+    .map_err(|e| {
+        log::error!("streambeam LAN connect failed: {e}");
+        format!("Could not reach host: {e}")
+    })?;
+
+    let host = SavedHost {
+        host_name,
+        host_pubkey: pubkey,
+        addrs: vec![addr],
+    };
+    let _ = save_saved_host(&crate::store::saved_host_path(), &host);
+
+    play_session(session, native_window, max_video_frames).await
+}
+
 pub async fn run_known(
     host: SavedHost,
     addr: SocketAddr,

@@ -206,7 +206,13 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
 
     let _mdns = if std::env::var("STREAMBEAM_NO_MDNS").is_err() {
         let ips: Vec<_> = addrs.iter().map(|a| a.ip()).collect();
-        match Advertiser::new(&config.host_name, &config.host_name, addr.port(), &ips) {
+        match Advertiser::new(
+            &config.host_name,
+            &config.host_name,
+            addr.port(),
+            &ips,
+            Some(identity.public_key()),
+        ) {
             Ok(adv) => {
                 let adv = Arc::new(adv);
                 if let Err(e) = adv.set_visible(controls.is_discoverable()) {

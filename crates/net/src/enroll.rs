@@ -146,7 +146,7 @@ impl PairingStore {
         }
 
         let Some(proof) = pair_proof else {
-            return HelloVerdict::Rejected("unknown client".into());
+            return HelloVerdict::NeedsApproval;
         };
 
         let Some(token) = self.active_token() else {
