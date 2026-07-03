@@ -72,7 +72,7 @@ class StreambeamFfi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1476377299;
+  int get rustContentHash => 126567950;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -106,6 +106,15 @@ abstract class StreambeamFfiApi extends BaseApi {
   Future<void> crateApiSaveHostFromPayload({required String payload});
 
   String? crateApiSavedHostLabel();
+
+  void crateApiSendMouseAbs({
+    required int x,
+    required int y,
+    required int refW,
+    required int refH,
+  });
+
+  void crateApiSendMouseClick({required int button});
 
   Future<void> crateApiSetAppDataDir({required String dir});
 
@@ -335,6 +344,62 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       const TaskConstMeta(debugName: "saved_host_label", argNames: []);
 
   @override
+  void crateApiSendMouseAbs({
+    required int x,
+    required int y,
+    required int refW,
+    required int refH,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_16(x, serializer);
+          sse_encode_u_16(y, serializer);
+          sse_encode_u_16(refW, serializer);
+          sse_encode_u_16(refH, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSendMouseAbsConstMeta,
+        argValues: [x, y, refW, refH],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendMouseAbsConstMeta => const TaskConstMeta(
+    debugName: "send_mouse_abs",
+    argNames: ["x", "y", "refW", "refH"],
+  );
+
+  @override
+  void crateApiSendMouseClick({required int button}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_8(button, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSendMouseClickConstMeta,
+        argValues: [button],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendMouseClickConstMeta =>
+      const TaskConstMeta(debugName: "send_mouse_click", argNames: ["button"]);
+
+  @override
   Future<void> crateApiSetAppDataDir({required String dir}) {
     return handler.executeNormal(
       NormalTask(
@@ -344,7 +409,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 10,
             port: port_,
           );
         },
@@ -368,7 +433,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,

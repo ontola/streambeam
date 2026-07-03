@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'src/rust/api.dart';
+
 /// Fullscreen stream viewer: pinch-zoom, two-finger pan, edge-drag menu.
 class StreamPlayerScreen extends StatefulWidget {
   const StreamPlayerScreen({
@@ -10,6 +12,8 @@ class StreamPlayerScreen extends StatefulWidget {
     required this.statusIsError,
     required this.isStreaming,
     required this.aspectRatio,
+    required this.streamWidth,
+    required this.streamHeight,
     required this.onStop,
     super.key,
   });
@@ -18,6 +22,8 @@ class StreamPlayerScreen extends StatefulWidget {
   final bool statusIsError;
   final bool isStreaming;
   final double aspectRatio;
+  final int streamWidth;
+  final int streamHeight;
   final VoidCallback onStop;
 
   @override
@@ -36,6 +42,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
   bool _edgeDragActive = false;
   bool _keyboardOpen = false;
   bool _panEnabled = false;
+  bool _blockViewerGestures = false;
   final _keyboardFocus = FocusNode();
   final _keyboardCtrl = TextEditingController();
 
@@ -173,20 +180,42 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
                 child: SizedBox(
                   width: videoSize.width,
                   height: videoSize.height,
-                  child: InteractiveViewer(
-                    transformationController: _transformController,
-                    minScale: 1,
-                    maxScale: 4,
-                    panEnabled: _panEnabled,
-                    clipBehavior: Clip.none,
-                    child: SizedBox(
-                      width: videoSize.width,
-                      height: videoSize.height,
-                      child: const AndroidView(
-                        viewType: 'streambeam/video',
-                        layoutDirection: TextDirection.ltr,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      IgnorePointer(
+                        ignoring: _blockViewerGestures,
+                        child: InteractiveViewer(
+                          transformationController: _transformController,
+                          minScale: 1,
+                          maxScale: 4,
+                          panEnabled: _panEnabled,
+                          clipBehavior: Clip.none,
+                          child: SizedBox(
+                            width: videoSize.width,
+                            height: videoSize.height,
+                            child: const AndroidView(
+                              viewType: 'streambeam/video',
+                              layoutDirection: TextDirection.ltr,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      if (widget.isStreaming &&
+                          !_panEnabled &&
+                          !_menuOpen &&
+                          !_keyboardOpen)
+                        _StreamTouchSurface(
+                          videoSize: videoSize,
+                          refWidth: widget.streamWidth,
+                          refHeight: widget.streamHeight,
+                          onCaptureChanged: (capturing) {
+                            if (_blockViewerGestures != capturing) {
+                              setState(() => _blockViewerGestures = capturing);
+                            }
+                          },
+                        ),
+                    ],
                   ),
                 ),
               );
@@ -325,6 +354,156 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
         ],
       ),
       ),
+    );
+  }
+}
+
+/// Maps touch on the video area to PC mouse events (when not zoomed).
+class _StreamTouchSurface extends StatefulWidget {
+  const _StreamTouchSurface({
+    required this.videoSize,
+    required this.refWidth,
+    required this.refHeight,
+    required this.onCaptureChanged,
+  });
+
+  final Size videoSize;
+  final int refWidth;
+  final int refHeight;
+  final ValueChanged<bool> onCaptureChanged;
+
+  @override
+  State<_StreamTouchSurface> createState() => _StreamTouchSurfaceState();
+}
+
+class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
+  static const _tapSlop = 12.0;
+  static const _tapTimeout = Duration(milliseconds: 280);
+
+  final _pointers = <int, Offset>{};
+  Offset? _singleOrigin;
+  DateTime? _singleDownAt;
+  double _singleTravel = 0;
+  DateTime? _twoFingerDownAt;
+  double _twoFingerTravel = 0;
+  bool _twoFingerGesture = false;
+
+  int get _refW => widget.refWidth.clamp(1, 65535);
+  int get _refH => widget.refHeight.clamp(1, 65535);
+
+  void _sendAbs(Offset local) {
+    final x = (local.dx / widget.videoSize.width * _refW).round().clamp(0, _refW);
+    final y = (local.dy / widget.videoSize.height * _refH).round().clamp(0, _refH);
+    sendMouseAbs(
+      x: x,
+      y: y,
+      refW: _refW,
+      refH: _refH,
+    );
+  }
+
+  void _setCapturing(bool on) {
+    widget.onCaptureChanged(on);
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    if (_pointers.length == 1) {
+      _singleOrigin = event.localPosition;
+      _singleDownAt = DateTime.now();
+      _singleTravel = 0;
+      _setCapturing(true);
+      _sendAbs(event.localPosition);
+    } else if (_pointers.length == 2) {
+      _twoFingerGesture = true;
+      _twoFingerDownAt = DateTime.now();
+      _twoFingerTravel = 0;
+      _setCapturing(false);
+    }
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    if (_pointers.length == 1 && _singleOrigin != null) {
+      _singleTravel = math.max(
+        _singleTravel,
+        (event.localPosition - _singleOrigin!).distance,
+      );
+      _sendAbs(event.localPosition);
+    } else if (_pointers.length == 2 && _twoFingerDownAt != null) {
+      final pts = _pointers.values.toList(growable: false);
+      if (pts.length == 2) {
+        _twoFingerTravel = math.max(
+          _twoFingerTravel,
+          (pts[0] - pts[1]).distance,
+        );
+      }
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    final countBefore = _pointers.length;
+    final twoStart = _twoFingerDownAt;
+    final twoTravel = _twoFingerTravel;
+    final twoGesture = _twoFingerGesture;
+    final origin = _singleOrigin;
+    final downAt = _singleDownAt;
+    final travel = _singleTravel;
+
+    _pointers.remove(event.pointer);
+
+    if (_pointers.isEmpty) {
+      if (twoGesture &&
+          twoStart != null &&
+          DateTime.now().difference(twoStart) < _tapTimeout &&
+          twoTravel < _tapSlop) {
+        sendMouseClick(button: 1);
+      } else if (countBefore == 1 &&
+          origin != null &&
+          downAt != null &&
+          travel < _tapSlop &&
+          DateTime.now().difference(downAt) < _tapTimeout) {
+        _sendAbs(origin);
+        sendMouseClick(button: 0);
+      }
+      _singleOrigin = null;
+      _singleDownAt = null;
+      _twoFingerDownAt = null;
+      _twoFingerGesture = false;
+      _setCapturing(false);
+    } else if (_pointers.length == 1) {
+      _twoFingerDownAt = null;
+      _twoFingerGesture = false;
+      _twoFingerTravel = 0;
+      final remaining = _pointers.values.first;
+      _singleOrigin = remaining;
+      _singleDownAt = DateTime.now();
+      _singleTravel = 0;
+      _setCapturing(true);
+      _sendAbs(remaining);
+    }
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _pointers.remove(event.pointer);
+    if (_pointers.isEmpty) {
+      _singleOrigin = null;
+      _singleDownAt = null;
+      _twoFingerDownAt = null;
+      _twoFingerGesture = false;
+      _setCapturing(false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      child: const SizedBox.expand(),
     );
   }
 }

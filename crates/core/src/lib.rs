@@ -13,5 +13,6 @@ pub use annex_b::{
 pub use reassemble::{FrameReassembler, FrameStats};
 pub use saved_host::{SavedHost, load as load_saved_host, save as save_saved_host};
 pub use session::{
-    connect, connect_as, connect_as_identity, connect_known, request_idr, ClientSession,
+    connect, connect_as, connect_as_identity, connect_known, request_idr, send_input,
+    ClientSession,
 };

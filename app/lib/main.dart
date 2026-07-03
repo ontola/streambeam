@@ -509,6 +509,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         statusIsError: _statusIsError,
         isStreaming: _status == 'Streaming…',
         aspectRatio: _streamAspectRatio,
+        streamWidth: _streamWidth,
+        streamHeight: _streamHeight,
         onStop: _stopStreaming,
       );
     }

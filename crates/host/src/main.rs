@@ -7,6 +7,7 @@ use clap::Parser;
 pub mod audio;
 pub mod data_dir;
 pub mod encode;
+pub mod input_inject;
 pub mod mock;
 pub mod qr;
 pub mod server;

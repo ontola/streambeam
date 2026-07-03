@@ -12,6 +12,7 @@ use streambeam_net::{
 use tokio::sync::oneshot;
 use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
 use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
+use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
 use streambeam_proto::PROTO_VERSION;
 use tokio::sync::Mutex as AsyncMutex;
@@ -402,6 +403,21 @@ async fn handle_client(
         addr: conn.remote_address(),
     };
 
+    let input_conn = conn.clone();
+    tokio::spawn(async move {
+        loop {
+            match input_conn.accept_uni().await {
+                Ok(recv) => {
+                    eprintln!("input stream opened");
+                    if let Err(e) = handle_input_stream(recv).await {
+                        eprintln!("input stream ended: {e}");
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
     let stream_ctl = Arc::new(StreamControl::new());
     let mut streaming = false;
     let mut last_idr = std::time::Instant::now();
@@ -490,6 +506,16 @@ async fn handle_client(
 
     conn.close(0u32.into(), b"bye");
     Ok(())
+}
+
+async fn handle_input_stream(
+    mut recv: quinn::RecvStream,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut buf = Vec::new();
+    loop {
+        let event: InputEvent = read_msg(&mut recv, &mut buf).await?;
+        crate::input_inject::apply(event);
+    }
 }
 
 /// Ask the UI to approve a new device and wait for the answer.

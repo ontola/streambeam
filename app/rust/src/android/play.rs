@@ -181,16 +181,36 @@ pub async fn run_known(
 }
 
 async fn play_session(
-    session: ClientSession,
+    mut session: ClientSession,
     native_window: i64,
     max_video_frames: u32,
 ) -> Result<StreamStats, String> {
     let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
+    let input = session
+        .input
+        .take()
+        .ok_or("input stream not open")?;
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::input::set_sender(Some(input_tx));
+
+    let input_task = runtime.spawn(async move {
+        let mut input_send = input;
+        while let Some(ev) = input_rx.recv().await {
+            if streambeam_net::write_msg(&mut input_send, &ev).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let result = tokio::task::spawn_blocking(move || {
         play_session_blocking(session, native_window, max_video_frames, runtime)
     })
     .await
-    .map_err(|e| format!("playback task failed: {e}"))?
+    .map_err(|e| format!("playback task failed: {e}"))?;
+
+    crate::input::set_sender(None);
+    input_task.abort();
+    result
 }
 
 fn play_session_blocking(

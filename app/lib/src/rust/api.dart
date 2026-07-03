@@ -9,6 +9,21 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `receive_stats`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
+void sendMouseAbs({
+  required int x,
+  required int y,
+  required int refW,
+  required int refH,
+}) => StreambeamFfi.instance.api.crateApiSendMouseAbs(
+  x: x,
+  y: y,
+  refW: refW,
+  refH: refH,
+);
+
+void sendMouseClick({required int button}) =>
+    StreambeamFfi.instance.api.crateApiSendMouseClick(button: button);
+
 /// Call once at startup with the app documents directory (Android/iOS).
 Future<void> setAppDataDir({required String dir}) =>
     StreambeamFfi.instance.api.crateApiSetAppDataDir(dir: dir);

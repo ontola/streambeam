@@ -8,6 +8,7 @@ use streambeam_net::{
     build_pair_proof, client_config, export_pairing_secret, read_msg, write_msg, Identity,
 };
 use streambeam_proto::control::{AudioCaps, ClientMsg, HostMsg, VideoCaps};
+use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
 use streambeam_proto::PROTO_VERSION;
 
@@ -22,6 +23,7 @@ pub struct ClientSession {
     pub fps: u8,
     pub codec: String,
     pub codec_config: Option<Vec<u8>>,
+    pub input: Option<quinn::SendStream>,
 }
 
 pub async fn connect(payload: &str) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
@@ -172,6 +174,8 @@ async fn finish_session(
         }
     };
 
+    let input = conn.open_uni().await?;
+
     Ok(ClientSession {
         _endpoint: endpoint,
         conn,
@@ -182,6 +186,7 @@ async fn finish_session(
         fps,
         codec,
         codec_config,
+        input: Some(input),
     })
 }
 
@@ -191,6 +196,19 @@ impl Drop for ClientSession {
         // immediately instead of waiting for a control-stream read timeout.
         let _ = self.conn.close(0u32.into(), b"client session ended");
     }
+}
+
+/// Send an input event on stream S1 (touch, keys, gamepad).
+pub async fn send_input(
+    session: &mut ClientSession,
+    event: InputEvent,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let input = session
+        .input
+        .as_mut()
+        .ok_or("input stream not open")?;
+    write_msg(input, &event).await?;
+    Ok(())
 }
 
 /// Ask the host to send an IDR (keyframe) on the next video frame.
