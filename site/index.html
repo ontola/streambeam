@@ -176,6 +176,10 @@
     display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap;
     color: var(--muted); font-size: 0.88rem;
   }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
 
   @media (max-width: 800px) {
     .hero { grid-template-columns: 1fr; padding: 40px 0 56px; }
@@ -336,7 +340,7 @@
 
   <footer class="site">
     <span>StreamBeam — beam your PC to your phone.</span>
-    <span><a href="https://github.com/joepio/streambeam">GitHub</a> · <span class="mono">streambeam.eu</span></span>
+    <span>Made with <span class="mono" aria-hidden="true">&lt;3</span><span class="sr-only">love</span> by <a href="https://ontola.io">Ontola.io</a> · <a href="https://github.com/joepio/streambeam">GitHub</a> · <span class="mono">streambeam.eu</span></span>
   </footer>
 </div>
 </body>
