@@ -19,13 +19,54 @@ Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (
 | `crates/net` | QUIC endpoint, Ed25519 identity, pinned-key mTLS, pairing enrollment. |
 | `crates/core` | Client session logic (reassembly, IDR policy, input coalescing). FRB-free. |
 | `crates/host` | Windows host binary (capture, encode, inject, egui panel). |
-| `crates/devtools` | `fakehost` + `devclient` — the macOS dev loop; no Windows box needed. |
+| `crates/devtools` | `fakehost` + `playclient` — macOS dev loop; no Windows box needed. |
 | `app/` | Flutter Android client (added in M3). |
 
-## Dev quickstart (macOS-friendly)
+## Watch it stream (macOS)
+
+Requires [ffmpeg](https://ffmpeg.org/) (`ffplay` on your PATH — `brew install ffmpeg`).
+
+**One command** — starts fakehost, opens a video window, plays stereo audio:
 
 ```sh
-cargo test                          # proto + net unit/integration tests
-cargo run -p streambeam-devtools --bin fakehost      # prints a pairing payload
-cargo run -p streambeam-devtools --bin devclient -- <sbm1:payload>
+cargo run -p streambeam-devtools --bin streamdemo
+```
+
+Close the ffplay window or Ctrl+C to stop.
+
+### Two machines (A → B on your LAN)
+
+Terminal A (host):
+
+```sh
+STREAMBEAM_LISTEN=0.0.0.0:47989 cargo run -p streambeam-devtools --bin fakehost
+```
+
+Copy the `sbm1:…` line it prints.
+
+Terminal B (client):
+
+```sh
+cargo run -p streambeam-devtools --bin playclient -- 'sbm1:…'
+```
+
+### Manual / headless
+
+```sh
+# Terminal 1
+cargo run -p streambeam-devtools --bin fakehost
+
+# Terminal 2 — stats + hash verify (no playback)
+cargo run -p streambeam-devtools --bin devclient -- 'sbm1:…' --frames 60
+
+# Terminal 2 — playback
+cargo run -p streambeam-devtools --bin playclient -- 'sbm1:…'
+```
+
+### Android client (M3 scaffold)
+
+See [app/README.md](app/README.md). Pairs with fakehost and reports stream stats from Rust.
+
+```sh
+cargo test   # proto + net + e2e pairing/stream smoke tests
 ```

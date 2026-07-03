@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
+mdns-sd = "0.13"
 
 [dev-dependencies]
 tokio = { workspace = true }

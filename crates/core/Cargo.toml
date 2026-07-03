@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 streambeam-proto = { workspace = true }
+streambeam-net = { workspace = true }
+quinn = { workspace = true }
+tokio = { workspace = true }

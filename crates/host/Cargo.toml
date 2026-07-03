@@ -1,0 +1,18 @@
+[package]
+name = "streambeam-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+streambeam-proto = { workspace = true }
+streambeam-net = { workspace = true }
+streambeam-core = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+
+[[bin]]
+name = "streambeam-host"
+path = "src/main.rs"

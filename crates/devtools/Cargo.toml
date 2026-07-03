@@ -13,6 +13,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
+opus = "0.3"
 
 [[bin]]
 name = "fakehost"
@@ -21,6 +23,18 @@ path = "src/fakehost.rs"
 [[bin]]
 name = "devclient"
 path = "src/devclient.rs"
+
+[[bin]]
+name = "playclient"
+path = "src/playclient.rs"
+
+[[bin]]
+name = "streamdemo"
+path = "src/streamdemo.rs"
+
+[[bin]]
+name = "hostdisc"
+path = "src/hostdisc.rs"
 
 [dev-dependencies]
 streambeam-proto = { workspace = true }

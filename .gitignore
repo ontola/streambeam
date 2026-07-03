@@ -2,6 +2,9 @@
 **/*.rs.bk
 *.pdb
 
+# Internal strategy / research docs (not for public repo)
+/docs_internal/
+
 # Local runtime state (identities, paired stores) from dev runs
 /.streambeam-dev/
 
@@ -9,3 +12,4 @@
 app/.dart_tool/
 app/build/
 app/android/.gradle/
+/build/

@@ -228,6 +228,27 @@ pub fn encode_video_frame(
     )
 }
 
+/// One 10 ms Opus packet on the audio channel (K=1, R=0, no RS framing).
+pub fn encode_audio_packet(
+    packet_id: u16,
+    opus_frame: &[u8],
+    capture_ts_us: u32,
+) -> MediaShard {
+    MediaShard {
+        header: MediaHeader {
+            channel: media::CHANNEL_AUDIO,
+            flags: 0,
+            frame_id: packet_id,
+            shard_index: 0,
+            k: 1,
+            r: 0,
+            frame_len: opus_frame.len() as u32,
+            capture_ts_us,
+        },
+        payload: opus_frame.to_vec(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

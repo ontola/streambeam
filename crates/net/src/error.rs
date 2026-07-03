@@ -22,6 +22,8 @@ pub enum NetError {
     MissingPeerCert,
     #[error("stream closed")]
     StreamClosed,
+    #[error("discovery: {0}")]
+    Discovery(String),
     #[error("{0}")]
     Other(String),
 }

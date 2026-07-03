@@ -35,7 +35,8 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(rustls)?));
     let transport = Arc::get_mut(&mut server.transport).expect("fresh server config");
     transport.max_concurrent_bidi_streams(4_u8.into());
-    transport.datagram_receive_buffer_size(Some(1024 * 1024));
+    transport.datagram_send_buffer_size(4 * 1024 * 1024);
+    transport.datagram_receive_buffer_size(Some(4 * 1024 * 1024));
     Ok(server)
 }
 
@@ -53,9 +54,12 @@ pub fn client_config(identity: &Identity, pinned_host: [u8; 32]) -> Result<quinn
     let mut rustls = rustls;
     rustls.alpn_protocols = vec![ALPN.to_vec()];
 
-    Ok(quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(
-        rustls,
-    )?)))
+    let mut client =
+        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(rustls)?));
+    let mut transport = quinn::TransportConfig::default();
+    transport.datagram_receive_buffer_size(Some(4 * 1024 * 1024));
+    client.transport_config(Arc::new(transport));
+    Ok(client)
 }
 
 /// Peer certificate chain from a QUIC connection (rustls backend).
