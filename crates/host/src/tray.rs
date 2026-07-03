@@ -31,7 +31,8 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW, KillTimer, LoadIconW, MessageBoxW,
+    DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW, KillTimer, LoadCursorW, LoadIconW,
+    MessageBoxW,
     PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
     ShowWindow, TrackPopupMenu, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HMENU, IDC_ARROW, IDI_APPLICATION, IDYES, MB_ICONERROR,
@@ -170,7 +171,9 @@ unsafe fn run_message_loop(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let instance = GetModuleHandleW(null());
     let class_name = wide(CLASS_NAME);
-    let cursor = LoadIconW(null_mut(), IDC_ARROW);
+    // IDC_ARROW is a *cursor* resource ID — must go through LoadCursorW, not
+    // LoadIconW (that mismatch was rendering the wrong glyph on hover).
+    let cursor = LoadCursorW(null_mut(), IDC_ARROW);
     let wc = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(wnd_proc),
