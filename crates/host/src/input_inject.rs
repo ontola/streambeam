@@ -1,3 +1,7 @@
+// This module is Win32 FFI glue; each `unsafe fn` body is deliberately one big
+// unsafe region rather than nesting `unsafe {}` around every call.
+#![cfg_attr(windows, allow(unsafe_op_in_unsafe_fn))]
+
 //! Apply client [`InputEvent`]s to the host OS (Windows [`SendInput`] / cursor APIs).
 
 use streambeam_proto::input::InputEvent;
@@ -50,14 +54,14 @@ unsafe fn set_cursor_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
 
 #[cfg(windows)]
 unsafe fn mouse_move(dx: i16, dy: i16) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{mouse_event, MOUSEEVENTF_MOVE};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{mouse_event, MOUSEEVENTF_MOVE};
 
     mouse_event(MOUSEEVENTF_MOVE, dx as i32, dy as i32, 0, 0);
 }
 
 #[cfg(windows)]
 unsafe fn mouse_button(button: u8, down: bool) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
         MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     };

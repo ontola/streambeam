@@ -1,6 +1,8 @@
 //! Windows host pipeline traits. Real capture/encode lands in M2; mock works on macOS.
 
 pub mod audio;
+#[cfg(windows)]
+pub mod capture;
 pub mod data_dir;
 pub mod encode;
 pub mod input_inject;

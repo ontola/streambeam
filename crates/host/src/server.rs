@@ -145,15 +145,36 @@ impl StreamControl {
     }
 }
 
+/// Build the video source: real desktop capture on Windows, else the test clip.
+fn build_encoder(fps: u32) -> Box<dyn VideoEncoder> {
+    #[cfg(windows)]
+    {
+        match crate::capture::DesktopEncoder::new(fps) {
+            Ok(enc) => {
+                let (w, h) = enc.dimensions();
+                eprintln!("desktop capture ready — {w}x{h} @ {fps}fps");
+                return Box::new(enc);
+            }
+            Err(e) => {
+                eprintln!("desktop capture unavailable ({e}) — using bundled test clip");
+            }
+        }
+    }
+    let _ = fps;
+    Box::new(MockEncoder::bundled())
+}
+
 pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let encoder = MockEncoder::bundled();
+    // One shared encoder feeds every connection (Desktop Duplication is
+    // single-instance, so multiple simultaneous viewers aren't supported yet).
+    let encoder = build_encoder(config.fps);
     let (width, height) = encoder.dimensions();
     let codec_config = encoder.codec_config();
     eprintln!(
-        "encoder ready — {width}x{height}, {} frames, {} opus packets",
-        encoder.frame_count(),
+        "encoder ready — {width}x{height}, {} opus packets",
         OpusCatalog::bundled().len()
     );
+    let encoder = Arc::new(AsyncMutex::new(encoder));
 
     let identity = Identity::load_or_generate(&config.identity_path)?;
     let paired_path = config.paired_store.clone();
@@ -259,13 +280,12 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         let paired_path = paired_path.clone();
         let approval_tx = config.pairing_request_tx.clone();
         let controls = controls.clone();
+        let encoder = encoder.clone();
         let fps = config.fps;
         let width = width as u16;
         let height = height as u16;
 
         tokio::spawn(async move {
-            let encoder = MockEncoder::bundled();
-            let encoder = Arc::new(AsyncMutex::new(encoder));
             if let Err(e) = handle_client(
                 incoming,
                 store,
@@ -306,7 +326,7 @@ fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
 async fn handle_client(
     incoming: quinn::Incoming,
     store: Arc<Mutex<PairingStore>>,
-    encoder: Arc<AsyncMutex<MockEncoder>>,
+    encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
     audio: Arc<OpusCatalog>,
     codec_config: Option<Vec<u8>>,
     width: u16,
@@ -548,7 +568,7 @@ async fn request_approval(
 
 async fn stream_video(
     conn: quinn::Connection,
-    encoder: Arc<AsyncMutex<MockEncoder>>,
+    encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
     ctl: Arc<StreamControl>,
     frame_interval: Duration,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -567,9 +587,12 @@ async fn stream_video(
 
         let frame = {
             let mut enc = encoder.lock().await;
-            enc.encode_next()
-                .map_err(|e| e.to_string())?
-                .ok_or("encoder returned no frame")?
+            enc.encode_next().map_err(|e| e.to_string())?
+        };
+        // No frame this tick (e.g. screen unchanged) — wait and retry.
+        let Some(frame) = frame else {
+            tokio::time::sleep(frame_interval).await;
+            continue;
         };
 
         let shards = encode_video_frame(

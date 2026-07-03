@@ -13,8 +13,9 @@ use windows_sys::Win32::Foundation::{
     GetLastError, COLORREF, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, GetStockObject,
-    InvalidateRect, SetBkMode, DT_CENTER, DT_TOP, HBRUSH, HDC, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
+    GetStockObject, InvalidateRect, SelectObject, SetBkMode, SetTextColor, CLEARTYPE_QUALITY,
+    DEFAULT_CHARSET, DT_CENTER, DT_TOP, FW_NORMAL, HBRUSH, HDC, HFONT, PAINTSTRUCT, TRANSPARENT,
     WHITE_BRUSH,
 };
 use windows_sys::Win32::System::DataExchange::{
@@ -37,7 +38,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_ICONQUESTION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MF_SEPARATOR, MF_STRING, MSG,
     SW_HIDE, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_CLOSE,
     WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY, WM_LBUTTONUP, WM_PAINT,
-    WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    WM_RBUTTONUP, WM_SETFONT, WM_TIMER, WM_USER, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_MINIMIZEBOX,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
 use crate::server::{HostControls, PairApproval};
@@ -63,6 +65,8 @@ const CF_UNICODETEXT: u32 = 13;
 const BST_CHECKED: isize = 1;
 
 static APP: OnceLock<Arc<AppState>> = OnceLock::new();
+/// The shared Segoe UI font handle (HFONT stored as isize), created on WM_CREATE.
+static FONT: AtomicIsize = AtomicIsize::new(0);
 
 struct AppState {
     hwnd: AtomicIsize,
@@ -180,15 +184,17 @@ unsafe fn run_message_loop(
     }
 
     let title = wide("StreamBeam Host");
+    // Fixed-size dialog: caption + minimize + close, but no resize/maximize so the
+    // hand-placed layout can't be broken by dragging the edges.
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         class_name.as_ptr(),
         title.as_ptr(),
-        WS_OVERLAPPEDWINDOW,
+        WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        560,
-        660,
+        440,
+        600,
         null_mut(),
         null_mut(),
         instance,
@@ -199,7 +205,9 @@ unsafe fn run_message_loop(
     }
     state.hwnd.store(hwnd as isize, Ordering::SeqCst);
     add_tray_icon(hwnd);
-    ShowWindow(hwnd, SW_HIDE);
+    // Show the QR/status window immediately on launch — closing it (WM_CLOSE)
+    // still just hides it to the tray, same as clicking the tray icon later.
+    show_window(hwnd);
     // A device may have connected before the window existed — drain the queue.
     PostMessageW(hwnd, WM_PAIR_REQUEST, 0, 0);
     // The server may have already failed to bind before the window existed.
@@ -222,35 +230,23 @@ unsafe extern "system" fn wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_CREATE => {
+            let font = create_ui_font();
+            FONT.store(font as isize, Ordering::SeqCst);
+
             let cb_discover = create_checkbox(
                 hwnd,
                 ID_DISCOVER,
                 "Discoverable on the local network",
                 24,
-                336,
+                332,
             );
-            let cb_accept = create_checkbox(hwnd, ID_ACCEPT, "Accept new connections", 24, 366);
+            let cb_accept = create_checkbox(hwnd, ID_ACCEPT, "Accept new connections", 24, 364);
+            SendMessageW(cb_discover, WM_SETFONT, font as usize, 1);
+            SendMessageW(cb_accept, WM_SETFONT, font as usize, 1);
             if let Some(controls) = app_controls() {
                 SendMessageW(cb_discover, BM_SETCHECK, controls.is_discoverable() as usize, 0);
                 SendMessageW(cb_accept, BM_SETCHECK, controls.accepts_connections() as usize, 0);
             }
-
-            let button_class = wide("BUTTON");
-            let label = wide("Copy code");
-            CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                button_class.as_ptr(),
-                label.as_ptr(),
-                WS_CHILD | WS_VISIBLE,
-                210,
-                596,
-                130,
-                34,
-                hwnd,
-                ID_COPY as HMENU,
-                GetModuleHandleW(null()),
-                null_mut(),
-            );
 
             // Refresh the connected-clients list once a second.
             SetTimer(hwnd, REFRESH_TIMER, 1000, None);
@@ -326,9 +322,9 @@ unsafe extern "system" fn wnd_proc(
                 // Repaint only the client-list panel to avoid flickering the QR.
                 let panel = RECT {
                     left: 0,
-                    top: 400,
-                    right: 560,
-                    bottom: 660,
+                    top: 392,
+                    right: 440,
+                    bottom: 600,
                 };
                 InvalidateRect(hwnd, &panel, 1);
             }
@@ -340,6 +336,10 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_DESTROY => {
             KillTimer(hwnd, REFRESH_TIMER);
+            let font = FONT.swap(0, Ordering::SeqCst) as HFONT;
+            if !font.is_null() {
+                DeleteObject(font);
+            }
             remove_tray_icon(hwnd);
             PostQuitMessage(0);
             0
@@ -428,14 +428,21 @@ unsafe fn paint(hwnd: HWND) {
     FillRect(hdc, &client, white);
     DeleteObject(white);
 
+    // Use the modern UI font (and a soft near-black) for all text on this DC.
+    let font = FONT.load(Ordering::SeqCst) as HFONT;
+    if !font.is_null() {
+        SelectObject(hdc, font);
+    }
+    SetTextColor(hdc, rgb(28, 28, 30));
+
     if let Some(payload) = current_payload() {
         draw_qr(hdc, &client, &payload);
         draw_text(
             hdc,
             24,
-            300,
+            296,
             client.right - 24,
-            326,
+            320,
             "Scan with the StreamBeam Android app",
         );
     } else {
@@ -449,14 +456,14 @@ unsafe fn paint(hwnd: HWND) {
 
 /// Draw the "Connected clients" heading and the current list below the toggles.
 unsafe fn draw_clients(hdc: HDC, client: &RECT) {
-    draw_text_left(hdc, 24, 408, client.right - 24, 430, "Connected clients");
+    draw_text_left(hdc, 24, 400, client.right - 24, 422, "Connected clients");
     let clients = app_controls().map(|c| c.clients()).unwrap_or_default();
     if clients.is_empty() {
-        draw_text_left(hdc, 32, 434, client.right - 24, 458, "— none connected —");
+        draw_text_left(hdc, 32, 426, client.right - 24, 450, "— none connected —");
         return;
     }
-    let mut y = 434;
-    for entry in clients.iter().take(7) {
+    let mut y = 426;
+    for entry in clients.iter().take(6) {
         let line = format!("•  {}   {}", entry.name, entry.addr.ip());
         draw_text_left(hdc, 32, y, client.right - 24, y + 22, &line);
         y += 22;
@@ -526,6 +533,27 @@ unsafe fn draw_text_left(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32,
     let text = wide(text);
     // DT_LEFT is the default (0), so DT_TOP alone left-aligns.
     DrawTextW(hdc, text.as_ptr(), -1, &mut rect, DT_TOP);
+}
+
+/// Create the shared Segoe UI font (negative height = pixel size).
+unsafe fn create_ui_font() -> HFONT {
+    let face = wide("Segoe UI");
+    CreateFontW(
+        -18,
+        0,
+        0,
+        0,
+        FW_NORMAL as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET as u32,
+        0,
+        0,
+        CLEARTYPE_QUALITY as u32,
+        0,
+        face.as_ptr(),
+    )
 }
 
 /// Create a themed auto-checkbox child control and return its handle.

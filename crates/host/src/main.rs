@@ -1,3 +1,6 @@
+// Release builds are a GUI app (no console window); debug keeps the console for logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! LAN streaming host — Windows capture/encode plugs in behind [`VideoEncoder`] (M2).
 
 use std::net::SocketAddr;
@@ -5,6 +8,8 @@ use std::net::SocketAddr;
 use clap::Parser;
 
 pub mod audio;
+#[cfg(windows)]
+mod capture;
 pub mod data_dir;
 pub mod encode;
 pub mod input_inject;
