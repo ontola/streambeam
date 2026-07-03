@@ -5,6 +5,14 @@ import 'package:flutter/services.dart';
 
 import 'src/rust/api.dart';
 
+/// How single-finger drag maps to the remote mouse.
+enum PointerMode {
+  /// Finger position maps to a point on the PC screen (absolute).
+  direct,
+  /// Drag moves the cursor by delta, like a laptop trackpad (relative).
+  trackpad,
+}
+
 /// Fullscreen stream viewer: pinch-zoom, two-finger pan, edge-drag menu.
 class StreamPlayerScreen extends StatefulWidget {
   const StreamPlayerScreen({
@@ -30,19 +38,27 @@ class StreamPlayerScreen extends StatefulWidget {
   State<StreamPlayerScreen> createState() => _StreamPlayerScreenState();
 }
 
-class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
+class _StreamPlayerScreenState extends State<StreamPlayerScreen>
+    with SingleTickerProviderStateMixin {
   static const _menuWidth = 260.0;
   static const _edgeGrabWidth = 28.0;
   static const _openThreshold = 72.0;
+  static const _hintPeek = 72.0;
+  /// Extra slide-off so shadows / sub-pixel rounding don't peek at the edge.
+  static const _hideSlack = 32.0;
 
   final _transformController = TransformationController();
+  late final AnimationController _hintController;
+  late final Animation<double> _hintPeekAnim;
 
   double _menuDrag = 0;
   bool _menuOpen = false;
   bool _edgeDragActive = false;
+  bool _hintPlayed = false;
   bool _keyboardOpen = false;
   bool _panEnabled = false;
   bool _blockViewerGestures = false;
+  PointerMode _pointerMode = PointerMode.direct;
   final _keyboardFocus = FocusNode();
   final _keyboardCtrl = TextEditingController();
 
@@ -54,6 +70,50 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _transformController.addListener(_onTransformChanged);
+    _hintController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1300),
+    );
+    _hintPeekAnim = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.0, end: _hintPeek)
+            .chain(CurveTween(curve: Curves.easeOutCubic)),
+        weight: 38,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: _hintPeek, end: 0.0)
+            .chain(CurveTween(curve: Curves.easeInCubic)),
+        weight: 62,
+      ),
+    ]).animate(_hintController);
+    _hintController.addListener(_onHintTick);
+    _hintController.addStatusListener(_onHintStatus);
+  }
+
+  void _onHintStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed ||
+        status == AnimationStatus.dismissed) {
+      if (_menuDrag != 0 && !_menuOpen && !_edgeDragActive && mounted) {
+        setState(() => _menuDrag = 0);
+      }
+    }
+  }
+
+  void _onHintTick() {
+    if (!_hintController.isAnimating || _edgeDragActive || _menuOpen) return;
+    final v = _hintPeekAnim.value < 0.5 ? 0.0 : _hintPeekAnim.value;
+    if ((_menuDrag - v).abs() > 0.5) {
+      setState(() => _menuDrag = v);
+    }
+  }
+
+  @override
+  void didUpdateWidget(StreamPlayerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isStreaming && !oldWidget.isStreaming && !_hintPlayed) {
+      _hintPlayed = true;
+      _hintController.forward(from: 0);
+    }
   }
 
   void _onTransformChanged() {
@@ -66,6 +126,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
 
   @override
   void dispose() {
+    _hintController.removeListener(_onHintTick);
+    _hintController.removeStatusListener(_onHintStatus);
+    _hintController.dispose();
     _transformController.removeListener(_onTransformChanged);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _transformController.dispose();
@@ -75,15 +138,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
   }
 
   void _closeMenu() {
+    _hintController.stop();
     setState(() {
       _menuOpen = false;
-      _menuDrag = 0;
-    });
-  }
-
-  void _toggleMenu() {
-    setState(() {
-      _menuOpen = !_menuOpen;
       _menuDrag = 0;
     });
   }
@@ -108,8 +165,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
   }
 
   void _onEdgeDragStart(DragStartDetails details) {
-    final fromEdge = details.globalPosition.dx <= _edgeGrabWidth;
-    if (fromEdge || _menuOpen || _menuDrag > 0) {
+    final screenW = MediaQuery.sizeOf(context).width;
+    final fromRightEdge = details.globalPosition.dx >= screenW - _edgeGrabWidth;
+    if (fromRightEdge || _menuOpen || _menuDrag > 0) {
+      _hintController.stop();
       _edgeDragActive = true;
     }
   }
@@ -117,23 +176,46 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
   void _onEdgeDragUpdate(DragUpdateDetails details) {
     if (!_edgeDragActive) return;
     setState(() {
-      final base = _menuOpen ? _menuWidth : 0.0;
-      _menuDrag = (base + details.delta.dx).clamp(0, _menuWidth);
+      final base = _menuOpen ? _menuWidth : _menuDrag;
+      _menuDrag = (base - details.delta.dx).clamp(0.0, _menuWidth);
+      if (_menuOpen && _menuDrag < _menuWidth) {
+        _menuOpen = false;
+      }
     });
   }
 
   void _onEdgeDragEnd(DragEndDetails details) {
     if (!_edgeDragActive) return;
     _edgeDragActive = false;
-    final open = _menuDrag > _openThreshold ||
-        details.primaryVelocity != null && details.primaryVelocity! > 200;
+    final velocity = details.primaryVelocity ?? 0;
+    final flingOpen = velocity < -350;
+    final flingClose = velocity > 350;
+    final shouldOpen =
+        !flingClose && (_menuDrag > _openThreshold || flingOpen);
     setState(() {
-      _menuOpen = open;
+      _menuOpen = shouldOpen;
       _menuDrag = 0;
     });
   }
 
   double get _menuVisibleWidth => _menuOpen ? _menuWidth : _menuDrag;
+
+  /// Positive X pushes the panel off the right edge of the screen.
+  double get _menuSlideOff {
+    if (_menuOpen) return 0;
+    final visible = _menuDrag;
+    if (visible <= 0) return _menuWidth + _hideSlack;
+    return _menuWidth - visible;
+  }
+
+  bool get _menuBlocksPointer =>
+      _menuOpen ||
+      _edgeDragActive ||
+      (_menuVisibleWidth > 12 && !_hintController.isAnimating);
+
+  bool get _showMenuScrim =>
+      (_menuVisibleWidth > 20 || _edgeDragActive) &&
+      !_hintController.isAnimating;
 
   Size _fitVideoSize(Size viewport) {
     final ratio = widget.aspectRatio;
@@ -169,9 +251,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
       },
       child: Material(
         color: Colors.black,
-        child: Stack(
-        fit: StackFit.expand,
-        children: [
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final menuSlide = _menuSlideOff;
+
+            return Stack(
+              clipBehavior: Clip.hardEdge,
+              fit: StackFit.expand,
+              children: [
           LayoutBuilder(
             builder: (context, constraints) {
               final viewport = Size(constraints.maxWidth, constraints.maxHeight);
@@ -203,12 +290,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
                       ),
                       if (widget.isStreaming &&
                           !_panEnabled &&
-                          !_menuOpen &&
+                          !_menuBlocksPointer &&
                           !_keyboardOpen)
                         _StreamTouchSurface(
                           videoSize: videoSize,
                           refWidth: widget.streamWidth,
                           refHeight: widget.streamHeight,
+                          mode: _pointerMode,
                           onCaptureChanged: (capturing) {
                             if (_blockViewerGestures != capturing) {
                               setState(() => _blockViewerGestures = capturing);
@@ -252,24 +340,40 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
                 ),
               ),
             ),
-          if (_menuVisibleWidth > 0 || _edgeDragActive)
+          if (_showMenuScrim)
             GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: _menuOpen ? _closeMenu : null,
+              onTap: _closeMenu,
+              onHorizontalDragStart: _onEdgeDragStart,
+              onHorizontalDragUpdate: _onEdgeDragUpdate,
+              onHorizontalDragEnd: _onEdgeDragEnd,
               child: Container(color: Colors.black54.withValues(alpha: 0.35)),
             ),
           Positioned(
-            left: _menuVisibleWidth - _menuWidth,
             top: 0,
             bottom: 0,
+            right: 0,
             width: _menuWidth,
-            child: _StreamMenu(
-              onStop: _handleStop,
-              onKeyboard: _openKeyboard,
+            child: Transform.translate(
+              offset: Offset(menuSlide, 0),
+              child: GestureDetector(
+                onHorizontalDragStart: _onEdgeDragStart,
+                onHorizontalDragUpdate: _onEdgeDragUpdate,
+                onHorizontalDragEnd: _onEdgeDragEnd,
+                child: _StreamMenu(
+                  pointerMode: _pointerMode,
+                  onPointerModeChanged: (mode) {
+                    setState(() => _pointerMode = mode);
+                    _closeMenu();
+                  },
+                  onStop: _handleStop,
+                  onKeyboard: _openKeyboard,
+                ),
+              ),
             ),
           ),
           Positioned(
-            left: 0,
+            right: 0,
             top: 0,
             bottom: 0,
             width: _edgeGrabWidth,
@@ -278,39 +382,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
               onHorizontalDragStart: _onEdgeDragStart,
               onHorizontalDragUpdate: _onEdgeDragUpdate,
               onHorizontalDragEnd: _onEdgeDragEnd,
-              onTap: _toggleMenu,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: AnimatedOpacity(
-                  opacity: widget.isStreaming && !_menuOpen ? 0.5 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: Container(
-                    margin: const EdgeInsets.only(left: 4),
-                    width: 4,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: Colors.white54,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-              ),
             ),
           ),
-          if (widget.isStreaming && _menuVisibleWidth == 0 && !_keyboardOpen)
-            Positioned(
-              right: 16,
-              bottom: MediaQuery.paddingOf(context).bottom + 16,
-              child: IconButton(
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.black45,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: _toggleMenu,
-                icon: const Icon(Icons.menu),
-                tooltip: 'Menu',
-              ),
-            ),
           if (_keyboardOpen) ...[
             GestureDetector(
               onTap: _closeKeyboard,
@@ -351,8 +424,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> {
               ),
             ),
           ],
-        ],
-      ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -364,12 +439,14 @@ class _StreamTouchSurface extends StatefulWidget {
     required this.videoSize,
     required this.refWidth,
     required this.refHeight,
+    required this.mode,
     required this.onCaptureChanged,
   });
 
   final Size videoSize;
   final int refWidth;
   final int refHeight;
+  final PointerMode mode;
   final ValueChanged<bool> onCaptureChanged;
 
   @override
@@ -387,6 +464,9 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
   DateTime? _twoFingerDownAt;
   double _twoFingerTravel = 0;
   bool _twoFingerGesture = false;
+  bool _twoFingerScrolled = false;
+  Offset? _lastMovePos;
+  Offset? _twoFingerLastCenter;
 
   int get _refW => widget.refWidth.clamp(1, 65535);
   int get _refH => widget.refHeight.clamp(1, 65535);
@@ -402,6 +482,23 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
     );
   }
 
+  void _sendRel(Offset delta) {
+    final scaleX = _refW / widget.videoSize.width;
+    final scaleY = _refH / widget.videoSize.height;
+    final dx = (delta.dx * scaleX).round().clamp(-32768, 32767);
+    final dy = (delta.dy * scaleY).round().clamp(-32768, 32767);
+    if (dx != 0 || dy != 0) {
+      sendMouseMove(dx: dx, dy: dy);
+    }
+  }
+
+  void _sendScroll(double dyPixels) {
+    final lines = (dyPixels / 24).round().clamp(-32, 32);
+    if (lines != 0) {
+      sendMouseScroll(dx: 0, dy: -lines);
+    }
+  }
+
   void _setCapturing(bool on) {
     widget.onCaptureChanged(on);
   }
@@ -412,14 +509,25 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
       _singleOrigin = event.localPosition;
       _singleDownAt = DateTime.now();
       _singleTravel = 0;
+      _lastMovePos = event.localPosition;
       _setCapturing(true);
-      _sendAbs(event.localPosition);
+      if (widget.mode == PointerMode.direct) {
+        _sendAbs(event.localPosition);
+      }
     } else if (_pointers.length == 2) {
       _twoFingerGesture = true;
+      _twoFingerScrolled = false;
       _twoFingerDownAt = DateTime.now();
       _twoFingerTravel = 0;
+      _twoFingerLastCenter = _twoFingerCenter();
       _setCapturing(false);
     }
+  }
+
+  Offset? _twoFingerCenter() {
+    if (_pointers.length < 2) return null;
+    final pts = _pointers.values.toList(growable: false);
+    return Offset((pts[0].dx + pts[1].dx) / 2, (pts[0].dy + pts[1].dy) / 2);
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -429,7 +537,15 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
         _singleTravel,
         (event.localPosition - _singleOrigin!).distance,
       );
-      _sendAbs(event.localPosition);
+      if (widget.mode == PointerMode.direct) {
+        _sendAbs(event.localPosition);
+      } else {
+        final last = _lastMovePos;
+        if (last != null) {
+          _sendRel(event.localPosition - last);
+        }
+        _lastMovePos = event.localPosition;
+      }
     } else if (_pointers.length == 2 && _twoFingerDownAt != null) {
       final pts = _pointers.values.toList(growable: false);
       if (pts.length == 2) {
@@ -438,6 +554,16 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
           (pts[0] - pts[1]).distance,
         );
       }
+      final center = _twoFingerCenter();
+      final prev = _twoFingerLastCenter;
+      if (center != null && prev != null) {
+        final dy = center.dy - prev.dy;
+        if (dy.abs() > 1) {
+          _twoFingerScrolled = true;
+          _sendScroll(dy);
+        }
+      }
+      _twoFingerLastCenter = center;
     }
   }
 
@@ -446,6 +572,7 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
     final twoStart = _twoFingerDownAt;
     final twoTravel = _twoFingerTravel;
     final twoGesture = _twoFingerGesture;
+    final twoScroll = _twoFingerScrolled;
     final origin = _singleOrigin;
     final downAt = _singleDownAt;
     final travel = _singleTravel;
@@ -454,6 +581,7 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
 
     if (_pointers.isEmpty) {
       if (twoGesture &&
+          !twoScroll &&
           twoStart != null &&
           DateTime.now().difference(twoStart) < _tapTimeout &&
           twoTravel < _tapSlop) {
@@ -463,24 +591,34 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
           downAt != null &&
           travel < _tapSlop &&
           DateTime.now().difference(downAt) < _tapTimeout) {
-        _sendAbs(origin);
+        if (widget.mode == PointerMode.direct) {
+          _sendAbs(origin);
+        }
         sendMouseClick(button: 0);
       }
       _singleOrigin = null;
       _singleDownAt = null;
+      _lastMovePos = null;
       _twoFingerDownAt = null;
+      _twoFingerLastCenter = null;
       _twoFingerGesture = false;
+      _twoFingerScrolled = false;
       _setCapturing(false);
     } else if (_pointers.length == 1) {
       _twoFingerDownAt = null;
+      _twoFingerLastCenter = null;
       _twoFingerGesture = false;
+      _twoFingerScrolled = false;
       _twoFingerTravel = 0;
       final remaining = _pointers.values.first;
       _singleOrigin = remaining;
       _singleDownAt = DateTime.now();
       _singleTravel = 0;
+      _lastMovePos = remaining;
       _setCapturing(true);
-      _sendAbs(remaining);
+      if (widget.mode == PointerMode.direct) {
+        _sendAbs(remaining);
+      }
     }
   }
 
@@ -489,8 +627,11 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
     if (_pointers.isEmpty) {
       _singleOrigin = null;
       _singleDownAt = null;
+      _lastMovePos = null;
       _twoFingerDownAt = null;
+      _twoFingerLastCenter = null;
       _twoFingerGesture = false;
+      _twoFingerScrolled = false;
       _setCapturing(false);
     }
   }
@@ -510,10 +651,14 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
 
 class _StreamMenu extends StatelessWidget {
   const _StreamMenu({
+    required this.pointerMode,
+    required this.onPointerModeChanged,
     required this.onStop,
     required this.onKeyboard,
   });
 
+  final PointerMode pointerMode;
+  final ValueChanged<PointerMode> onPointerModeChanged;
   final VoidCallback onStop;
   final VoidCallback onKeyboard;
 
@@ -521,12 +666,16 @@ class _StreamMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final topPad = math.max(MediaQuery.paddingOf(context).top, 16.0);
+    final trackpad = pointerMode == PointerMode.trackpad;
 
     return Material(
       color: theme.colorScheme.surface.withValues(alpha: 0.96),
-      elevation: 8,
+      elevation: 0,
+      shape: const Border(
+        left: BorderSide(color: Color(0x33000000), width: 1),
+      ),
       child: SafeArea(
-        right: false,
+        left: false,
         child: Padding(
           padding: EdgeInsets.fromLTRB(8, topPad, 8, 16),
           child: Column(
@@ -537,6 +686,25 @@ class _StreamMenu extends StatelessWidget {
                 child: Text(
                   'StreamBeam',
                   style: theme.textTheme.titleMedium,
+                ),
+              ),
+              ListTile(
+                leading: Icon(trackpad ? Icons.swipe : Icons.touch_app),
+                title: Text(trackpad ? 'Trackpad' : 'Direct touch'),
+                subtitle: Text(
+                  trackpad
+                      ? 'Drag moves cursor · tap clicks'
+                      : 'Finger maps to screen · tap clicks',
+                  style: theme.textTheme.bodySmall,
+                ),
+                trailing: Switch(
+                  value: trackpad,
+                  onChanged: (on) => onPointerModeChanged(
+                    on ? PointerMode.trackpad : PointerMode.direct,
+                  ),
+                ),
+                onTap: () => onPointerModeChanged(
+                  trackpad ? PointerMode.direct : PointerMode.trackpad,
                 ),
               ),
               ListTile(
@@ -552,6 +720,17 @@ class _StreamMenu extends StatelessWidget {
                   style: theme.textTheme.bodySmall,
                 ),
                 onTap: onKeyboard,
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Text(
+                  'Drag from the right edge for menu\n'
+                  '1 finger: move · tap: left click\n'
+                  '2 fingers: scroll · tap: right click',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             ],
           ),

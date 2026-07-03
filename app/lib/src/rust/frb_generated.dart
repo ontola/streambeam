@@ -72,7 +72,7 @@ class StreambeamFfi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 126567950;
+  int get rustContentHash => 1282385181;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -115,6 +115,10 @@ abstract class StreambeamFfiApi extends BaseApi {
   });
 
   void crateApiSendMouseClick({required int button});
+
+  void crateApiSendMouseMove({required int dx, required int dy});
+
+  void crateApiSendMouseScroll({required int dx, required int dy});
 
   Future<void> crateApiSetAppDataDir({required String dir});
 
@@ -400,6 +404,56 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       const TaskConstMeta(debugName: "send_mouse_click", argNames: ["button"]);
 
   @override
+  void crateApiSendMouseMove({required int dx, required int dy}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_16(dx, serializer);
+          sse_encode_i_16(dy, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSendMouseMoveConstMeta,
+        argValues: [dx, dy],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendMouseMoveConstMeta =>
+      const TaskConstMeta(debugName: "send_mouse_move", argNames: ["dx", "dy"]);
+
+  @override
+  void crateApiSendMouseScroll({required int dx, required int dy}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_16(dx, serializer);
+          sse_encode_i_16(dy, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSendMouseScrollConstMeta,
+        argValues: [dx, dy],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendMouseScrollConstMeta => const TaskConstMeta(
+    debugName: "send_mouse_scroll",
+    argNames: ["dx", "dy"],
+  );
+
+  @override
   Future<void> crateApiSetAppDataDir({required String dir}) {
     return handler.executeNormal(
       NormalTask(
@@ -409,7 +463,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 12,
             port: port_,
           );
         },
@@ -433,7 +487,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -466,6 +520,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       port: dco_decode_u_16(arr[1]),
       addrs: dco_decode_list_String(arr[2]),
     );
+  }
+
+  @protected
+  int dco_decode_i_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -558,6 +618,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     var var_port = sse_decode_u_16(deserializer);
     var var_addrs = sse_decode_list_String(deserializer);
     return DiscoveredHost(name: var_name, port: var_port, addrs: var_addrs);
+  }
+
+  @protected
+  int sse_decode_i_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt16();
   }
 
   @protected
@@ -685,6 +751,12 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     sse_encode_String(self.name, serializer);
     sse_encode_u_16(self.port, serializer);
     sse_encode_list_String(self.addrs, serializer);
+  }
+
+  @protected
+  void sse_encode_i_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt16(self);
   }
 
   @protected

@@ -9,6 +9,12 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `receive_stats`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
+void sendMouseMove({required int dx, required int dy}) =>
+    StreambeamFfi.instance.api.crateApiSendMouseMove(dx: dx, dy: dy);
+
+void sendMouseScroll({required int dx, required int dy}) =>
+    StreambeamFfi.instance.api.crateApiSendMouseScroll(dx: dx, dy: dy);
+
 void sendMouseAbs({
   required int x,
   required int y,

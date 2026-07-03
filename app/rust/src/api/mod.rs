@@ -8,6 +8,18 @@ use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
 use crate::store::{client_identity_path, saved_host_path};
 
 #[flutter_rust_bridge::frb(sync)]
+pub fn send_mouse_move(dx: i16, dy: i16) {
+    #[cfg(target_os = "android")]
+    crate::input::send(streambeam_proto::input::InputEvent::MouseMove { dx, dy });
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_mouse_scroll(dx: i16, dy: i16) {
+    #[cfg(target_os = "android")]
+    crate::input::send(streambeam_proto::input::InputEvent::Scroll { dx, dy });
+}
+
+#[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
     #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::MouseAbs {

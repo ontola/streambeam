@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 126567950;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1282385181;
 
 // Section: executor
 
@@ -367,6 +367,72 @@ fn wire__crate__api__send_mouse_click_impl(
         },
     )
 }
+fn wire__crate__api__send_mouse_move_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "send_mouse_move",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_dx = <i16>::sse_decode(&mut deserializer);
+            let api_dy = <i16>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::send_mouse_move(api_dx, api_dy);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__send_mouse_scroll_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "send_mouse_scroll",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_dx = <i16>::sse_decode(&mut deserializer);
+            let api_dy = <i16>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::send_mouse_scroll(api_dx, api_dy);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__set_app_data_dir_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -453,6 +519,13 @@ impl SseDecode for crate::api::DiscoveredHost {
             port: var_port,
             addrs: var_addrs,
         };
+    }
+}
+
+impl SseDecode for i16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i16::<NativeEndian>().unwrap()
     }
 }
 
@@ -592,7 +665,7 @@ fn pde_ffi_dispatcher_primary_impl(
         4 => wire__crate__api__play_stream_impl(port, ptr, rust_vec_len, data_len),
         5 => wire__crate__api__reconnect_play_stream_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__save_host_from_payload_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -608,7 +681,9 @@ fn pde_ffi_dispatcher_sync_impl(
         7 => wire__crate__api__saved_host_label_impl(ptr, rust_vec_len, data_len),
         8 => wire__crate__api__send_mouse_abs_impl(ptr, rust_vec_len, data_len),
         9 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -666,6 +741,13 @@ impl SseEncode for crate::api::DiscoveredHost {
         <String>::sse_encode(self.name, serializer);
         <u16>::sse_encode(self.port, serializer);
         <Vec<String>>::sse_encode(self.addrs, serializer);
+    }
+}
+
+impl SseEncode for i16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i16::<NativeEndian>(self).unwrap();
     }
 }
 

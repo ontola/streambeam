@@ -26,6 +26,9 @@ abstract class StreambeamFfiApiImplPlatform
   DiscoveredHost dco_decode_discovered_host(dynamic raw);
 
   @protected
+  int dco_decode_i_16(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
@@ -63,6 +66,9 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_i_16(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
@@ -113,6 +119,9 @@ abstract class StreambeamFfiApiImplPlatform
     DiscoveredHost self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_i_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);

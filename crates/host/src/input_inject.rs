@@ -27,6 +27,9 @@ fn apply_windows(event: InputEvent) {
             InputEvent::MouseMove { dx, dy } => {
                 mouse_move(dx, dy);
             }
+            InputEvent::Scroll { dx, dy } => {
+                scroll_wheel(dx, dy);
+            }
             _ => {}
         }
     }
@@ -69,4 +72,21 @@ unsafe fn mouse_button(button: u8, down: bool) {
         _ => return,
     };
     mouse_event(flags, 0, 0, 0, 0);
+}
+
+#[cfg(windows)]
+unsafe fn scroll_wheel(dx: i16, dy: i16) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        mouse_event, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL,
+    };
+
+    // Windows wheel delta is in multiples of 120; scale client lines roughly to that.
+    if dy != 0 {
+        let delta = i32::from(dy).saturating_mul(120);
+        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta as u32, 0);
+    }
+    if dx != 0 {
+        let delta = i32::from(dx).saturating_mul(120);
+        mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, delta as u32, 0);
+    }
 }
