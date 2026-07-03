@@ -1263,6 +1263,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust_lib_streambeam"
+version = "0.1.0"
+dependencies = [
+ "flutter_rust_bridge",
+ "jni",
+ "ndk",
+ "ndk-sys",
+ "streambeam-core",
+ "streambeam-net",
+ "streambeam-proto",
+ "tokio",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1593,19 +1607,6 @@ dependencies = [
  "sha2",
  "subtle",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "streambeam_ffi"
-version = "0.1.0"
-dependencies = [
- "flutter_rust_bridge",
- "jni",
- "ndk",
- "streambeam-core",
- "streambeam-net",
- "streambeam-proto",
- "tokio",
 ]
 
 [[package]]

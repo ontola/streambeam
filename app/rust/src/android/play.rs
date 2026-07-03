@@ -1,9 +1,13 @@
 //! Decode Annex-B H.264 access units to an Android Surface via MediaCodec.
 
 use std::net::SocketAddr;
+use std::ptr::NonNull;
 use std::time::Duration;
 
-use ndk::media::media_codec::{MediaCodec, MediaCodecBufferInfo, MediaFormat};
+use ndk::media::media_codec::{
+    DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, MediaCodec, MediaCodecDirection,
+    MediaFormat,
+};
 use ndk::native_window::NativeWindow;
 use streambeam_core::{
     annex_b::{extract_avc_decoder_config, nal_with_start_code},
@@ -15,7 +19,7 @@ use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
 use crate::api::StreamStats;
 use crate::store::client_identity_path;
 
-const TIMEOUT_US: i64 = 30_000;
+const TIMEOUT: Duration = Duration::from_micros(30_000);
 
 pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> Result<StreamStats, String> {
     let session = connect_as_identity(
@@ -51,6 +55,22 @@ pub async fn run_known(
 }
 
 async fn play_session(
+    session: ClientSession,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        rt.block_on(play_session_inner(session, native_window, max_video_frames))
+    })
+    .await
+    .map_err(|e| format!("playback task failed: {e}"))?
+}
+
+async fn play_session_inner(
     mut session: ClientSession,
     native_window: i64,
     max_video_frames: u32,
@@ -66,33 +86,23 @@ async fn play_session(
     let csd1 = nal_with_start_code(&pps);
 
     let window = unsafe {
-        NativeWindow::from_ptr(native_window as *mut _)
-            .ok_or("invalid native window")?
+        let ptr = NonNull::new(native_window as *mut ndk_sys::ANativeWindow)
+            .ok_or("invalid native window")?;
+        NativeWindow::from_ptr(ptr)
     };
 
-    let mut codec = MediaCodec::from_decoder_type("video/avc").map_err(|e| e.to_string())?;
+    let mut codec = MediaCodec::from_decoder_type("video/avc")
+        .ok_or("no AVC decoder available")?;
     let mut format = MediaFormat::new();
-    format
-        .set_str("mime", "video/avc")
-        .map_err(|e| e.to_string())?;
-    format
-        .set_i32("width", i32::from(session.width))
-        .map_err(|e| e.to_string())?;
-    format
-        .set_i32("height", i32::from(session.height))
-        .map_err(|e| e.to_string())?;
-    format
-        .set_i32("max-input-size", 512 * 1024)
-        .map_err(|e| e.to_string())?;
-    format
-        .set_buffer("csd-0", &csd0, 0, csd0.len())
-        .map_err(|e| e.to_string())?;
-    format
-        .set_buffer("csd-1", &csd1, 0, csd1.len())
-        .map_err(|e| e.to_string())?;
+    format.set_str("mime", "video/avc");
+    format.set_i32("width", i32::from(session.width));
+    format.set_i32("height", i32::from(session.height));
+    format.set_i32("max-input-size", 512 * 1024);
+    format.set_buffer("csd-0", &csd0);
+    format.set_buffer("csd-1", &csd1);
 
     codec
-        .configure(&format, Some(&window), Default::default(), 0)
+        .configure(&format, Some(&window), MediaCodecDirection::Decoder)
         .map_err(|e| e.to_string())?;
     codec.start().map_err(|e| e.to_string())?;
 
@@ -111,7 +121,7 @@ async fn play_session(
     } else {
         u64::from(max_video_frames.max(1))
     };
-    let mut pts_us: i64 = 0;
+    let mut pts_us: u64 = 0;
 
     while stats.video_frames < target {
         drain_output(&mut codec)?;
@@ -139,11 +149,14 @@ async fn play_session(
     Ok(stats)
 }
 
-fn feed_access_unit(codec: &mut MediaCodec, data: &[u8], pts_us: i64) -> Result<(), String> {
-    let (index, mut buf) = codec
-        .dequeue_input_buffer(TIMEOUT_US)
-        .map_err(|e| e.to_string())?
-        .ok_or("MediaCodec input buffer unavailable")?;
+fn feed_access_unit(codec: &mut MediaCodec, data: &[u8], pts_us: u64) -> Result<(), String> {
+    let input = codec
+        .dequeue_input_buffer(TIMEOUT)
+        .map_err(|e| e.to_string())?;
+    let DequeuedInputBufferResult::Buffer(mut input_buf) = input else {
+        return Err("MediaCodec input buffer unavailable".into());
+    };
+    let buf = input_buf.buffer_mut();
     if buf.len() < data.len() {
         return Err(format!(
             "input buffer too small ({} < {})",
@@ -151,9 +164,11 @@ fn feed_access_unit(codec: &mut MediaCodec, data: &[u8], pts_us: i64) -> Result<
             data.len()
         ));
     }
-    buf[..data.len()].copy_from_slice(data);
+    for (dst, &byte) in buf[..data.len()].iter_mut().zip(data.iter()) {
+        dst.write(byte);
+    }
     codec
-        .queue_input_buffer(index, 0, data.len(), pts_us, 0)
+        .queue_input_buffer(input_buf, 0, data.len(), pts_us, 0)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -161,35 +176,23 @@ fn feed_access_unit(codec: &mut MediaCodec, data: &[u8], pts_us: i64) -> Result<
 fn drain_output(codec: &mut MediaCodec) -> Result<(), String> {
     loop {
         match codec
-            .dequeue_output_buffer(TIMEOUT_US)
+            .dequeue_output_buffer(TIMEOUT)
             .map_err(|e| e.to_string())?
         {
-            Some((index, info)) => {
-                let render = !info.is_codec_config();
+            DequeuedOutputBufferInfoResult::Buffer(out) => {
+                let flags = out.info().flags();
+                let render = flags & 0x2 == 0;
                 codec
-                    .release_output_buffer(index, render)
+                    .release_output_buffer(out, render)
                     .map_err(|e| e.to_string())?;
-                if info.is_end_of_stream() {
+                if flags & 0x4 != 0 {
                     break;
                 }
             }
-            None => break,
+            DequeuedOutputBufferInfoResult::TryAgainLater => break,
+            DequeuedOutputBufferInfoResult::OutputFormatChanged
+            | DequeuedOutputBufferInfoResult::OutputBuffersChanged => {}
         }
     }
     Ok(())
-}
-
-trait BufferInfoExt {
-    fn is_codec_config(&self) -> bool;
-    fn is_end_of_stream(&self) -> bool;
-}
-
-impl BufferInfoExt for MediaCodecBufferInfo {
-    fn is_codec_config(&self) -> bool {
-        self.flags & 0x2 != 0
-    }
-
-    fn is_end_of_stream(&self) -> bool {
-        self.flags & 0x4 != 0
-    }
 }

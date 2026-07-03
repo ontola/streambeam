@@ -1,12 +1,11 @@
 [package]
-name = "streambeam_ffi"
+name = "rust_lib_streambeam"
 version = "0.1.0"
 edition = "2024"
 
 [workspace]
 
 [lib]
-name = "rust_lib_streambeam"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
@@ -19,6 +18,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 ndk = { version = "0.9", features = ["media", "nativewindow"] }
+ndk-sys = "0.6"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
