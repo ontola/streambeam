@@ -8,6 +8,11 @@ license.workspace = true
 streambeam-proto = { workspace = true }
 streambeam-net = { workspace = true }
 streambeam-core = { workspace = true }
+quinn = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
 
 [[bin]]
 name = "fakehost"
@@ -16,3 +21,6 @@ path = "src/fakehost.rs"
 [[bin]]
 name = "devclient"
 path = "src/devclient.rs"
+
+[dev-dependencies]
+streambeam-proto = { workspace = true }
