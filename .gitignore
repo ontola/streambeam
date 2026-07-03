@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Local runtime state (identities, paired stores) from dev runs
+/.streambeam-dev/
+
+# Flutter (app/ added in M3)
+app/.dart_tool/
+app/build/
+app/android/.gradle/

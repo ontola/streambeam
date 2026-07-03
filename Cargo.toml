@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/proto",
+    "crates/net",
+    "crates/core",
+    "crates/devtools",
+]
+# crates/host is Windows-only; it joins the workspace but its heavy deps are
+# gated behind [target.'cfg(windows)'.dependencies] so `cargo check` works on macOS.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joepio/streambeam"
+
+[workspace.dependencies]
+streambeam-proto = { path = "crates/proto" }
+streambeam-net = { path = "crates/net" }
+streambeam-core = { path = "crates/core" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", features = ["use-std"] }
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "fs", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rustls-pki-types = "1"
+x509-parser = "0.17"
+reed-solomon-simd = "3"
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.9"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
