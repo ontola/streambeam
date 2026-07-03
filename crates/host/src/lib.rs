@@ -6,6 +6,7 @@ pub mod capture;
 pub mod data_dir;
 pub mod encode;
 pub mod input_inject;
+pub mod logging;
 pub mod mock;
 pub mod qr;
 pub mod server;

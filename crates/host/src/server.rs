@@ -152,11 +152,13 @@ fn build_encoder(fps: u32) -> Box<dyn VideoEncoder> {
         match crate::capture::DesktopEncoder::new(fps) {
             Ok(enc) => {
                 let (w, h) = enc.dimensions();
-                eprintln!("desktop capture ready — {w}x{h} @ {fps}fps");
+                crate::logging::log(&format!("desktop capture ready — {w}x{h} @ {fps}fps"));
                 return Box::new(enc);
             }
             Err(e) => {
-                eprintln!("desktop capture unavailable ({e}) — using bundled test clip");
+                crate::logging::log(&format!(
+                    "desktop capture unavailable ({e}) — using bundled test clip"
+                ));
             }
         }
     }

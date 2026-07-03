@@ -24,6 +24,12 @@ pub fn paired_store_path() -> PathBuf {
     data_dir().join("paired.json")
 }
 
+/// Always-on log file — release builds have no console (`windows_subsystem =
+/// "windows"`), so this is the only place diagnostics survive to be inspected.
+pub fn log_path() -> PathBuf {
+    data_dir().join("host.log")
+}
+
 pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir)?;

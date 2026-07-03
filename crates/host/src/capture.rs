@@ -1,3 +1,7 @@
+// This module is Win32/COM FFI glue; each `unsafe fn` body is deliberately one
+// big unsafe region rather than nesting `unsafe {}` around every call.
+#![allow(unsafe_op_in_unsafe_fn)]
+
 //! Real desktop capture (DXGI Desktop Duplication) encoded to H.264 with the
 //! built-in Media Foundation encoder.
 //!
@@ -144,7 +148,7 @@ fn run_pipeline(
             Request::Next => {
                 let want_idr = force_idr.swap(false, Ordering::Relaxed);
                 let frame = pipe.capture_and_encode(want_idr).unwrap_or_else(|e| {
-                    eprintln!("capture/encode error: {e}");
+                    crate::logging::log(&format!("capture/encode error: {e}"));
                     None
                 });
                 if frame_tx.send(frame).is_err() {
@@ -168,6 +172,13 @@ struct Pipeline {
     nv12: Vec<u8>,
     have_last: bool,
     frame_index: i64,
+    // Diagnostics: logged periodically so a black/frozen stream is debuggable
+    // from host.log even in a release build with no console attached.
+    stat_calls: u32,
+    stat_acquired: u32,
+    stat_timeout: u32,
+    stat_access_lost: u32,
+    stat_produced: u32,
 }
 
 fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
@@ -199,6 +210,11 @@ impl Pipeline {
                 nv12: vec![0u8; (width * height * 3 / 2) as usize],
                 have_last: false,
                 frame_index: 0,
+                stat_calls: 0,
+                stat_acquired: 0,
+                stat_timeout: 0,
+                stat_access_lost: 0,
+                stat_produced: 0,
             })
         }
     }
@@ -206,10 +222,28 @@ impl Pipeline {
     /// Grab the newest desktop frame (or reuse the last if unchanged), encode it,
     /// and return the resulting access unit (None while the encoder primes).
     fn capture_and_encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
-        unsafe {
+        self.stat_calls += 1;
+        let result = unsafe {
             self.capture_into_nv12()?;
             self.encode(force_idr)
+        };
+        if let Ok(Some(_)) = result {
+            self.stat_produced += 1;
         }
+        // Roughly every 3s at 30fps — enough to catch a stuck pipeline quickly
+        // without flooding host.log.
+        if self.stat_calls % 90 == 0 {
+            let avg_luma = average_luma(&self.nv12, self.width, self.height);
+            crate::logging::log(&format!(
+                "capture stats: {} calls — {} acquired, {} timeout, {} access-lost, {} AUs produced, avg Y={avg_luma}",
+                self.stat_calls,
+                self.stat_acquired,
+                self.stat_timeout,
+                self.stat_access_lost,
+                self.stat_produced,
+            ));
+        }
+        result
     }
 
     unsafe fn capture_into_nv12(&mut self) -> Result<(), String> {
@@ -219,8 +253,11 @@ impl Pipeline {
             .duplication
             .AcquireNextFrame(100, &mut info, &mut resource)
         {
-            Ok(()) => {}
+            Ok(()) => {
+                self.stat_acquired += 1;
+            }
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                self.stat_timeout += 1;
                 // No change since last frame; reuse the last NV12 (or a black
                 // frame if we have never captured yet).
                 if !self.have_last {
@@ -232,6 +269,8 @@ impl Pipeline {
                 return Ok(());
             }
             Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
+                self.stat_access_lost += 1;
+                crate::logging::log(&format!("duplication access lost, recreating: {e}"));
                 let (dup, _, _) = create_duplication(&self.device)?;
                 self.duplication = dup;
                 return Ok(());
@@ -546,4 +585,24 @@ fn bgra_to_nv12(src: &[u8], stride: usize, width: u32, height: u32, out: &mut [u
             uv += 2;
         }
     }
+}
+
+/// Mean of the Y plane, sampled sparsely for speed. Near 16 means the frame
+/// fed to the encoder is (still) solid black — the giveaway for a stuck or
+/// misdirected capture, vs. a real desktop image which is essentially never
+/// uniformly black.
+fn average_luma(nv12: &[u8], width: u32, height: u32) -> u32 {
+    let y_plane_len = (width * height) as usize;
+    let y_plane = &nv12[..y_plane_len.min(nv12.len())];
+    if y_plane.is_empty() {
+        return 0;
+    }
+    let stride = (y_plane.len() / 4096).max(1);
+    let mut sum = 0u64;
+    let mut n = 0u64;
+    for &b in y_plane.iter().step_by(stride) {
+        sum += b as u64;
+        n += 1;
+    }
+    (sum / n.max(1)) as u32
 }
