@@ -463,7 +463,23 @@ async fn handle_client(
             write_msg(&mut send, &HostMsg::PairReject { reason }).await?;
             return Ok(());
         }
-        HelloVerdict::NeedsApproval => {
+        HelloVerdict::NeedsApproval { proof_verified } => {
+            if !proof_verified && approval_tx.is_none() {
+                // Headless host, no approval UI, and the client presented no
+                // pairing proof: refuse rather than auto-enroll. Auto-approving
+                // this case would let any LAN device self-enroll (the original
+                // vulnerability this branch closes) — a proof-less Hello may
+                // only be enrolled via an explicit interactive approval.
+                log!("pair rejected for {client_name}: no pairing proof and no interactive approval UI");
+                write_msg(
+                    &mut send,
+                    &HostMsg::PairReject {
+                        reason: "pairing requires a valid proof or interactive approval".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
             let approved = request_approval(
                 approval_tx.as_ref(),
                 &client_name,
