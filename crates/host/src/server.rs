@@ -187,12 +187,21 @@ pub struct PairApproval {
 
 struct StreamControl {
     force_idr: AtomicBool,
+    /// Pending RFI invalidate range, `(first_frame, last_frame)`. A newer
+    /// report simply replaces the previous one rather than widening it: by
+    /// the time a second `InvalidateRefFrames` arrives, the client's own view
+    /// of "what's lost" already supersedes the first report (its own
+    /// `LossReport` already folds prior losses into one contiguous run), so
+    /// coalescing to "newest wins" is simpler than merging ranges and no less
+    /// correct here.
+    invalidate: Mutex<Option<(u16, u16)>>,
 }
 
 impl StreamControl {
     fn new() -> Self {
         Self {
             force_idr: AtomicBool::new(false),
+            invalidate: Mutex::new(None),
         }
     }
 
@@ -202,6 +211,14 @@ impl StreamControl {
 
     fn take_force_idr(&self) -> bool {
         self.force_idr.swap(false, Ordering::Relaxed)
+    }
+
+    fn request_invalidate(&self, first_frame: u16, last_frame: u16) {
+        *self.invalidate.lock().unwrap() = Some((first_frame, last_frame));
+    }
+
+    fn take_invalidate(&self) -> Option<(u16, u16)> {
+        self.invalidate.lock().unwrap().take()
     }
 }
 
@@ -544,6 +561,10 @@ async fn handle_client(
     let stream_ctl = Arc::new(StreamControl::new());
     let mut streaming = false;
     let mut last_idr = std::time::Instant::now();
+    // RFI's invalidate is cheaper to service than a full IDR (no keyframe
+    // burst), so it gets a looser gate than RequestIdr's 250ms — still capped
+    // so a misbehaving/hostile client can't spam the control stream.
+    let mut last_invalidate = std::time::Instant::now();
 
     loop {
         let msg: ClientMsg = tokio::select! {
@@ -620,6 +641,16 @@ async fn handle_client(
                     }
                     last_idr = std::time::Instant::now();
                     log!("IDR scheduled");
+                }
+            }
+            ClientMsg::InvalidateRefFrames {
+                first_frame,
+                last_frame,
+            } => {
+                if last_invalidate.elapsed() >= Duration::from_millis(60) {
+                    stream_ctl.request_invalidate(first_frame, last_frame);
+                    last_invalidate = std::time::Instant::now();
+                    log!("invalidate ref frames scheduled: [{first_frame}, {last_frame}]");
                 }
             }
             ClientMsg::Bye => {
@@ -710,9 +741,18 @@ async fn stream_video(
         // throughput well under what the encoder could otherwise sustain.
         let iter_start = std::time::Instant::now();
 
-        if ctl.take_force_idr() {
+        // Drain both signals every iteration so neither goes stale, but only
+        // act on one: a pending IDR is the stronger recovery and makes any
+        // pending invalidate moot (the keyframe it forces doesn't reference
+        // anything the invalidate range was trying to avoid referencing).
+        let force_idr = ctl.take_force_idr();
+        let invalidate = ctl.take_invalidate();
+        if force_idr {
             let mut enc = encoder.lock().await;
             enc.force_idr();
+        } else if let Some((first, last)) = invalidate {
+            let mut enc = encoder.lock().await;
+            enc.invalidate_ref_frames(first, last);
         }
 
         let t_encode = std::time::Instant::now();

@@ -95,6 +95,14 @@ impl DesktopEncoder {
     }
 }
 
+// TODO(M2): real NVENC/AMF/QSV NvEncInvalidateRefFrames-equivalent support.
+// This impl currently relies on VideoEncoder::invalidate_ref_frames's default
+// (falls back to force_idr — always recovers, just not cheaply). Wiring real
+// hardware invalidation here will need a map from StreamBeam's wrapping
+// `frame_id` (assigned per-frame in `server::stream_video`, after encoding)
+// to whatever reference-frame handle/index the chosen hardware encoder uses
+// internally (NVENC reference picture indices, etc.) — that mapping doesn't
+// exist yet and isn't built by this change.
 impl VideoEncoder for DesktopEncoder {
     fn encode_next(&mut self) -> Result<Option<EncodedFrame>, EncodeError> {
         if self.req_tx.send(Request::Next).is_err() {
