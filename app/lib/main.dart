@@ -14,6 +14,7 @@ import 'beam_page.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 import 'stream_player.dart';
+import 'ui.dart';
 
 final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
 final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/releases');
@@ -156,7 +157,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   bool _discoveryBusy = false;
   String? _discoveryError;
   Timer? _discoveryTimer;
-  late final MobileScannerController _scannerController;
+  MobileScannerController? _scannerController;
   String? _lastQrPayload;
   bool _qrPreviewOpen = false;
   bool _clipboardReady = false;
@@ -343,11 +344,13 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshSavedHost();
-    _scannerController = MobileScannerController(
-      autoStart: false,
-      detectionSpeed: DetectionSpeed.noDuplicates,
-      facing: CameraFacing.back,
-    );
+    if (Platform.isAndroid) {
+      _scannerController = MobileScannerController(
+        autoStart: false,
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.back,
+      );
+    }
     unawaited(_ensureMdnsLock());
     unawaited(_discoverHosts());
     unawaited(_refreshClipboard());
@@ -398,7 +401,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _clipboardTimer?.cancel();
     _cancelSurfaceTimeout();
     unawaited(_releaseMdnsLock());
-    _scannerController.dispose();
+    _scannerController?.dispose();
     _payloadCtrl.dispose();
     super.dispose();
   }
@@ -421,9 +424,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (!Platform.isAndroid) return;
     try {
       if (_qrPreviewOpen && !_busy) {
-        await _scannerController.start();
+        await _scannerController?.start();
       } else {
-        await _scannerController.stop();
+        await _scannerController?.stop();
       }
     } catch (_) {
       // Camera may be unavailable briefly while streaming stops.
@@ -573,7 +576,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   Future<void> _beginSession({required bool reconnect}) async {
     if (!Platform.isAndroid) {
-      _reportError('Playback is Android-only.');
+      _setStatus(
+        'Watching on this device is coming soon — use the StreamBeam app on '
+        'your phone to watch for now.',
+      );
       return;
     }
     _cancelSurfaceTimeout();
@@ -822,10 +828,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 ),
                 if (_status != null) ...[
                   const SizedBox(height: 12),
-                  _StatusNotice(
+                  StatusNotice(
                     message: _status!,
                     isError: _statusIsError,
-                    onCopy: () => unawaited(_copyStatus()),
+                    onCopy: _statusIsError
+                        ? () => unawaited(_copyStatus())
+                        : null,
                     onDismiss: _statusIsError ? _dismissStatus : null,
                   ),
                 ],
@@ -833,7 +841,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 // Add a host by QR or pasted code.
                 if (Platform.isAndroid && _qrPreviewOpen) ...[
                   _QrScanPreview(
-                    controller: _scannerController,
+                    controller: _scannerController!,
                     paused: _busy,
                     onDetect: _handleQrDetect,
                   ),
@@ -888,68 +896,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StatusNotice extends StatelessWidget {
-  const _StatusNotice({
-    required this.message,
-    required this.isError,
-    required this.onCopy,
-    this.onDismiss,
-  });
-
-  final String message;
-  final bool isError;
-  final VoidCallback onCopy;
-  final VoidCallback? onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final fg = isError
-        ? theme.colorScheme.onErrorContainer
-        : theme.colorScheme.onSurfaceVariant;
-
-    return Material(
-      color: isError
-          ? theme.colorScheme.errorContainer
-          : theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (isError) ...[
-              Icon(Icons.error_outline, color: fg, size: 20),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: SelectableText(
-                message,
-                style: theme.textTheme.bodyMedium?.copyWith(color: fg),
-              ),
-            ),
-            if (isError) ...[
-              IconButton(
-                onPressed: onCopy,
-                tooltip: 'Copy error',
-                icon: Icon(Icons.copy, size: 20, color: fg),
-                visualDensity: VisualDensity.compact,
-              ),
-              if (onDismiss != null)
-                IconButton(
-                  onPressed: onDismiss,
-                  tooltip: 'Dismiss',
-                  icon: Icon(Icons.close, size: 20, color: fg),
-                  visualDensity: VisualDensity.compact,
-                ),
-            ],
-          ],
         ),
       ),
     );
@@ -1072,49 +1018,67 @@ class _DevicesSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Text('Your devices', style: theme.textTheme.titleMedium),
-            const Spacer(),
-            if (discovering)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: theme.colorScheme.primary,
+        SectionHeader(
+          'Your devices',
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (discovering)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: theme.colorScheme.primary,
+                    ),
                   ),
                 ),
+              Text(
+                discovering
+                    ? 'Searching…'
+                    : hosts.isEmpty
+                        ? 'None found'
+                        : '$onlineCount online · ${hosts.length} listed',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            Text(
-              discovering
-                  ? 'Searching…'
-                  : hosts.isEmpty
-                      ? 'None found'
-                      : '$onlineCount online · ${hosts.length} listed',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
-        const SizedBox(height: 10),
         if (hosts.isEmpty)
           _EmptyDevices(discovering: discovering)
         else
-          ...hosts.map(
-            (h) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _HostCard(
-                host: h,
-                busy: busy,
-                onTap: onHostTap,
-                onForget: onForgetHost,
+          ...hosts.map((h) {
+            final canTap = onHostTap != null && h.online;
+            return DeviceTile(
+              icon: Icons.computer,
+              title: h.name,
+              subtitle: h.addressLabel,
+              active: h.online,
+              onTap: canTap ? () => onHostTap!(h) : null,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  StatusChip(
+                    label: h.online ? 'Online' : 'Offline',
+                    highlight: h.online,
+                  ),
+                  if (h.isSaved && onForgetHost != null)
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: 'Forget ${h.name}',
+                      onPressed: busy ? null : () => onForgetHost!(h),
+                    )
+                  else if (canTap)
+                    Icon(Icons.play_circle_fill,
+                        color: theme.colorScheme.primary),
+                ],
               ),
-            ),
-          ),
+            );
+          }),
         if (discoveryError != null) ...[
           const SizedBox(height: 4),
           Text(
@@ -1138,60 +1102,6 @@ class _DevicesSection extends StatelessWidget {
           const Center(child: CircularProgressIndicator()),
         ],
       ],
-    );
-  }
-}
-
-/// One saved/discovered PC. Online hosts are highlighted and tappable.
-class _HostCard extends StatelessWidget {
-  const _HostCard({
-    required this.host,
-    required this.busy,
-    this.onTap,
-    this.onForget,
-  });
-
-  final _HostListEntry host;
-  final bool busy;
-  final void Function(_HostListEntry host)? onTap;
-  final void Function(_HostListEntry host)? onForget;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final canTap = onTap != null && host.online;
-    return Material(
-      color: host.online
-          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.45)
-          : theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        enabled: canTap,
-        leading: Icon(
-          Icons.computer,
-          color: host.online
-              ? theme.colorScheme.primary
-              : theme.colorScheme.onSurfaceVariant,
-        ),
-        title: Text(host.name),
-        subtitle: Text(host.addressLabel),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _HostStatusChip(online: host.online),
-            if (host.isSaved && onForget != null)
-              IconButton(
-                icon: const Icon(Icons.delete_outline),
-                tooltip: 'Forget ${host.name}',
-                onPressed: busy ? null : () => onForget!(host),
-              )
-            else if (canTap)
-              Icon(Icons.play_circle_fill, color: theme.colorScheme.primary),
-          ],
-        ),
-        onTap: canTap ? () => onTap!(host) : null,
-      ),
     );
   }
 }
@@ -1319,30 +1229,3 @@ class _StreamFromPromo extends StatelessWidget {
   }
 }
 
-class _HostStatusChip extends StatelessWidget {
-  const _HostStatusChip({required this.online});
-
-  final bool online;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final bg = online
-        ? theme.colorScheme.primaryContainer
-        : theme.colorScheme.surfaceContainerHighest;
-    final fg = online
-        ? theme.colorScheme.onPrimaryContainer
-        : theme.colorScheme.onSurfaceVariant;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        online ? 'Online' : 'Offline',
-        style: theme.textTheme.labelSmall?.copyWith(color: fg),
-      ),
-    );
-  }
-}

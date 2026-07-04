@@ -9,6 +9,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import 'main.dart';
 import 'src/rust/api.dart';
+import 'ui.dart';
 
 const _logoAsset = 'assets/streambeam-logo.svg';
 
@@ -319,43 +320,38 @@ class _BeamPageState extends State<BeamPage> {
     final busy = _starting && !_snap.running;
 
     final connectedDevicesSection = [
-      Text(
-        'Connected devices',
-        style: theme.textTheme.titleSmall,
-      ),
-      const SizedBox(height: 8),
-      ..._snap.clients.map((c) => Card(
-            child: ListTile(
-              leading: const Icon(Icons.smartphone),
-              title: Text(c.name),
-              subtitle: Text(c.addr),
-              trailing: Wrap(
-                spacing: 4,
-                children: [
-                  TextButton(
-                    onPressed: () {
-                      try {
-                        hostDisconnectClient(addr: c.addr);
-                        _refresh();
-                      } catch (e) {
-                        _setStatus(e.toString(), error: true);
-                      }
-                    },
-                    child: const Text('Stop'),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      try {
-                        hostForgetClient(addr: c.addr);
-                        _refresh();
-                      } catch (e) {
-                        _setStatus(e.toString(), error: true);
-                      }
-                    },
-                    child: const Text('Remove'),
-                  ),
-                ],
-              ),
+      const SectionHeader('Connected devices'),
+      ..._snap.clients.map((c) => DeviceTile(
+            icon: Icons.smartphone,
+            title: c.name,
+            subtitle: c.addr,
+            active: true,
+            trailing: Wrap(
+              spacing: 4,
+              children: [
+                TextButton(
+                  onPressed: () {
+                    try {
+                      hostDisconnectClient(addr: c.addr);
+                      _refresh();
+                    } catch (e) {
+                      _setStatus(e.toString(), error: true);
+                    }
+                  },
+                  child: const Text('Stop'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    try {
+                      hostForgetClient(addr: c.addr);
+                      _refresh();
+                    } catch (e) {
+                      _setStatus(e.toString(), error: true);
+                    }
+                  },
+                  child: const Text('Remove'),
+                ),
+              ],
             ),
           )),
     ];
@@ -447,11 +443,7 @@ class _BeamPageState extends State<BeamPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Text(
-                    'Settings',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 8),
+                  const SectionHeader('Settings'),
                   Card(
                     child: Column(
                       children: [
@@ -495,17 +487,10 @@ class _BeamPageState extends State<BeamPage> {
                   ),
                   if (_status != null) ...[
                     const SizedBox(height: 12),
-                    MaterialBanner(
-                      content: Text(_status!),
-                      backgroundColor: _statusError
-                          ? theme.colorScheme.errorContainer
-                          : theme.colorScheme.surfaceContainerHighest,
-                      actions: [
-                        TextButton(
-                          onPressed: () => setState(() => _status = null),
-                          child: const Text('Dismiss'),
-                        ),
-                      ],
+                    StatusNotice(
+                      message: _status!,
+                      isError: _statusError,
+                      onDismiss: () => setState(() => _status = null),
                     ),
                   ],
                 ],
@@ -538,11 +523,12 @@ class _AppShellState extends State<AppShell> {
       return _DesktopUnsupportedPage(platformLabel: caps.platformLabel);
     }
 
-    // "Watch" = stream FROM another device; "Beam" = stream TO another device.
-    final Widget watchTab =
-        caps.watch ? const WatchPage() : const _DesktopWatchStub();
-    final Widget beamTab =
-        caps.host ? const BeamPage() : const _BeamComingSoon();
+    // Both tabs use the same pages on every platform ("Watch" = stream FROM
+    // another device, "Beam" = stream TO another device). Each page gates its
+    // own not-yet-wired functionality per platform (e.g. WatchPage shows a
+    // "coming soon" on desktop playback; BeamPage on a host it can't run).
+    final Widget watchTab = const WatchPage();
+    final Widget beamTab = const BeamPage();
 
     const watchDest = NavigationDestination(
       icon: Icon(Icons.download_for_offline_outlined),
@@ -582,49 +568,6 @@ class _AppShellState extends State<AppShell> {
                 onDestinationSelected: (i) => setState(() => _index = i),
                 destinations: destinations,
               ),
-      ),
-    );
-  }
-}
-
-/// Beam tab on a platform that can't host yet (Android today).
-class _BeamComingSoon extends StatelessWidget {
-  const _BeamComingSoon();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: streamBeamAppBar(),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.cast, size: 48, color: theme.colorScheme.primary),
-                const SizedBox(height: 16),
-                Text(
-                  'Beam from this device',
-                  style: theme.textTheme.titleMedium,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Beaming this screen to another device is coming soon. For '
-                  'now, use the Watch tab to stream from another device to '
-                  'here.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -761,47 +704,6 @@ class _UnsupportedFeatureRow extends StatelessWidget {
               : theme.colorScheme.onSurfaceVariant,
         ),
       ],
-    );
-  }
-}
-
-class _DesktopWatchStub extends StatelessWidget {
-  const _DesktopWatchStub();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.phone_android,
-                  size: 48,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Watch on this PC',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Desktop playback is coming soon. Use your phone to watch for now, '
-                  'or stay on the Beam tab to host from this PC.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
