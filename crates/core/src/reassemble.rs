@@ -28,11 +28,54 @@ const COMPLETED_WINDOW: u16 = 256;
 /// stream, or a flood of bogus datagrams) instead of buffering forever.
 const MAX_INFLIGHT_FRAMES: usize = 16;
 
+/// How many frame_ids past the last known-good reference the encoder is
+/// assumed to still hold in its reference window. Mirrors Moonlight's RFI
+/// heuristic: a loss run within this window can plausibly be recovered
+/// surgically (`LossReport::Invalidate` — the host skips the lost ids as
+/// references for its next frame, a cheap P-frame). A run wider than this —
+/// or no known-good reference at all — means the encoder has almost
+/// certainly aged that reference out of its window already, so a surgical
+/// fix can't work and a full keyframe (`LossReport::NeedIdr`) is requested
+/// instead. 32 is a generous guess (roughly a second of reference headroom
+/// at 30fps) with no hardware encoder yet to measure a real DPB depth
+/// against; revisit once M2 lands and exposes the actual value.
+const REF_WINDOW: u16 = 32;
+
 /// Wrap-aware signed distance: how far `id` is *behind* `latest` on the
 /// circular `u16` frame-id space. Positive means behind, negative means
 /// ahead (e.g. the not-yet-complete next frame while the current one lands).
 fn wrap_distance(latest: u16, id: u16) -> i16 {
     latest.wrapping_sub(id) as i16
+}
+
+/// What the client should tell the host after it gives up on recovering
+/// video frame(s), so the host can recover cheaply instead of always forcing
+/// a full keyframe. See `REF_WINDOW` for the decision heuristic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LossReport {
+    /// Contiguous lost `frame_id` run `[first_frame, last_frame]` (inclusive,
+    /// wrapping). The host's next encoded frame should not reference any of
+    /// these — see `ClientMsg::InvalidateRefFrames`.
+    Invalidate { first_frame: u16, last_frame: u16 },
+    /// No usable recent reference (nothing has completed yet, or the loss
+    /// run is wider than `REF_WINDOW`) — ask for a full refresh instead.
+    NeedIdr,
+}
+
+/// A loss run accumulated since the last `take_loss_report`, plus the
+/// reference frame the client still held *at the moment the run started*.
+///
+/// `reference` is frozen at first-loss time rather than re-read live from
+/// `last_completed`, because later (higher) frame_ids can keep completing
+/// over FEC — their bytes arrive fine — even though they're undecodable
+/// without the frame(s) already reported lost. Re-reading a since-advanced
+/// `last_completed` would put the "reference" *ahead* of the loss it's
+/// supposed to precede, producing a backwards range.
+#[derive(Debug, Clone, Copy)]
+struct PendingLoss {
+    reference: Option<u16>,
+    first: u16,
+    last: u16,
 }
 
 /// Collects media shards and returns full frame bytes once K-of-K+R recovery succeeds.
@@ -41,7 +84,10 @@ pub struct FrameReassembler {
     buckets: HashMap<u16, FrameBucket>,
     completed: HashSet<u16>,
     stats: FrameStats,
-    idr_requested: bool,
+    /// Highest completed `frame_id` seen so far (wrap-aware) — the client's
+    /// last known-good reference frame.
+    last_completed: Option<u16>,
+    pending_loss: Option<PendingLoss>,
 }
 
 #[derive(Debug)]
@@ -57,14 +103,72 @@ impl FrameReassembler {
         &self.stats
     }
 
-    pub fn take_idr_request(&mut self) -> bool {
-        std::mem::replace(&mut self.idr_requested, false)
+    /// Take the pending loss report, if any frame was abandoned since the
+    /// last call. See `LossReport` / `REF_WINDOW` for the decision logic.
+    pub fn take_loss_report(&mut self) -> Option<LossReport> {
+        let pending = self.pending_loss.take()?;
+        Some(match pending.reference {
+            None => LossReport::NeedIdr,
+            Some(last_good) => {
+                // How far ahead the newest lost frame is of the last known-good
+                // reference. `wrap_distance(a, b)` returns `a - b` wrap-aware, so
+                // this is positive exactly when `last_good` precedes `pending.last`.
+                let gap = wrap_distance(pending.last, last_good);
+                if gap <= 0 || gap as u16 > REF_WINDOW {
+                    LossReport::NeedIdr
+                } else {
+                    LossReport::Invalidate {
+                        first_frame: last_good.wrapping_add(1),
+                        last_frame: pending.last,
+                    }
+                }
+            }
+        })
+    }
+
+    /// Record that `id` was abandoned without completing, folding it into the
+    /// in-progress loss run (or starting a new one, snapshotting the current
+    /// `last_completed` as that run's reference — see `PendingLoss`).
+    fn record_loss(&mut self, id: u16) {
+        match &mut self.pending_loss {
+            None => {
+                self.pending_loss = Some(PendingLoss {
+                    reference: self.last_completed,
+                    first: id,
+                    last: id,
+                });
+            }
+            Some(pending) => {
+                if wrap_distance(pending.first, id) > 0 {
+                    pending.first = id;
+                }
+                if wrap_distance(id, pending.last) > 0 {
+                    pending.last = id;
+                }
+            }
+        }
+    }
+
+    /// Update the last known-good reference if `id` is newer (wrap-aware)
+    /// than what we'd already seen.
+    fn note_completed(&mut self, id: u16) {
+        let is_newer = match self.last_completed {
+            None => true,
+            Some(prev) => wrap_distance(id, prev) > 0,
+        };
+        if is_newer {
+            self.last_completed = Some(id);
+        }
     }
 
     /// Abandon buckets that are genuinely stale — behind `latest` by at least
     /// `STALE_THRESHOLD` frames. Uses a signed wrap distance so a bucket for a
     /// frame *ahead* of `latest` (e.g. `latest + 1`, mid-flight while
     /// `latest` completes) is never mistaken for a stale one.
+    ///
+    /// Called *before* `note_completed(latest)` updates `last_completed`, so
+    /// any loss recorded here still snapshots the reference frame as it stood
+    /// prior to `latest` — see `PendingLoss`.
     fn abandon_stale(&mut self, latest: u16) {
         let stale: Vec<u16> = self
             .buckets
@@ -75,6 +179,7 @@ impl FrameReassembler {
         for id in stale {
             self.buckets.remove(&id);
             self.stats.frames_abandoned += 1;
+            self.record_loss(id);
         }
     }
 
@@ -89,6 +194,7 @@ impl FrameReassembler {
         {
             self.buckets.remove(&oldest);
             self.stats.frames_abandoned += 1;
+            self.record_loss(oldest);
         }
     }
 
@@ -184,6 +290,7 @@ impl FrameReassembler {
                 self.prune_completed(frame_id);
                 self.stats.frames_complete += 1;
                 self.abandon_stale(frame_id);
+                self.note_completed(frame_id);
                 Ok(Some((frame_id, frame)))
             }
             Err(e) => {
@@ -357,5 +464,162 @@ mod tests {
 
         assert!(asm.buckets.len() <= MAX_INFLIGHT_FRAMES);
         assert!(asm.stats().frames_abandoned > 0);
+    }
+
+    /// RFI (b): losing frames before anything has ever completed leaves no
+    /// known-good reference to invalidate around — must report `NeedIdr`.
+    #[test]
+    fn loss_before_any_completion_reports_need_idr() {
+        let mut asm = FrameReassembler::default();
+        let mtu = 1300;
+
+        assert!(asm.take_loss_report().is_none());
+
+        // Push only a first (incomplete) shard for enough frame_ids to make
+        // the in-flight cap start evicting — nothing ever completes, so
+        // `last_completed` stays `None` throughout.
+        for id in 0..(MAX_INFLIGHT_FRAMES as u16 + 3) {
+            let frame = vec![id as u8; 4000];
+            let shards = encode_video_frame(id, &frame, false, 0, mtu).unwrap();
+            assert!(push(&mut asm, &shards[0]).is_none());
+        }
+
+        assert_eq!(asm.take_loss_report(), Some(LossReport::NeedIdr));
+    }
+
+    /// RFI (a): a couple of middle frames abandoned while there's a recent
+    /// known-good reference must report a wrap-safe `Invalidate` range.
+    #[test]
+    fn abandoned_frames_with_recent_reference_report_invalidate_range() {
+        let mut asm = FrameReassembler::default();
+        let mtu = 1300;
+
+        // Frame 10 completes fully — this becomes the known-good reference.
+        let frame10 = vec![10u8; 4000];
+        let shards10 = encode_video_frame(10, &frame10, false, 0, mtu).unwrap();
+        let mut got10 = None;
+        for shard in &shards10 {
+            if let Some(r) = push(&mut asm, shard) {
+                got10 = Some(r);
+                break;
+            }
+        }
+        assert!(got10.is_some());
+        assert!(asm.take_loss_report().is_none());
+
+        // Frames 11 and 12 each get exactly one (of several) shards — buckets
+        // exist but never complete. Frames 13-15 never get any datagram at
+        // all (no bucket ever created — abandon_stale only evicts *existing*
+        // buckets, so a total blackout for those ids doesn't register here).
+        for id in [11u16, 12u16] {
+            let frame = vec![id as u8; 4000];
+            let shards = encode_video_frame(id, &frame, false, 0, mtu).unwrap();
+            assert!(shards.len() > 1, "test needs a multi-shard frame");
+            assert!(push(&mut asm, &shards[0]).is_none());
+        }
+
+        // Frame 16 completes: wrap_distance(16, 11) = 5 and
+        // wrap_distance(16, 12) = 4, both >= STALE_THRESHOLD — both buckets
+        // get abandoned in this single call.
+        let frame16 = vec![16u8; 4000];
+        let shards16 = encode_video_frame(16, &frame16, false, 0, mtu).unwrap();
+        let mut got16 = None;
+        for shard in &shards16 {
+            if let Some(r) = push(&mut asm, shard) {
+                got16 = Some(r);
+                break;
+            }
+        }
+        assert!(got16.is_some());
+
+        assert_eq!(
+            asm.take_loss_report(),
+            Some(LossReport::Invalidate {
+                first_frame: 11,
+                last_frame: 12,
+            })
+        );
+        // Reported once — a second call finds nothing new pending.
+        assert!(asm.take_loss_report().is_none());
+    }
+
+    /// RFI (c): a loss run wider than `REF_WINDOW` past the last known-good
+    /// reference means the encoder has almost certainly aged that reference
+    /// out of its window already — must fall back to `NeedIdr`.
+    #[test]
+    fn loss_run_wider_than_ref_window_reports_need_idr() {
+        let mut asm = FrameReassembler::default();
+        let mtu = 1300;
+
+        // Frame 0 completes — the only (soon frozen) known-good reference.
+        let frame0 = vec![0u8; 4000];
+        let shards0 = encode_video_frame(0, &frame0, false, 0, mtu).unwrap();
+        for shard in &shards0 {
+            if push(&mut asm, shard).is_some() {
+                break;
+            }
+        }
+
+        // A frame well past REF_WINDOW gets a partial (incomplete) bucket.
+        let lost_id = REF_WINDOW + 8;
+        let frame_lost = vec![lost_id as u8; 4000];
+        let shards_lost = encode_video_frame(lost_id, &frame_lost, false, 0, mtu).unwrap();
+        assert!(shards_lost.len() > 1);
+        assert!(push(&mut asm, &shards_lost[0]).is_none());
+
+        // A later frame completes and triggers abandon_stale on it.
+        let trigger_id = lost_id + STALE_THRESHOLD as u16;
+        let frame_trigger = vec![trigger_id as u8; 4000];
+        let shards_trigger =
+            encode_video_frame(trigger_id, &frame_trigger, false, 0, mtu).unwrap();
+        for shard in &shards_trigger {
+            if push(&mut asm, shard).is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(asm.take_loss_report(), Some(LossReport::NeedIdr));
+    }
+
+    /// RFI (d): the lost-range computation must be correct (and not panic)
+    /// across the u16 `frame_id` wrap boundary.
+    #[test]
+    fn invalidate_range_computed_across_u16_wrap() {
+        let mut asm = FrameReassembler::default();
+        let mtu = 1300;
+
+        // Frame 65535 completes — the known-good reference, right at the
+        // top of the u16 range.
+        let frame_max = vec![7u8; 4000];
+        let shards_max = encode_video_frame(u16::MAX, &frame_max, false, 0, mtu).unwrap();
+        for shard in &shards_max {
+            if push(&mut asm, shard).is_some() {
+                break;
+            }
+        }
+
+        // Frame 0 (just past the wrap) gets a partial bucket that never completes.
+        let frame0 = vec![9u8; 4000];
+        let shards0 = encode_video_frame(0, &frame0, false, 0, mtu).unwrap();
+        assert!(shards0.len() > 1);
+        assert!(push(&mut asm, &shards0[0]).is_none());
+
+        // Frame 4 completes: wrap_distance(4, 0) == 4 >= STALE_THRESHOLD, so
+        // the frame-0 bucket is abandoned here.
+        let frame4 = vec![11u8; 4000];
+        let shards4 = encode_video_frame(4, &frame4, false, 0, mtu).unwrap();
+        for shard in &shards4 {
+            if push(&mut asm, shard).is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            asm.take_loss_report(),
+            Some(LossReport::Invalidate {
+                first_frame: 0, // 65535 + 1 wraps to 0
+                last_frame: 0,
+            })
+        );
     }
 }

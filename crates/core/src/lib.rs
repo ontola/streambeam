@@ -10,11 +10,11 @@ pub use annex_b::{
     avcc_from_sps_pps, extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code,
     split_access_units, split_nal_units, AccessUnit,
 };
-pub use reassemble::{FrameReassembler, FrameStats};
+pub use reassemble::{FrameReassembler, FrameStats, LossReport};
 pub use saved_host::{
     clear as clear_saved_host, load as load_saved_host, save as save_saved_host, SavedHost,
 };
 pub use session::{
-    connect, connect_as, connect_as_identity, connect_known, request_idr, send_input,
-    ClientSession,
+    connect, connect_as, connect_as_identity, connect_known, request_idr,
+    request_invalidate_ref_frames, send_input, ClientSession,
 };

@@ -218,3 +218,24 @@ pub async fn request_idr(
     write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
     Ok(())
 }
+
+/// Reference-Frame-Invalidation (RFI) recovery: tell the host it lost video
+/// `frame_id`s `[first_frame, last_frame]` (inclusive, wrapping) so the next
+/// encoded frame can skip them as references — cheaper than `request_idr`
+/// when there's still a usable reference just before this range. See
+/// `crate::reassemble::LossReport` for how a caller decides between the two.
+pub async fn request_invalidate_ref_frames(
+    session: &mut ClientSession,
+    first_frame: u16,
+    last_frame: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    write_msg(
+        &mut session.send,
+        &ClientMsg::InvalidateRefFrames {
+            first_frame,
+            last_frame,
+        },
+    )
+    .await?;
+    Ok(())
+}
