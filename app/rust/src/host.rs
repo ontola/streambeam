@@ -244,12 +244,12 @@ pub fn set_accepts_connections(on: bool) -> Result<(), String> {
 
 pub fn disconnect_client(addr: &str) -> Result<bool, String> {
     let addr: SocketAddr = addr.parse().map_err(|e| format!("invalid address: {e}"))?;
-    with_controls(|c| Ok(c.disconnect(addr)))
+    with_controls(|c| c.disconnect(addr))
 }
 
 pub fn forget_client(addr: &str) -> Result<bool, String> {
     let addr: SocketAddr = addr.parse().map_err(|e| format!("invalid address: {e}"))?;
-    with_controls(|c| Ok(c.forget(addr)))
+    with_controls(|c| c.forget(addr))
 }
 
 pub fn respond_pairing(id: u64, allow: bool) -> Result<bool, String> {

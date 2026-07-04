@@ -13,6 +13,7 @@ Read these before changing anything substantial:
 - [docs/PROGRESS.md](docs/PROGRESS.md) — **live** milestone status + decisions log. Keep it truthful.
 - [docs/PROTOCOL.md](docs/PROTOCOL.md) — wire format. Must stay in lockstep with `crates/proto`.
 - [docs/WAN.md](docs/WAN.md) — internet/NAT roadmap (iroh candidate). Not v1 scope.
+- [docs/WOL.md](docs/WOL.md) — wake/sleep/hibernate host from phone (Wake-on-LAN + power RPC). Plan, not yet implemented.
 - [site/README.md](site/README.md) — streambeam.eu deploy + Android App Links checklist.
 
 ## Documentation discipline

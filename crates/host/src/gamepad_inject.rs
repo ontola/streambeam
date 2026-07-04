@@ -11,9 +11,10 @@ mod imp {
     use std::net::ToSocketAddrs;
     use std::sync::{Mutex, OnceLock};
 
-    use viiper_client::client::ViiperClient;
+    use viiper_client::client::{DeviceStream, ViiperClient};
     use viiper_client::devices::xbox360::input::Xbox360Input;
-    use viiper_client::types::{Device, DeviceCreateRequest, DeviceStream};
+    use viiper_client::types::{Device, DeviceCreateRequest};
+    use super::InputEvent;
 
     const API_ADDR: &str = "127.0.0.1:3242";
 
