@@ -11,7 +11,7 @@ use std::time::Duration;
 use clap::Parser;
 use streambeam_core::{
     connect_as_identity, connect_known, load_saved_host, save_saved_host, ClientSession,
-    FrameReassembler, SavedHost,
+    FrameReassembler, LossReport, SavedHost,
 };
 use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
 use streambeam_proto::control::ClientMsg;
@@ -117,6 +117,10 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
     let mut last_report = std::time::Instant::now();
     let mut hash_failures = 0u64;
     let mut hash_ok = 0u64;
+    // Shared rate gate for both recovery messages this client can send
+    // (RequestIdr on hash mismatch, RequestIdr/InvalidateRefFrames from the
+    // reassembler's loss report) — one clock, so neither can spam the host
+    // even if both fire the same tick.
     let mut last_idr = std::time::Instant::now();
 
     'recv: loop {
@@ -177,9 +181,28 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
             }
         }
 
-        if asm.take_idr_request() && last_idr.elapsed() >= Duration::from_millis(250) {
-            write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
-            last_idr = std::time::Instant::now();
+        if let Some(report) = asm.take_loss_report() {
+            if last_idr.elapsed() >= Duration::from_millis(250) {
+                match report {
+                    LossReport::Invalidate {
+                        first_frame,
+                        last_frame,
+                    } => {
+                        write_msg(
+                            &mut session.send,
+                            &ClientMsg::InvalidateRefFrames {
+                                first_frame,
+                                last_frame,
+                            },
+                        )
+                        .await?;
+                    }
+                    LossReport::NeedIdr => {
+                        write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
+                    }
+                }
+                last_idr = std::time::Instant::now();
+            }
         }
 
         if last_report.elapsed() >= Duration::from_secs(2) {
