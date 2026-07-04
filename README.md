@@ -13,7 +13,7 @@ No web UI, no browser certificate warnings, no PIN dance.
   directly (Android App Link). Phone without → download page, then connects. The
   pairing code rides in the URL *fragment*, so it never reaches the web server.
 
-Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (original design & milestones) · [PROGRESS.md](docs/PROGRESS.md) (live status & decisions log) · [WAN.md](docs/WAN.md) (internet/NAT roadmap) · [AGENTS.md](AGENTS.md) (working conventions)
+Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PLAN.md](docs/PLAN.md) (original design & milestones) · [PROGRESS.md](docs/PROGRESS.md) (live status & decisions log) · [WAN.md](docs/WAN.md) (internet/NAT roadmap) · [SYMMETRY.md](docs/SYMMETRY.md) (symmetric apps / Flutter-everywhere direction) · [AGENTS.md](AGENTS.md) (working conventions)
 
 ## Workspace
 
