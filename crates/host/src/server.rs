@@ -241,10 +241,22 @@ fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
     }
     #[cfg(target_os = "android")]
     {
-        if crate::android_screen::is_active() {
-            crate::logging::log("android screen capture active — streaming live screen");
-            return Box::new(crate::android_screen::AndroidScreenEncoder);
+        // On Android the host is only ever started as part of beaming, so the
+        // capture service (MediaProjection + MediaCodec) is on its way — but it
+        // starts asynchronously and may not have delivered the codec config yet
+        // when we get here. Wait for it before falling back to the mock clip.
+        for _ in 0..50 {
+            if crate::android_screen::is_ready() {
+                crate::logging::log(
+                    "android screen capture ready — streaming live screen",
+                );
+                return Box::new(crate::android_screen::AndroidScreenEncoder);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        crate::logging::log(
+            "android screen capture didn't become ready — using mock clip",
+        );
     }
     let _ = (fps, max_encode_dim);
     Box::new(MockEncoder::bundled())
@@ -589,7 +601,15 @@ async fn handle_client(
             // exists) — honoring a per-client request means deferring that
             // build to the first SessionRequest instead. Not wired up yet.
             ClientMsg::SessionRequest { .. } => {
-                if let Some(data) = &codec_config {
+                // Read the codec config live: on Android the MediaCodec CSD
+                // (SPS/PPS) can arrive shortly after the host starts, so the
+                // value cached at startup may still be None. Fall back to it.
+                let config_data = encoder
+                    .lock()
+                    .await
+                    .codec_config()
+                    .or_else(|| codec_config.clone());
+                if let Some(data) = &config_data {
                     write_msg(
                         &mut send,
                         &HostMsg::CodecConfig { data: data.clone() },

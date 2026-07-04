@@ -23,4 +23,9 @@ object NativeStream {
 
     /** True when a client asked for a keyframe; ask MediaCodec for a sync frame. */
     external fun nativeTakeIdrRequest(): Boolean
+
+    // Pairing approval (raised as a notification while the app is backgrounded).
+    /** Pending pairing request as "id|clientName", or null. */
+    external fun nativePollApprovalRequest(): String?
+    external fun nativeRespondPairing(id: Long, allow: Boolean)
 }

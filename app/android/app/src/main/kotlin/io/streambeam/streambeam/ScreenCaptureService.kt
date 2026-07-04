@@ -3,6 +3,7 @@ package io.streambeam.streambeam
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -16,7 +17,9 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.Surface
 import android.view.WindowManager
@@ -26,6 +29,10 @@ import android.view.WindowManager
  * and pushes the encoded access units into the Rust host encoder
  * (`streambeam_host::android_screen`) through [NativeStream]. The StreamBeam
  * QUIC host server then streams them to a paired client, unchanged.
+ *
+ * Runs as a foreground service so it survives while you use other apps, and
+ * raises notifications for the ongoing beam and for incoming access requests
+ * (which would otherwise be invisible while the app is backgrounded).
  */
 class ScreenCaptureService : Service() {
     private var projection: MediaProjection? = null
@@ -37,9 +44,29 @@ class ScreenCaptureService : Service() {
     @Volatile
     private var running = false
 
+    private val approvalHandler = Handler(Looper.getMainLooper())
+    private var shownApprovalId: Long = -1
+    private var approvalPoll: Runnable? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_ALLOW, ACTION_DENY -> {
+                val id = intent.getLongExtra(EXTRA_APPROVAL_ID, -1)
+                if (id >= 0) {
+                    NativeStream.nativeRespondPairing(id, intent.action == ACTION_ALLOW)
+                }
+                notificationManager().cancel(APPROVAL_NOTIF_ID)
+                shownApprovalId = -1
+                return START_STICKY
+            }
+        }
+
         if (running) return START_STICKY
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
         val data = intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
@@ -49,7 +76,6 @@ class ScreenCaptureService : Service() {
         }
 
         startAsForeground()
-
         try {
             startCapture(resultCode, data)
         } catch (e: Exception) {
@@ -57,6 +83,7 @@ class ScreenCaptureService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        startApprovalPolling()
         return START_STICKY
     }
 
@@ -72,7 +99,6 @@ class ScreenCaptureService : Service() {
         val proj = mpm.getMediaProjection(resultCode, data)
             ?: throw IllegalStateException("MediaProjection unavailable")
         projection = proj
-        // Android 14+ requires a registered callback before creating displays.
         proj.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 stopSelf()
@@ -159,8 +185,40 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /** Poll the Rust host for incoming access requests and raise a notification. */
+    private fun startApprovalPolling() {
+        val poll = object : Runnable {
+            override fun run() {
+                if (!running) return
+                val pending = try {
+                    NativeStream.nativePollApprovalRequest()
+                } catch (_: Exception) {
+                    null
+                }
+                if (pending != null) {
+                    val sep = pending.indexOf('|')
+                    val id = pending.substring(0, if (sep >= 0) sep else pending.length)
+                        .toLongOrNull() ?: -1
+                    val name = if (sep >= 0) pending.substring(sep + 1) else "A device"
+                    if (id >= 0 && id != shownApprovalId) {
+                        shownApprovalId = id
+                        showApprovalNotification(id, name)
+                    }
+                } else if (shownApprovalId != -1L) {
+                    notificationManager().cancel(APPROVAL_NOTIF_ID)
+                    shownApprovalId = -1
+                }
+                approvalHandler.postDelayed(this, 800)
+            }
+        }
+        approvalPoll = poll
+        approvalHandler.post(poll)
+    }
+
     override fun onDestroy() {
         running = false
+        approvalPoll?.let { approvalHandler.removeCallbacks(it) }
+        notificationManager().cancel(APPROVAL_NOTIF_ID)
         drainThread?.join(500)
         drainThread = null
         try {
@@ -179,21 +237,43 @@ class ScreenCaptureService : Service() {
         super.onDestroy()
     }
 
-    private fun startAsForeground() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+    private fun notificationManager() =
+        getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    private fun ensureChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = notificationManager()
+        nm.createNotificationChannel(
+            NotificationChannel(
                 CHANNEL_ID,
                 "Screen streaming",
                 NotificationManager.IMPORTANCE_LOW,
-            )
-            nm.createNotificationChannel(channel)
-        }
+            ),
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                APPROVAL_CHANNEL_ID,
+                "Access requests",
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
+    }
+
+    private fun startAsForeground() {
+        ensureChannels()
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, ScreenCaptureService::class.java).setAction(ACTION_STOP),
+            pendingFlags(),
+        )
         val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("StreamBeam")
-            .setContentText("Beaming this screen")
+            .setContentTitle("StreamBeam is sharing your screen")
+            .setContentText("Your screen is visible to paired devices.")
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setOngoing(true)
+            .setContentIntent(openAppIntent())
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -204,6 +284,51 @@ class ScreenCaptureService : Service() {
         } else {
             startForeground(NOTIF_ID, notification)
         }
+    }
+
+    private fun showApprovalNotification(id: Long, clientName: String) {
+        val allow = PendingIntent.getService(
+            this,
+            (id * 2).toInt(),
+            Intent(this, ScreenCaptureService::class.java)
+                .setAction(ACTION_ALLOW)
+                .putExtra(EXTRA_APPROVAL_ID, id),
+            pendingFlags(),
+        )
+        val deny = PendingIntent.getService(
+            this,
+            (id * 2 + 1).toInt(),
+            Intent(this, ScreenCaptureService::class.java)
+                .setAction(ACTION_DENY)
+                .putExtra(EXTRA_APPROVAL_ID, id),
+            pendingFlags(),
+        )
+        val notification = Notification.Builder(this, APPROVAL_CHANNEL_ID)
+            .setContentTitle("Allow this device to watch?")
+            .setContentText("$clientName wants to view your screen.")
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentIntent(openAppIntent())
+            .setAutoCancel(true)
+            .addAction(android.R.drawable.ic_menu_view, "Allow", allow)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Deny", deny)
+            .build()
+        notificationManager().notify(APPROVAL_NOTIF_ID, notification)
+    }
+
+    private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        pendingFlags(),
+    )
+
+    private fun pendingFlags(): Int {
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags = flags or PendingIntent.FLAG_IMMUTABLE
+        }
+        return flags
     }
 
     /** Scale so the longest side is at most [MAX_DIM], both dims even (H.264). */
@@ -221,8 +346,14 @@ class ScreenCaptureService : Service() {
         const val TAG = "ScreenCaptureService"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
+        const val EXTRA_APPROVAL_ID = "approvalId"
+        const val ACTION_STOP = "io.streambeam.streambeam.STOP"
+        const val ACTION_ALLOW = "io.streambeam.streambeam.ALLOW"
+        const val ACTION_DENY = "io.streambeam.streambeam.DENY"
         private const val CHANNEL_ID = "streambeam_capture"
+        private const val APPROVAL_CHANNEL_ID = "streambeam_access"
         private const val NOTIF_ID = 42
+        private const val APPROVAL_NOTIF_ID = 43
         private const val MAX_DIM = 1280
         private const val FPS = 30
         private const val BITRATE = 8_000_000

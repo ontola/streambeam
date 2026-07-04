@@ -2,7 +2,7 @@
 //! screen-capture ingest path (MediaCodec output → host encoder) for hosting.
 
 use jni::objects::{JByteArray, JClass, JObject};
-use jni::sys::{jboolean, jint};
+use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 
 /// Returns a raw `ANativeWindow*` suitable for [`ndk::native_window::NativeWindow::from_ptr`].
@@ -81,4 +81,34 @@ pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeTakeIdrR
     _class: JClass<'local>,
 ) -> jboolean {
     jboolean::from(streambeam_host::android_screen::take_idr_request())
+}
+
+// --- Pairing approval (raised as a notification while backgrounded) ---
+
+/// Returns the pending pairing request as `"id|clientName"`, or null if none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativePollApprovalRequest<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    match crate::host::pending_approval() {
+        Some((id, name)) => env
+            .new_string(format!("{id}|{name}"))
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Approve or deny a pending pairing request by id (from the notification action).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeRespondPairing<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    id: jlong,
+    allow: jboolean,
+) {
+    let _ = crate::host::respond_pairing(id as u64, allow != 0);
 }

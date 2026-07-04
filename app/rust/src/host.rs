@@ -100,7 +100,7 @@ pub fn start(
         pending_approval: None,
     }));
 
-    let config = build_host_config(
+    let mut config = build_host_config(
         listen,
         host_name,
         fps,
@@ -110,6 +110,15 @@ pub fn start(
         Some(approval_tx),
         controls.clone(),
     );
+    // `build_host_config`'s default data dir ($HOME/.streambeam) is read-only on
+    // Android — store the host identity + paired list in the app-private dir the
+    // client already uses (set from Flutter via `set_app_data_dir`).
+    {
+        let dir = crate::store::data_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        config.identity_path = dir.join("host_identity.pkcs8");
+        config.paired_store = Some(dir.join("paired.json"));
+    }
 
     let ui_payload = ui.clone();
     let ui_fatal = ui.clone();
@@ -250,6 +259,17 @@ pub fn disconnect_client(addr: &str) -> Result<bool, String> {
 pub fn forget_client(addr: &str) -> Result<bool, String> {
     let addr: SocketAddr = addr.parse().map_err(|e| format!("invalid address: {e}"))?;
     with_controls(|c| c.forget(addr))
+}
+
+/// The pending pairing request, if any, as `(id, client_name)` — used by the
+/// capture service to raise a system notification while the app is backgrounded.
+pub fn pending_approval() -> Option<(u64, String)> {
+    let slot = service_slot().lock().ok()?;
+    let svc = slot.as_ref()?;
+    let ui = svc.ui.lock().ok()?;
+    ui.pending_approval
+        .as_ref()
+        .map(|p| (p.id, p.client_name.clone()))
 }
 
 pub fn respond_pairing(id: u64, allow: bool) -> Result<bool, String> {

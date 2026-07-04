@@ -3,8 +3,10 @@ package io.streambeam.streambeam
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.view.KeyEvent
 import android.view.MotionEvent
 import io.flutter.embedding.android.FlutterActivity
@@ -76,6 +78,16 @@ class MainActivity : FlutterActivity() {
             }
         }
         pendingLink = linkFrom(intent)
+        requestPostNotifications()
+    }
+
+    private fun requestPostNotifications() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9732)
+        }
     }
 
     private fun requestScreenCapture(result: MethodChannel.Result) {

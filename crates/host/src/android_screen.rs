@@ -67,6 +67,13 @@ pub fn is_active() -> bool {
     SOURCE.active.load(Ordering::Relaxed)
 }
 
+/// Whether the codec config (SPS/PPS) has arrived — i.e. the session is fully
+/// ready to encode. `build_encoder` waits for this so it doesn't fall back to
+/// the mock clip during the async capture-service startup.
+pub fn is_ready() -> bool {
+    is_active() && SOURCE.codec_config.lock().unwrap().is_some()
+}
+
 /// Submit one `MediaCodec` output buffer. `is_config` marks the CSD (SPS/PPS)
 /// buffer, which is stored for `codec_config()` rather than queued as a frame.
 pub fn submit(data: Vec<u8>, keyframe: bool, is_config: bool, width: u32, height: u32) {
