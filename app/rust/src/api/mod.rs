@@ -74,6 +74,39 @@ pub fn send_mouse_click(button: u8) {
     }
 }
 
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_gamepad_plug(pad: u8, connected: bool) {
+    #[cfg(target_os = "android")]
+    crate::input::send(streambeam_proto::input::InputEvent::GamepadPlug {
+        pad: pad.min(3),
+        connected,
+    });
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_gamepad_state(
+    pad: u8,
+    buttons: u16,
+    lt: u8,
+    rt: u8,
+    lx: i16,
+    ly: i16,
+    rx: i16,
+    ry: i16,
+) {
+    #[cfg(target_os = "android")]
+    crate::input::send(streambeam_proto::input::InputEvent::GamepadState {
+        pad: pad.min(3),
+        buttons,
+        lt,
+        rt,
+        lx,
+        ly,
+        rx,
+        ry,
+    });
+}
+
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();

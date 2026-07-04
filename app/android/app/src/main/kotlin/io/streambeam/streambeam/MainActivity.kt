@@ -3,6 +3,8 @@ package io.streambeam.streambeam
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
+import android.view.KeyEvent
+import android.view.MotionEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -11,6 +13,7 @@ class MainActivity : FlutterActivity() {
     private var deepLinkChannel: MethodChannel? = null
     private var pendingLink: String? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var gamepadBridge: GamepadBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -18,6 +21,7 @@ class MainActivity : FlutterActivity() {
             "streambeam/video",
             StreamViewFactory(flutterEngine.dartExecutor.binaryMessenger),
         )
+        gamepadBridge = GamepadBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         deepLinkChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "streambeam/deeplink",
@@ -56,7 +60,23 @@ class MainActivity : FlutterActivity() {
         pendingLink = linkFrom(intent)
     }
 
+    override fun dispatchGenericMotionEvent(motionEvent: MotionEvent): Boolean {
+        if (gamepadBridge?.onMotionEvent(motionEvent) == true) {
+            return true
+        }
+        return super.dispatchGenericMotionEvent(motionEvent)
+    }
+
+    override fun dispatchKeyEvent(keyEvent: KeyEvent): Boolean {
+        if (gamepadBridge?.onKeyEvent(keyEvent) == true) {
+            return true
+        }
+        return super.dispatchKeyEvent(keyEvent)
+    }
+
     override fun onDestroy() {
+        gamepadBridge?.dispose()
+        gamepadBridge = null
         releaseMulticastLock()
         super.onDestroy()
     }

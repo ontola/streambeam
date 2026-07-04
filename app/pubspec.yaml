@@ -44,7 +44,6 @@ dependencies:
   window_manager: ^0.5.0
   rust_lib_streambeam:
     path: rust_builder
-
 dev_dependencies:
   flutter_test:
     sdk: flutter

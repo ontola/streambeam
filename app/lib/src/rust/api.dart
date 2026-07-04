@@ -36,6 +36,32 @@ void sendMouseAbs({
 void sendMouseClick({required int button}) =>
     StreambeamFfi.instance.api.crateApiSendMouseClick(button: button);
 
+void sendGamepadPlug({required int pad, required bool connected}) =>
+    StreambeamFfi.instance.api.crateApiSendGamepadPlug(
+      pad: pad,
+      connected: connected,
+    );
+
+void sendGamepadState({
+  required int pad,
+  required int buttons,
+  required int lt,
+  required int rt,
+  required int lx,
+  required int ly,
+  required int rx,
+  required int ry,
+}) => StreambeamFfi.instance.api.crateApiSendGamepadState(
+  pad: pad,
+  buttons: buttons,
+  lt: lt,
+  rt: rt,
+  lx: lx,
+  ly: ly,
+  rx: rx,
+  ry: ry,
+);
+
 /// Call once at startup with the app documents directory (Android/iOS).
 Future<void> setAppDataDir({required String dir}) =>
     StreambeamFfi.instance.api.crateApiSetAppDataDir(dir: dir);

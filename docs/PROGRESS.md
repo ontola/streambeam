@@ -10,7 +10,7 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 | M3 — Android video path vs fakehost | 🔨 in progress | reconnect without QR; device verify pending |
 | M4 — End-to-end video | ⬜ | |
 | M5 — Audio | ⬜ | |
-| M6 — Input | ⬜ | |
+| M6 — Input | 🔨 in progress | touch/mouse done; BT gamepad→ViGEm wired; keyboard + rumble pending |
 | M7 — Pairing/discovery polish | ⬜ | |
 | M8 — Robustness + v1 tag | ⬜ | |
 

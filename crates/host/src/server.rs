@@ -621,10 +621,16 @@ async fn handle_input_stream(
     mut recv: quinn::RecvStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = Vec::new();
-    loop {
-        let event: InputEvent = read_msg(&mut recv, &mut buf).await?;
-        crate::input_inject::apply(event);
+    let result = async {
+        loop {
+            let event: InputEvent = read_msg(&mut recv, &mut buf).await?;
+            crate::input_inject::apply(event);
+        }
     }
+    .await;
+    #[cfg(windows)]
+    crate::gamepad_inject::reset();
+    result
 }
 
 /// Ask the UI to approve a new device and wait for the answer.

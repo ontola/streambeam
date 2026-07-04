@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'gamepad_forwarder.dart';
 import 'src/rust/api.dart';
 
 /// How single-finger drag maps to the remote mouse.
@@ -72,8 +73,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _panEnabled = false;
   bool _blockViewerGestures = false;
   bool _multiTouchSession = false;
-  PointerMode _pointerMode = PointerMode.direct;
-  _LiveDiagnostics _liveDiag = const _LiveDiagnostics();
+  PointerMode _pointerMode = PointerMode.trackpad;
+  final _liveDiagListenable = ValueNotifier(const _LiveDiagnostics());
   int _diagLastBytes = 0;
   int _diagLastFrames = 0;
   DateTime? _diagLastSampleAt;
@@ -177,27 +178,39 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   void _beginDiagnostics() {
     _diagPoll?.cancel();
-    _liveDiag = const _LiveDiagnostics();
+    _diagPoll = null;
+    _liveDiagListenable.value = const _LiveDiagnostics();
     _diagLastBytes = 0;
     _diagLastFrames = 0;
     _diagLastSampleAt = null;
-    _diagPoll = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      _updateDiagnostics();
-    });
+    _syncDiagnosticsPoll();
   }
 
   void _endDiagnostics() {
     _diagPoll?.cancel();
     _diagPoll = null;
-    _liveDiag = const _LiveDiagnostics();
+    _liveDiagListenable.value = const _LiveDiagnostics();
+  }
+
+  void _syncDiagnosticsPoll() {
+    if (!widget.isStreaming || !_menuOpen) {
+      _diagPoll?.cancel();
+      _diagPoll = null;
+      return;
+    }
+    if (_diagPoll != null) return;
+    _updateDiagnostics();
+    _diagPoll = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      _updateDiagnostics();
+    });
   }
 
   void _updateDiagnostics() {
     if (!mounted || !widget.isStreaming) return;
     final snap = playbackDiagnostics();
     final now = DateTime.now();
-    var bytesPerSec = _liveDiag.bytesPerSec;
-    var renderFps = _liveDiag.renderFps;
+    var bytesPerSec = _liveDiagListenable.value.bytesPerSec;
+    var renderFps = _liveDiagListenable.value.renderFps;
     final bytes = snap.bytesReceived.toInt();
     final frames = snap.framesRendered.toInt();
     final sampleAt = _diagLastSampleAt;
@@ -226,8 +239,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       codec: snap.codec,
       bytesPerSec: bytesPerSec,
     );
-    if (next != _liveDiag) {
-      setState(() => _liveDiag = next);
+    if (next != _liveDiagListenable.value) {
+      _liveDiagListenable.value = next;
     }
   }
 
@@ -249,6 +262,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _transformController.removeListener(_onTransformChanged);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _transformController.dispose();
+    _liveDiagListenable.dispose();
     _keyboardFocus.dispose();
     _keyboardCtrl.dispose();
     super.dispose();
@@ -260,6 +274,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       _menuOpen = false;
       _menuDrag = 0;
     });
+    _syncDiagnosticsPoll();
   }
 
   void _openKeyboard() {
@@ -314,6 +329,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       _menuOpen = shouldOpen;
       _menuDrag = 0;
     });
+    _syncDiagnosticsPoll();
   }
 
   double get _menuVisibleWidth => _menuOpen ? _menuWidth : _menuDrag;
@@ -385,7 +401,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                 _hasVideo &&
                 !_menuBlocksPointer &&
                 !_keyboardOpen;
-            final mouseControlEnabled = showStreamInput && !_panEnabled;
+            final mouseControlEnabled = showStreamInput;
 
             return Stack(
               clipBehavior: Clip.hardEdge,
@@ -401,7 +417,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         transformationController: _transformController,
                         minScale: 1,
                         maxScale: 4,
-                        panEnabled: _panEnabled,
+                        panEnabled: _panEnabled && _multiTouchSession,
                         clipBehavior: Clip.none,
                         child: SizedBox(
                           width: videoSize.width,
@@ -416,7 +432,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                   ),
                 ),
                 if (showStreamInput)
+                  GamepadForwarder(enabled: showStreamInput),
+                if (showStreamInput)
                   _StreamInputLayer(
+                    key: const ValueKey('stream-input'),
                     videoRect: videoRect,
                     videoSize: videoSize,
                     refWidth: widget.streamWidth,
@@ -551,19 +570,22 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                     child: const SizedBox(width: 20),
                   ),
                   Expanded(
-                    child: _StreamMenu(
-                      diagnostics: _liveDiag,
-                      showDiagnostics: widget.isStreaming,
-                      pointerMode: _pointerMode,
-                      onPointerModeChanged: (mode) {
-                        setState(() {
-                          _pointerMode = mode;
-                          _blockViewerGestures = false;
-                          _multiTouchSession = false;
-                        });
-                      },
-                      onStop: _handleStop,
-                      onKeyboard: _openKeyboard,
+                    child: ValueListenableBuilder<_LiveDiagnostics>(
+                      valueListenable: _liveDiagListenable,
+                      builder: (context, liveDiag, _) => _StreamMenu(
+                        diagnostics: liveDiag,
+                        showDiagnostics: widget.isStreaming,
+                        pointerMode: _pointerMode,
+                        onPointerModeChanged: (mode) {
+                          setState(() {
+                            _pointerMode = mode;
+                            _blockViewerGestures = false;
+                            _multiTouchSession = false;
+                          });
+                        },
+                        onStop: _handleStop,
+                        onKeyboard: _openKeyboard,
+                      ),
                     ),
                   ),
                 ],
@@ -633,9 +655,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 }
 
 /// Tracks pointers and maps single-finger touch to PC mouse when [mouseControlEnabled].
-/// Two-finger gestures pass through to [InteractiveViewer] for local pinch/pan.
+/// Two or more fingers pass through to [InteractiveViewer] for pinch/pan (no mouse).
 class _StreamInputLayer extends StatefulWidget {
   const _StreamInputLayer({
+    super.key,
     required this.videoRect,
     required this.videoSize,
     required this.refWidth,
@@ -667,7 +690,9 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   static const _tapSlop = 12.0;
   static const _pinchSlop = 16.0;
   static const _tapTimeout = Duration(milliseconds: 280);
+  static const _relFlushInterval = Duration(milliseconds: 8);
 
+  final _activePointers = <int>{};
   final _pointers = <int, Offset>{};
   Offset? _singleOrigin;
   DateTime? _singleDownAt;
@@ -675,8 +700,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   Offset? _lastMovePos;
   double _relAccumX = 0;
   double _relAccumY = 0;
+  Timer? _relFlushTimer;
 
-  int _pointerCount = 0;
   bool _pendingTwoFinger = false;
   double? _twoFingerStartSpan;
   double _twoFingerTravel = 0;
@@ -684,6 +709,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   int get _refW => widget.refWidth.clamp(1, 65535);
   int get _refH => widget.refHeight.clamp(1, 65535);
+
+  bool get _multiFingerContact =>
+      widget.multiTouchSession ||
+      _pendingTwoFinger ||
+      _pointers.length >= 2;
 
   @override
   void didUpdateWidget(_StreamInputLayer oldWidget) {
@@ -698,11 +728,21 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   @override
   void dispose() {
+    _cancelRelFlush();
+    _flushRel();
     _setCapturing(false);
     super.dispose();
   }
 
+  void _cancelRelFlush() {
+    _relFlushTimer?.cancel();
+    _relFlushTimer = null;
+  }
+
   void _resetMouseState() {
+    _cancelRelFlush();
+    _flushRel();
+    _activePointers.clear();
     _pointers.clear();
     _singleOrigin = null;
     _singleDownAt = null;
@@ -717,9 +757,16 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _setCapturing(false);
   }
 
-  Offset? _videoLocal(Offset stackLocal) {
-    if (!widget.videoRect.contains(stackLocal)) return null;
-    return stackLocal - widget.videoRect.topLeft;
+  Offset? _videoLocal(Offset stackLocal, {bool clamp = false}) {
+    if (widget.videoRect.contains(stackLocal)) {
+      return stackLocal - widget.videoRect.topLeft;
+    }
+    if (!clamp) return null;
+    final x = (stackLocal.dx - widget.videoRect.left)
+        .clamp(0.0, widget.videoSize.width);
+    final y = (stackLocal.dy - widget.videoRect.top)
+        .clamp(0.0, widget.videoSize.height);
+    return Offset(x, y);
   }
 
   void _sendAbs(Offset videoLocal) {
@@ -742,12 +789,27 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     final scaleY = _refH / widget.videoSize.height;
     _relAccumX += delta.dx * scaleX;
     _relAccumY += delta.dy * scaleY;
+    _scheduleRelFlush();
+  }
+
+  void _scheduleRelFlush() {
+    if (_relFlushTimer != null) return;
+    _relFlushTimer = Timer(_relFlushInterval, () {
+      _relFlushTimer = null;
+      _flushRel();
+    });
+  }
+
+  void _flushRel() {
     final dx = _relAccumX.round().clamp(-32768, 32767);
     final dy = _relAccumY.round().clamp(-32768, 32767);
     if (dx == 0 && dy == 0) return;
     _relAccumX -= dx;
     _relAccumY -= dy;
     sendMouseMove(dx: dx, dy: dy);
+    if (_relAccumX.round() != 0 || _relAccumY.round() != 0) {
+      _scheduleRelFlush();
+    }
   }
 
   void _setCapturing(bool on) {
@@ -761,9 +823,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   bool get _canSendMouse =>
       widget.mouseControlEnabled &&
-      !widget.multiTouchSession &&
-      !_pendingTwoFinger &&
-      _pointers.length < 2;
+      !_multiFingerContact &&
+      _pointers.length <= 1;
 
   double? _twoFingerSpan() {
     if (_pointers.length < 2) return null;
@@ -771,11 +832,27 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     return (pts[0] - pts[1]).distance;
   }
 
+  void _trackTwoFingerPinch() {
+    final span = _twoFingerSpan();
+    final startSpan = _twoFingerStartSpan;
+    if (span == null || startSpan == null) return;
+    _twoFingerTravel = math.max(_twoFingerTravel, (span - startSpan).abs());
+    if (_twoFingerTravel >= _pinchSlop) {
+      _beginMultiTouchSession();
+    }
+  }
+
   void _beginMultiTouchSession() {
-    if (widget.multiTouchSession) return;
-    _pendingTwoFinger = false;
+    if (widget.multiTouchSession) {
+      _pendingTwoFinger = _pointers.length >= 2;
+      return;
+    }
+    _cancelRelFlush();
+    _flushRel();
+    _pendingTwoFinger = _pointers.length >= 2;
     _singleOrigin = null;
     _singleDownAt = null;
+    _singleTravel = 0;
     _lastMovePos = null;
     _relAccumX = 0;
     _relAccumY = 0;
@@ -788,58 +865,54 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     widget.onMultiTouchSessionChanged(false);
   }
 
+  void _removePointer(int pointer) {
+    _activePointers.remove(pointer);
+    _pointers.remove(pointer);
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     if (_isInMenuEdgeZone(event.position)) return;
-    _pointerCount++;
+
     final local = _videoLocal(event.localPosition);
     if (local == null) return;
 
+    _activePointers.add(event.pointer);
     _pointers[event.pointer] = local;
-    if (_pointers.length == 1) {
-      if (_canSendMouse) {
-        _singleOrigin = local;
-        _singleDownAt = DateTime.now();
-        _singleTravel = 0;
-        _lastMovePos = local;
-        _relAccumX = 0;
-        _relAccumY = 0;
-        _setCapturing(true);
-        if (widget.mode == PointerMode.direct) {
-          _sendAbs(local);
-        }
-      }
-    } else if (_pointers.length == 2) {
+
+    if (_pointers.length >= 2) {
       _pendingTwoFinger = true;
-      _twoFingerDownAt = DateTime.now();
-      _twoFingerStartSpan = _twoFingerSpan();
+      _twoFingerDownAt ??= DateTime.now();
+      _twoFingerStartSpan ??= _twoFingerSpan();
       _twoFingerTravel = 0;
-      _singleOrigin = null;
-      _singleDownAt = null;
-      _lastMovePos = null;
-      _relAccumX = 0;
-      _relAccumY = 0;
       _beginMultiTouchSession();
-    } else if (_pointers.length > 2) {
-      _beginMultiTouchSession();
+      return;
+    }
+
+    if (!_canSendMouse) return;
+
+    _singleOrigin = local;
+    _singleDownAt = DateTime.now();
+    _singleTravel = 0;
+    _lastMovePos = local;
+    _relAccumX = 0;
+    _relAccumY = 0;
+    _setCapturing(true);
+    if (widget.mode == PointerMode.direct) {
+      _sendAbs(local);
     }
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    final local = _videoLocal(event.localPosition);
-    if (local == null) {
-      _pointers.remove(event.pointer);
-      return;
-    }
-    _pointers[event.pointer] = local;
+    if (!_activePointers.contains(event.pointer)) return;
 
-    if (_pointers.length >= 2) {
-      final span = _twoFingerSpan();
-      final startSpan = _twoFingerStartSpan;
-      if (span != null && startSpan != null) {
-        _twoFingerTravel = math.max(_twoFingerTravel, (span - startSpan).abs());
-        if (_twoFingerTravel >= _pinchSlop) {
-          _beginMultiTouchSession();
-        }
+    final local = _videoLocal(event.localPosition, clamp: true);
+    if (local != null) {
+      _pointers[event.pointer] = local;
+    }
+
+    if (_multiFingerContact) {
+      if (_pointers.length >= 2) {
+        _trackTwoFingerPinch();
       }
       return;
     }
@@ -848,24 +921,27 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       return;
     }
 
+    final tracked = _pointers.values.firstOrNull;
+    if (tracked == null) return;
+
     _singleTravel = math.max(
       _singleTravel,
-      (local - _singleOrigin!).distance,
+      (tracked - _singleOrigin!).distance,
     );
     if (widget.mode == PointerMode.direct) {
-      _sendAbs(local);
+      _sendAbs(tracked);
     } else {
       final last = _lastMovePos;
       if (last != null) {
-        _sendRel(local - last);
+        _sendRel(tracked - last);
       }
-      _lastMovePos = local;
+      _lastMovePos = tracked;
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    _pointerCount = math.max(0, _pointerCount - 1);
     final countBefore = _pointers.length;
+    final activeBefore = _activePointers.length;
     final pendingTwo = _pendingTwoFinger;
     final twoStart = _twoFingerDownAt;
     final twoTravel = _twoFingerTravel;
@@ -873,16 +949,20 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     final downAt = _singleDownAt;
     final travel = _singleTravel;
 
-    _pointers.remove(event.pointer);
+    _removePointer(event.pointer);
+    _flushRel();
 
-    if (_pointers.isEmpty) {
+    if (_activePointers.isEmpty) {
       if (pendingTwo &&
+          activeBefore >= 2 &&
           twoStart != null &&
           DateTime.now().difference(twoStart) < _tapTimeout &&
           twoTravel < _pinchSlop) {
         sendMouseClick(button: 1);
-      } else if (countBefore == 1 &&
-          _canSendMouse &&
+      } else if (activeBefore == 1 &&
+          countBefore == 1 &&
+          !pendingTwo &&
+          !widget.multiTouchSession &&
           origin != null &&
           downAt != null &&
           travel < _tapSlop &&
@@ -895,15 +975,15 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
       _resetMouseState();
       _endMultiTouchSession();
-    } else if (_pointers.length == 1) {
-      // Lifting one finger after a pinch/pan — do not resume mouse until all
-      // fingers are up and a new touch begins.
+    } else if (_activePointers.length == 1) {
+      // One finger left after a multi-touch gesture — wait for a fresh touch.
       _pendingTwoFinger = false;
       _twoFingerStartSpan = null;
       _twoFingerTravel = 0;
       _twoFingerDownAt = null;
       _singleOrigin = null;
       _singleDownAt = null;
+      _singleTravel = 0;
       _lastMovePos = null;
       _relAccumX = 0;
       _relAccumY = 0;
@@ -912,9 +992,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
-    _pointerCount = math.max(0, _pointerCount - 1);
-    _pointers.remove(event.pointer);
-    if (_pointers.isEmpty) {
+    _removePointer(event.pointer);
+    if (_activePointers.isEmpty) {
       _resetMouseState();
       _endMultiTouchSession();
     }
@@ -1113,7 +1192,7 @@ class _StreamMenu extends StatelessWidget {
                     ),
                     child: Text(
                       trackpad
-                          ? 'Drag to move the cursor · tap to click'
+                          ? 'Drag to move the cursor · tap to left-click'
                           : 'Your finger position maps to the PC screen · tap to click',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
@@ -1154,9 +1233,10 @@ class _StreamMenu extends StatelessWidget {
                     ),
                     child: Text(
                       'Drag from the right edge for menu\n'
-                      '1 finger: move · tap: left click\n'
-                      '2 fingers: pinch zoom / pan (local)\n'
-                      'Quick 2-finger tap: right click',
+                      '1 finger: move cursor · tap: left click\n'
+                      '2 fingers: pinch zoom / pan (local only)\n'
+                      'Quick 2-finger tap: right click\n'
+                      'Bluetooth gamepad: forwarded as Xbox 360 (ViGEm on PC)',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: compact ? 1.25 : 1.35,

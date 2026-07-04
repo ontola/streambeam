@@ -34,6 +34,9 @@ fn apply_windows(event: InputEvent) {
             InputEvent::Scroll { dx, dy } => {
                 scroll_wheel(dx, dy);
             }
+            InputEvent::GamepadPlug { .. } | InputEvent::GamepadState { .. } => {
+                crate::gamepad_inject::apply(event);
+            }
             _ => {}
         }
     }

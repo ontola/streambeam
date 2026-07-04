@@ -6,6 +6,7 @@ pub mod capture;
 pub mod config;
 pub mod data_dir;
 pub mod encode;
+pub mod gamepad_inject;
 pub mod input_inject;
 pub mod logging;
 pub mod mock;
