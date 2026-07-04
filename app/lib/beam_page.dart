@@ -11,6 +11,53 @@ import 'src/rust/api.dart';
 
 const _logoAsset = 'assets/streambeam-logo.svg';
 
+/// What the desktop build can do on this OS.
+class DesktopCapabilities {
+  const DesktopCapabilities({
+    required this.host,
+    required this.watch,
+    required this.platformLabel,
+  });
+
+  final bool host;
+  final bool watch;
+  final String platformLabel;
+
+  bool get anySupported => host || watch;
+}
+
+DesktopCapabilities desktopCapabilities() {
+  final host = hostPlatformSupported();
+  // Desktop decode/watch is not wired yet on any desktop OS.
+  const watch = false;
+  if (Platform.isWindows) {
+    return DesktopCapabilities(
+      host: host,
+      watch: watch,
+      platformLabel: 'Windows',
+    );
+  }
+  if (Platform.isMacOS) {
+    return const DesktopCapabilities(
+      host: false,
+      watch: false,
+      platformLabel: 'macOS',
+    );
+  }
+  if (Platform.isLinux) {
+    return const DesktopCapabilities(
+      host: false,
+      watch: false,
+      platformLabel: 'Linux',
+    );
+  }
+  return DesktopCapabilities(
+    host: host,
+    watch: watch,
+    platformLabel: 'this platform',
+  );
+}
+
 /// Windows desktop host UI — pair via QR, manage connected phones.
 class BeamPage extends StatefulWidget {
   const BeamPage({super.key});
@@ -261,6 +308,11 @@ class _BeamPageState extends State<BeamPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  Text(
+                    'Settings',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
                   Card(
                     child: Column(
                       children: [
@@ -349,7 +401,7 @@ class _BeamPageState extends State<BeamPage> {
                                       _setStatus(e.toString(), error: true);
                                     }
                                   },
-                                  child: const Text('Forget'),
+                                  child: const Text('Remove'),
                                 ),
                               ],
                             ),
@@ -390,13 +442,18 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    final hostSupported = hostPlatformSupported();
+    final caps = desktopCapabilities();
+
+    if (!caps.anySupported) {
+      return _DesktopUnsupportedPage(platformLabel: caps.platformLabel);
+    }
+
     final pages = <Widget>[
-      if (hostSupported) const BeamPage(),
-      const _DesktopWatchStub(),
+      if (caps.host) const BeamPage(),
+      if (!caps.watch) const _DesktopWatchStub(),
     ];
     final destinations = <NavigationDestination>[
-      if (hostSupported)
+      if (caps.host)
         const NavigationDestination(
           icon: Icon(Icons.cast),
           label: 'Beam',
@@ -406,6 +463,10 @@ class _AppShellState extends State<AppShell> {
         label: 'Watch',
       ),
     ];
+
+    if (destinations.length < 2) {
+      return pages.first;
+    }
 
     return Scaffold(
       body: IndexedStack(
@@ -417,6 +478,141 @@ class _AppShellState extends State<AppShell> {
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: destinations,
       ),
+    );
+  }
+}
+
+class _DesktopUnsupportedPage extends StatelessWidget {
+  const _DesktopUnsupportedPage({required this.platformLabel});
+
+  final String platformLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
+            ),
+            const SizedBox(width: 10),
+            const Text('StreamBeam'),
+          ],
+        ),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.desktop_mac_outlined,
+                  size: 48,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Not available on $platformLabel yet',
+                  style: theme.textTheme.titleMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'This build does not support hosting or watching streams on '
+                  '$platformLabel.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _UnsupportedFeatureRow(
+                  icon: Icons.cast,
+                  title: 'Beam my screen',
+                  subtitle: 'Host your screen for phones and other devices',
+                  supported: false,
+                ),
+                const SizedBox(height: 12),
+                _UnsupportedFeatureRow(
+                  icon: Icons.play_circle_outline,
+                  title: 'Watch a stream',
+                  subtitle: 'Connect to another StreamBeam host on this device',
+                  supported: false,
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Use StreamBeam on Android to watch, or on Windows to host '
+                  'and pair with your phone.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UnsupportedFeatureRow extends StatelessWidget {
+  const _UnsupportedFeatureRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.supported,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool supported;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          icon,
+          size: 22,
+          color: supported
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: theme.textTheme.titleSmall),
+              Text(
+                supported ? subtitle : 'Not supported on this platform yet',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Icon(
+          supported ? Icons.check_circle_outline : Icons.block,
+          size: 20,
+          color: supported
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurfaceVariant,
+        ),
+      ],
     );
   }
 }
@@ -453,12 +649,13 @@ class _DesktopWatchStub extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Text(
-                'Watch on this device',
+                'Watch on this PC',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
               Text(
-                'Desktop playback is coming soon. Use your phone to watch for now.',
+                'Desktop playback is coming soon. Use your phone to watch for now, '
+                'or stay on the Beam tab to host from this PC.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
