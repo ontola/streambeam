@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'package:tray_manager/tray_manager.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -31,6 +32,28 @@ Future<void> openOntola() async {
   await launchUrl(_ontolaUrl, mode: LaunchMode.externalApplication);
 }
 
+/// Brings the window to front when the tray icon is clicked. The embedded
+/// host (see `app/rust/src/host.rs`) runs on the Dart isolate's background
+/// thread regardless of window visibility, so this is purely a "show me the
+/// UI" action, not a start/stop control.
+class _TrayClickHandler with TrayListener {
+  void register() => trayManager.addListener(this);
+
+  @override
+  void onTrayIconMouseUp() {
+    unawaited(windowManager.show());
+    unawaited(windowManager.focus());
+  }
+}
+
+final _trayClickHandler = _TrayClickHandler();
+
+Future<void> _initTray() async {
+  await trayManager.setIcon('assets/tray_icon.ico');
+  await trayManager.setToolTip('StreamBeam');
+  _trayClickHandler.register();
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -45,6 +68,12 @@ Future<void> main() async {
       await windowManager.show();
       await windowManager.focus();
     });
+  }
+  // Windows-only for now: the tray icon asset is a Windows .ico, and the
+  // legacy win32 tray (crates/host/src/tray.rs, --legacy-tray) is what this
+  // is meant to replace there. Worth revisiting for Linux/macOS separately.
+  if (Platform.isWindows) {
+    await _initTray();
   }
   await StreambeamFfi.init();
   final dir = await streambeamDataDir();

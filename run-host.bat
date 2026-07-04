@@ -33,4 +33,7 @@ if not "%BUILD_ERR%"=="0" (
 )
 
 REM Launch detached: the release build is a GUI app (no console). This window closes.
-start "" "%HOST_EXE%"
+REM --legacy-tray: headless (no UI at all) is now the binary's default, which
+REM looks identical to a crash from the outside. Keep the tray + QR window
+REM until the Flutter desktop app takes over that role.
+start "" "%HOST_EXE%" --legacy-tray
