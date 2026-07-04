@@ -50,9 +50,12 @@ AppCapabilities appCapabilities() {
     );
   }
   if (Platform.isMacOS) {
+    // Browsing/discovery works; live playback + hosting are gated per-tab as
+    // "coming soon" until the macOS A/V paths (VideoToolbox / ScreenCaptureKit)
+    // land — see docs/SYMMETRY.md.
     return const AppCapabilities(
       host: false,
-      watch: false,
+      watch: true,
       platformLabel: 'macOS',
     );
   }

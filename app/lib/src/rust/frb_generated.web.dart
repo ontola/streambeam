@@ -22,6 +22,13 @@ abstract class StreambeamFfiApiImplPlatform
   });
 
   @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  RustStreamSink<DesktopStreamEvent>
+  dco_decode_StreamSink_desktop_stream_event_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -32,6 +39,9 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw);
+
+  @protected
+  DesktopStreamEvent dco_decode_desktop_stream_event(dynamic raw);
 
   @protected
   DiscoveredHost dco_decode_discovered_host(dynamic raw);
@@ -100,6 +110,13 @@ abstract class StreambeamFfiApiImplPlatform
   void dco_decode_unit(dynamic raw);
 
   @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<DesktopStreamEvent>
+  sse_decode_StreamSink_desktop_stream_event_Sse(SseDeserializer deserializer);
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
@@ -112,6 +129,11 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   SavedHostInfo sse_decode_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DesktopStreamEvent sse_decode_desktop_stream_event(
     SseDeserializer deserializer,
   );
 
@@ -195,6 +217,18 @@ abstract class StreambeamFfiApiImplPlatform
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_desktop_stream_event_Sse(
+    RustStreamSink<DesktopStreamEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
@@ -209,6 +243,12 @@ abstract class StreambeamFfiApiImplPlatform
   @protected
   void sse_encode_box_autoadd_saved_host_info(
     SavedHostInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_desktop_stream_event(
+    DesktopStreamEvent self,
     SseSerializer serializer,
   );
 

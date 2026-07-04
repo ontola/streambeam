@@ -127,6 +127,13 @@ pub fn set_app_data_dir(dir: String) {
     let _ = std::fs::create_dir_all(&dir);
 }
 
+/// Set the name peers see for this device (client name when watching, host name
+/// when beaming). Call at startup with the platform device name.
+#[flutter_rust_bridge::frb(sync)]
+pub fn set_device_name(name: String) {
+    crate::store::set_device_name(&name);
+}
+
 #[derive(Debug, Clone)]
 pub struct StreamStats {
     pub width: u16,
@@ -262,7 +269,7 @@ pub async fn connect_and_receive(
 ) -> Result<StreamStats, String> {
     let session = connect_as_identity(
         &payload,
-        "streambeam-android",
+        &crate::store::client_name(),
         Some(&client_identity_path()),
     )
     .await
@@ -312,6 +319,156 @@ pub async fn reconnect_play_stream(
         let _ = (native_window, max_video_frames);
         Err("reconnect_play_stream is Android-only".into())
     }
+}
+
+/// One event on the desktop watch stream. The first event is the config
+/// (`is_config = true`, geometry + SPS/PPS); every later event is a frame
+/// (`is_config = false`, `data` = one Annex-B access unit). A plain struct
+/// (not an enum) so the Dart side needs no `freezed` codegen.
+#[derive(Debug, Clone)]
+pub struct DesktopStreamEvent {
+    pub is_config: bool,
+    pub codec_config: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u8,
+    pub data: Vec<u8>,
+    pub keyframe: bool,
+}
+
+/// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
+/// and stream H.264 access units to the platform decoder (VideoToolbox on
+/// macOS). Video-only for now; input/control is a separate path.
+#[flutter_rust_bridge::frb]
+pub async fn play_stream_desktop(
+    payload: String,
+    sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    let session = connect_as_identity(
+        &payload,
+        &crate::store::client_name(),
+        Some(&client_identity_path()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = save_host_from_payload(payload);
+    desktop_stream_loop(session, sink).await
+}
+
+/// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
+/// uses the pinned key; the host prompts to approve on first contact).
+#[flutter_rust_bridge::frb]
+pub async fn play_stream_desktop_known(
+    host_name: String,
+    host_pubkey: Vec<u8>,
+    addr: String,
+    sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    let pubkey: [u8; 32] = host_pubkey
+        .try_into()
+        .map_err(|_| "host public key must be 32 bytes".to_string())?;
+    let addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("invalid host address: {e}"))?;
+    let session = streambeam_core::connect_known(
+        pubkey,
+        addr,
+        &crate::store::client_name(),
+        &client_identity_path(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = save_saved_host(
+        &saved_host_path(),
+        &SavedHost {
+            host_name,
+            host_pubkey: pubkey,
+            addrs: vec![addr],
+        },
+    );
+    desktop_stream_loop(session, sink).await
+}
+
+/// Shared desktop watch loop: reassemble the media plane and stream H.264
+/// access units to the platform decoder.
+async fn desktop_stream_loop(
+    mut session: streambeam_core::ClientSession,
+    sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    use streambeam_proto::media::CHANNEL_VIDEO;
+
+    let codec_config = session
+        .codec_config
+        .clone()
+        .ok_or("Host did not send video configuration (CodecConfig).")?;
+    sink.add(DesktopStreamEvent {
+        is_config: true,
+        codec_config,
+        width: u32::from(session.width),
+        height: u32::from(session.height),
+        fps: session.fps,
+        data: Vec::new(),
+        keyframe: false,
+    })
+    .map_err(|e| e.to_string())?;
+
+    // Ask for a keyframe up front so decoding can start immediately.
+    let _ = streambeam_core::request_idr(&mut session).await;
+
+    let mut asm = FrameReassembler::default();
+    loop {
+        let datagram =
+            tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
+                .await
+                .map_err(|_| "timed out waiting for media".to_string())?
+                .map_err(|e| e.to_string())?;
+
+        let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
+        if header.channel != CHANNEL_VIDEO {
+            continue;
+        }
+        if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
+            let keyframe = header.is_keyframe();
+            if sink
+                .add(DesktopStreamEvent {
+                    is_config: false,
+                    codec_config: Vec::new(),
+                    width: 0,
+                    height: 0,
+                    fps: 0,
+                    data: frame,
+                    keyframe,
+                })
+                .is_err()
+            {
+                // Dart closed the stream (playback stopped).
+                break;
+            }
+        }
+
+        // Recover from unrecoverable loss the same way the other clients do.
+        if let Some(report) = asm.take_loss_report() {
+            match report {
+                streambeam_core::LossReport::Invalidate {
+                    first_frame,
+                    last_frame,
+                } => {
+                    let _ = streambeam_core::request_invalidate_ref_frames(
+                        &mut session,
+                        first_frame,
+                        last_frame,
+                    )
+                    .await;
+                }
+                streambeam_core::LossReport::NeedIdr => {
+                    let _ = streambeam_core::request_idr(&mut session).await;
+                }
+            }
+        }
+    }
+
+    let _ = session.conn.close(0u32.into(), b"bye");
+    Ok(())
 }
 
 async fn receive_stats(

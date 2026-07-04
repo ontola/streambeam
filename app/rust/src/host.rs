@@ -85,7 +85,11 @@ pub fn start(
         .unwrap_or("0.0.0.0:47989")
         .parse()
         .map_err(|e| format!("invalid listen address: {e}"))?;
-    let host_name = host_name.unwrap_or_else(default_host_name);
+    // Prefer an explicit name, then the device's own name (Android), then the
+    // machine hostname (desktop) so peers see a recognizable device.
+    let host_name = host_name
+        .or_else(crate::store::device_name)
+        .unwrap_or_else(default_host_name);
 
     let (payload_tx, payload_rx) = std::sync::mpsc::channel();
     let (approval_tx, approval_rx) = std::sync::mpsc::channel::<PairApproval>();

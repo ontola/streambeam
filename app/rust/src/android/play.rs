@@ -194,7 +194,7 @@ pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> 
     log::info!("streambeam connecting with pairing payload");
     let session = connect_as_identity(
         &payload,
-        "streambeam-android",
+        &crate::store::client_name(),
         Some(&client_identity_path()),
     )
     .await
@@ -229,7 +229,7 @@ pub async fn run_discovered(
     let session = connect_known(
         pubkey,
         addr,
-        "streambeam-android",
+        &crate::store::client_name(),
         &client_identity_path(),
     )
     .await
@@ -258,7 +258,7 @@ pub async fn run_known(
     let session = connect_known(
         host.host_pubkey,
         addr,
-        "streambeam-android",
+        &crate::store::client_name(),
         &client_identity_path(),
     )
     .await

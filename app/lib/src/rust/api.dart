@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `receive_stats`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `receive_stats`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
     StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
@@ -65,6 +65,11 @@ void sendGamepadState({
 /// Call once at startup with the app documents directory (Android/iOS).
 Future<void> setAppDataDir({required String dir}) =>
     StreambeamFfi.instance.api.crateApiSetAppDataDir(dir: dir);
+
+/// Set the name peers see for this device (client name when watching, host name
+/// when beaming). Call at startup with the platform device name.
+void setDeviceName({required String name}) =>
+    StreambeamFfi.instance.api.crateApiSetDeviceName(name: name);
 
 String streambeamVersion() =>
     StreambeamFfi.instance.api.crateApiStreambeamVersion();
@@ -129,6 +134,24 @@ Future<StreamStats> reconnectPlayStream({
   maxVideoFrames: maxVideoFrames,
 );
 
+/// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
+/// and stream H.264 access units to the platform decoder (VideoToolbox on
+/// macOS). Video-only for now; input/control is a separate path.
+Stream<DesktopStreamEvent> playStreamDesktop({required String payload}) =>
+    StreambeamFfi.instance.api.crateApiPlayStreamDesktop(payload: payload);
+
+/// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
+/// uses the pinned key; the host prompts to approve on first contact).
+Stream<DesktopStreamEvent> playStreamDesktopKnown({
+  required String hostName,
+  required List<int> hostPubkey,
+  required String addr,
+}) => StreambeamFfi.instance.api.crateApiPlayStreamDesktopKnown(
+  hostName: hostName,
+  hostPubkey: hostPubkey,
+  addr: addr,
+);
+
 bool hostPlatformSupported() =>
     StreambeamFfi.instance.api.crateApiHostPlatformSupported();
 
@@ -163,6 +186,53 @@ bool hostForgetClient({required String addr}) =>
 
 bool hostRespondPairing({required BigInt id, required bool allow}) =>
     StreambeamFfi.instance.api.crateApiHostRespondPairing(id: id, allow: allow);
+
+/// One event on the desktop watch stream. The first event is the config
+/// (`is_config = true`, geometry + SPS/PPS); every later event is a frame
+/// (`is_config = false`, `data` = one Annex-B access unit). A plain struct
+/// (not an enum) so the Dart side needs no `freezed` codegen.
+class DesktopStreamEvent {
+  final bool isConfig;
+  final Uint8List codecConfig;
+  final int width;
+  final int height;
+  final int fps;
+  final Uint8List data;
+  final bool keyframe;
+
+  const DesktopStreamEvent({
+    required this.isConfig,
+    required this.codecConfig,
+    required this.width,
+    required this.height,
+    required this.fps,
+    required this.data,
+    required this.keyframe,
+  });
+
+  @override
+  int get hashCode =>
+      isConfig.hashCode ^
+      codecConfig.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      fps.hashCode ^
+      data.hashCode ^
+      keyframe.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DesktopStreamEvent &&
+          runtimeType == other.runtimeType &&
+          isConfig == other.isConfig &&
+          codecConfig == other.codecConfig &&
+          width == other.width &&
+          height == other.height &&
+          fps == other.fps &&
+          data == other.data &&
+          keyframe == other.keyframe;
+}
 
 /// LAN hosts advertising via mDNS.
 class DiscoveredHost {
