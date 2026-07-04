@@ -131,7 +131,6 @@ fn build_config(
     )
 }
 
-#[cfg(not(windows))]
 fn run_cli(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let controls = std::sync::Arc::new(server::HostControls::new());
     let config = build_config(opt, None, None, controls);

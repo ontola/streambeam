@@ -529,7 +529,7 @@ unsafe fn create_encoder(
     // error) but has no effect, which is exactly what made an earlier GOP fix
     // look like a no-op. Best effort: log rather than silently ignore if a
     // property really is rejected.
-    let gop = fps.max(1) * 600;
+    let gop = fps.max(1) * 3;
     for (label, result) in [
         (
             "AVLOWLATENCYMODE",
@@ -543,14 +543,18 @@ unsafe fn create_encoder(
             "MEANBITRATE",
             set_codec_u32(&transform, &CODECAPI_MEANBITRATE, bitrate),
         ),
-        // A short GOP means a full keyframe (~200-300 KB even at 1080p) blasts
-        // out every interval, well over the mean bitrate target in one burst —
-        // that burst is what was showing up as multi-second stream lag, not
-        // anything slow in capture/encode/send (all measured in the low tens
-        // of ms). The client already requests an on-demand IDR over a
-        // reliable stream at session start and any time `force_idr` fires, so
-        // — same as Sunshine/Moonlight — periodic keyframes aren't needed for
-        // recovery; keep a long one as a distant safety net only.
+        // We tried relying entirely on on-demand IDR (`CODECAPI_
+        // AVEncVideoForceKeyFrame`, set in `encode()`) with a very long GOP
+        // here, matching how Sunshine/Moonlight avoid periodic keyframe
+        // bandwidth bursts — but ground-truth NAL-type inspection of the
+        // actual output showed the Microsoft software H.264 MFT never
+        // delivers a forced IDR: dozens of on-demand requests, zero resulting
+        // keyframes in the bitstream. Sunshine's own source documents this
+        // exact limitation ("Fixed GOP for encoders that don't support
+        // on-demand IDR, e.g. Media Foundation"). So: a moderate periodic GOP
+        // it is — frequent enough that a client that fell behind actually
+        // gets a recovery point, infrequent enough (a keyframe every few
+        // seconds, not every second) that the bandwidth burst stays modest.
         ("GOPSIZE", set_codec_u32(&transform, &CODECAPI_GOPSIZE, gop)),
     ] {
         if let Err(e) = result {
