@@ -312,41 +312,87 @@ fn play_session_blocking(
         u64::from(max_video_frames.max(1))
     };
     let mut pts_us: u64 = 33_000;
+    // How many decodable (non-keyframe) completions we've skipped in a row
+    // because we were catching up on a backlog — see the loop body.
+    let mut consecutive_skipped = 0u32;
+    const IDR_RESYNC_THRESHOLD: u32 = 10;
 
     while stats.video_frames < target {
         drain_output(&mut codec)?;
 
-        let datagram = runtime
+        let first = runtime
             .block_on(async {
                 tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram()).await
             })
             .map_err(|_| "Timed out waiting for video from host.".to_string())?
             .map_err(|e| format!("Stream read failed: {e}"))?;
 
-        let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
-        if header.channel == CHANNEL_AUDIO {
-            stats.audio_packets += 1;
-            continue;
+        // Greedily grab anything ALREADY sitting in the receive queue too
+        // (a near-zero wait; genuinely new arrivals won't show up in time).
+        // More than one datagram back-to-back means decode/render fell
+        // behind real time since the last iteration — plain FIFO processing
+        // of an ever-growing backlog is exactly how you end up watching
+        // content from a minute ago with no way to ever catch up.
+        let mut batch = vec![first];
+        while let Ok(Ok(next)) = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_millis(2), session.conn.read_datagram()).await
+        }) {
+            batch.push(next);
+            if batch.len() >= 64 {
+                break; // safety valve against an unbounded drain loop
+            }
         }
+        let behind = batch.len() > 1;
+        let last_index = batch.len() - 1;
 
-        if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
+        for (i, datagram) in batch.iter().enumerate() {
+            let header = MediaHeader::decode(datagram).map_err(|e| e.to_string())?;
+            if header.channel == CHANNEL_AUDIO {
+                stats.audio_packets += 1;
+                continue;
+            }
+
+            let Some((_id, frame)) = asm.push_datagram(datagram).map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
             let frame = access_unit_without_sei(&frame);
             if frame.is_empty() {
                 continue;
             }
+            let is_keyframe = access_unit_is_keyframe(&frame);
+
+            // Always decode a keyframe (it resets the reference chain and is
+            // worth showing even a little late). Otherwise, while behind,
+            // only decode the freshest completion in this batch — the rest
+            // are already stale by the time we'd finish them, so decoding
+            // them would just burn time we need to spend catching up.
+            if behind && !is_keyframe && i != last_index {
+                consecutive_skipped += 1;
+                stats.video_frames = asm.stats().frames_complete;
+                continue;
+            }
+
             let sample = encode_frame(feed_mode, &frame);
             if sample.is_empty() {
                 continue;
             }
-            let flags = if access_unit_is_keyframe(&frame) {
-                BUFFER_FLAG_KEY_FRAME
-            } else {
-                0
-            };
+            let flags = if is_keyframe { BUFFER_FLAG_KEY_FRAME } else { 0 };
             feed_sample(&mut codec, &sample, pts_us, flags)?;
             pts_us += 33_000;
             stats.video_frames = asm.stats().frames_complete;
             drain_output(&mut codec)?;
+            consecutive_skipped = 0;
+        }
+
+        // We've been skipping non-keyframes for a while (they depend on a
+        // reference chain we're no longer decoding) — ask the host for a
+        // fresh keyframe so the picture recovers instead of degrading.
+        if consecutive_skipped >= IDR_RESYNC_THRESHOLD {
+            if let Err(e) = runtime.block_on(request_idr(&mut session)) {
+                log::warn!("streambeam catch-up request_idr failed (continuing): {e}");
+            }
+            consecutive_skipped = 0;
         }
     }
 

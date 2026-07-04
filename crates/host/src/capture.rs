@@ -65,7 +65,9 @@ pub struct DesktopEncoder {
 }
 
 impl DesktopEncoder {
-    pub fn new(fps: u32) -> Result<Self, String> {
+    /// `max_encode_dim` caps the encoded video's longest side (native capture
+    /// resolution is unaffected) — see the field doc on `Pipeline` for why.
+    pub fn new(fps: u32, max_encode_dim: u32) -> Result<Self, String> {
         let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(u32, u32, Option<Vec<u8>>), String>>();
         let (req_tx, req_rx) = std::sync::mpsc::channel::<Request>();
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Option<EncodedFrame>>(4);
@@ -74,7 +76,7 @@ impl DesktopEncoder {
 
         let thread = std::thread::Builder::new()
             .name("streambeam-capture".into())
-            .spawn(move || run_pipeline(fps, init_tx, req_rx, frame_tx, thread_force))
+            .spawn(move || run_pipeline(fps, max_encode_dim, init_tx, req_rx, frame_tx, thread_force))
             .map_err(|e| format!("spawn capture thread: {e}"))?;
 
         match init_rx.recv() {
@@ -121,12 +123,13 @@ impl VideoEncoder for DesktopEncoder {
 /// Body of the capture thread: init, report dims, then serve encode requests.
 fn run_pipeline(
     fps: u32,
+    max_encode_dim: u32,
     init_tx: Sender<Result<(u32, u32, Option<Vec<u8>>), String>>,
     req_rx: Receiver<Request>,
     frame_tx: SyncSender<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
 ) {
-    let mut pipe = match Pipeline::new(fps) {
+    let mut pipe = match Pipeline::new(fps, max_encode_dim) {
         Ok(p) => p,
         Err(e) => {
             let _ = init_tx.send(Err(e));
@@ -159,12 +162,6 @@ fn run_pipeline(
     }
 }
 
-/// Cap the longest encoded side to this many pixels. The FEC layer addresses
-/// shards with a `u8` count (max 255 per frame, see `MAX_DATA_SHARDS`), and a
-/// native 4K keyframe routinely exceeds that — capturing at native resolution
-/// only to shrink it for a phone screen buys nothing anyway.
-const MAX_ENCODE_DIM: u32 = 1920;
-
 struct Pipeline {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -192,6 +189,10 @@ struct Pipeline {
     stat_timeout: u32,
     stat_access_lost: u32,
     stat_produced: u32,
+    /// Rolling per-report-window totals (reset every 90 calls alongside the
+    /// counters above) for pinpointing where per-frame time actually goes.
+    stat_capture_us: u64,
+    stat_encode_us: u64,
 }
 
 fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
@@ -199,7 +200,11 @@ fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
 }
 
 impl Pipeline {
-    fn new(fps: u32) -> Result<Self, String> {
+    /// `max_encode_dim` caps the longest encoded side. The FEC layer addresses
+    /// shards with a `u16` count (see `MAX_DATA_SHARDS` in `streambeam_proto`),
+    /// and a very large keyframe (native 4K, say) can still exceed it — a
+    /// phone screen has no use for that much detail anyway.
+    fn new(fps: u32, max_encode_dim: u32) -> Result<Self, String> {
         unsafe {
             // MTA so the objects can be used from this thread freely.
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -208,7 +213,8 @@ impl Pipeline {
             let (device, context) = create_d3d_device()?;
             let (duplication, capture_width, capture_height) = create_duplication(&device)?;
             let staging = create_staging(&device, capture_width, capture_height)?;
-            let (width, height) = scaled_dimensions(capture_width, capture_height, MAX_ENCODE_DIM);
+            let (width, height) =
+                scaled_dimensions(capture_width, capture_height, max_encode_dim);
             if (width, height) != (capture_width, capture_height) {
                 crate::logging::log(&format!(
                     "downscaling capture {capture_width}x{capture_height} -> {width}x{height} to stay within FEC shard limits"
@@ -236,6 +242,8 @@ impl Pipeline {
                 stat_timeout: 0,
                 stat_access_lost: 0,
                 stat_produced: 0,
+                stat_capture_us: 0,
+                stat_encode_us: 0,
             })
         }
     }
@@ -244,25 +252,38 @@ impl Pipeline {
     /// and return the resulting access unit (None while the encoder primes).
     fn capture_and_encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
         self.stat_calls += 1;
-        let result = unsafe {
-            self.capture_into_nv12()?;
-            self.encode(force_idr)
-        };
+
+        let t_capture = std::time::Instant::now();
+        let captured = unsafe { self.capture_into_nv12() };
+        self.stat_capture_us += t_capture.elapsed().as_micros() as u64;
+
+        let result = captured.and_then(|()| {
+            let t_encode = std::time::Instant::now();
+            let r = unsafe { self.encode(force_idr) };
+            self.stat_encode_us += t_encode.elapsed().as_micros() as u64;
+            r
+        });
+
         if let Ok(Some(_)) = result {
             self.stat_produced += 1;
         }
         // Roughly every 3s at 30fps — enough to catch a stuck pipeline quickly
         // without flooding host.log.
-        if self.stat_calls % 90 == 0 {
+        const REPORT_WINDOW: u64 = 90;
+        if self.stat_calls % REPORT_WINDOW as u32 == 0 {
             let avg_luma = average_luma(&self.nv12, self.width, self.height);
             crate::logging::log(&format!(
-                "capture stats: {} calls — {} acquired, {} timeout, {} access-lost, {} AUs produced, avg Y={avg_luma}",
+                "capture stats: {} calls — {} acquired, {} timeout, {} access-lost, {} AUs produced, avg Y={avg_luma}, avg capture={} ms, avg encode={} ms",
                 self.stat_calls,
                 self.stat_acquired,
                 self.stat_timeout,
                 self.stat_access_lost,
                 self.stat_produced,
+                self.stat_capture_us / REPORT_WINDOW / 1000,
+                self.stat_encode_us / REPORT_WINDOW / 1000,
             ));
+            self.stat_capture_us = 0;
+            self.stat_encode_us = 0;
         }
         result
     }
@@ -499,6 +520,43 @@ unsafe fn create_encoder(
     let bitrate = ((width * height) as u64 * fps as u64 / 15)
         .clamp(2_000_000, 20_000_000) as u32;
 
+    // ICodecAPI properties (bitrate/rate-control/GOP/low-latency) must be set
+    // before SetOutputType/SetInputType — this encoder bakes them into the
+    // type negotiation, and setting them afterward is silently accepted (no
+    // error) but has no effect, which is exactly what made an earlier GOP fix
+    // look like a no-op. Best effort: log rather than silently ignore if a
+    // property really is rejected.
+    let gop = fps.max(1) * 600;
+    for (label, result) in [
+        (
+            "AVLOWLATENCYMODE",
+            set_codec_bool(&transform, &CODECAPI_AVLOWLATENCYMODE, true),
+        ),
+        (
+            "RATECONTROL=CBR",
+            set_codec_u32(&transform, &CODECAPI_RATECONTROL, 0),
+        ),
+        (
+            "MEANBITRATE",
+            set_codec_u32(&transform, &CODECAPI_MEANBITRATE, bitrate),
+        ),
+        // A short GOP means a full keyframe (~200-300 KB even at 1080p) blasts
+        // out every interval, well over the mean bitrate target in one burst —
+        // that burst is what was showing up as multi-second stream lag, not
+        // anything slow in capture/encode/send (all measured in the low tens
+        // of ms). The client already requests an on-demand IDR over a
+        // reliable stream at session start and any time `force_idr` fires, so
+        // — same as Sunshine/Moonlight — periodic keyframes aren't needed for
+        // recovery; keep a long one as a distant safety net only.
+        ("GOPSIZE", set_codec_u32(&transform, &CODECAPI_GOPSIZE, gop)),
+    ] {
+        if let Err(e) = result {
+            crate::logging::log(&format!(
+                "encoder codec property {label} rejected by driver: {e}"
+            ));
+        }
+    }
+
     // Output first (required by MFTs), then the matching NV12 input.
     let out_type = ctx(MFCreateMediaType(), "MFCreateMediaType out")?;
     ctx(out_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video), "out major")?;
@@ -528,12 +586,6 @@ unsafe fn create_encoder(
     ctx(set_ratio(&in_type, &MF_MT_FRAME_RATE, fps, 1), "in rate")?;
     ctx(set_ratio(&in_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "in par")?;
     ctx(transform.SetInputType(0, &in_type, 0), "SetInputType")?;
-
-    // Low-latency, 1s keyframe interval — best effort (ignore if unsupported).
-    let _ = set_codec_bool(&transform, &CODECAPI_AVLOWLATENCYMODE, true);
-    let _ = set_codec_u32(&transform, &CODECAPI_RATECONTROL, 0); // CBR
-    let _ = set_codec_u32(&transform, &CODECAPI_MEANBITRATE, bitrate);
-    let _ = set_codec_u32(&transform, &CODECAPI_GOPSIZE, fps.max(1));
 
     // SPS/PPS for the CodecConfig control message, if the encoder exposes it.
     let codec_config = read_sequence_header(&out_type);

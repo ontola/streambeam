@@ -38,9 +38,16 @@ struct Opt {
     #[arg(long)]
     name: Option<String>,
 
-    /// Target frame rate (mock encoder loops bundled clip).
+    /// Target frame rate (mock encoder loops bundled clip). Override with STREAMBEAM_FPS.
     #[arg(long, default_value_t = 30)]
     fps: u32,
+
+    /// Cap the encoded video's longest side to this many pixels — desktop
+    /// capture stays at native resolution, but a keyframe at native 4K can
+    /// exceed the FEC frame-sharding limit, and a phone screen has no use for
+    /// more detail than this anyway. Override with STREAMBEAM_MAX_ENCODE_DIM.
+    #[arg(long, default_value_t = 1920)]
+    max_encode_dim: u32,
 
     /// Pairing token lifetime in seconds.
     #[arg(long, default_value_t = 600)]
@@ -90,6 +97,14 @@ fn build_config(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(opt.listen);
+    let fps = std::env::var("STREAMBEAM_FPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(opt.fps);
+    let max_encode_dim = std::env::var("STREAMBEAM_MAX_ENCODE_DIM")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(opt.max_encode_dim);
     let _ = ensure_data_dir();
     server::HostConfig {
         listen,
@@ -97,7 +112,8 @@ fn build_config(
             .name
             .or_else(|| std::env::var("STREAMBEAM_HOST_NAME").ok())
             .unwrap_or_else(default_host_name),
-        fps: opt.fps,
+        fps,
+        max_encode_dim,
         token_ttl_secs: opt.token_ttl,
         identity_path: identity_path(),
         paired_store: Some(paired_store_path()),

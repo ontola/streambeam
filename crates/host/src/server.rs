@@ -40,6 +40,9 @@ pub struct HostConfig {
     pub listen: SocketAddr,
     pub host_name: String,
     pub fps: u32,
+    /// Cap the encoded video's longest side to this many pixels (see
+    /// `build_encoder`/`DesktopEncoder::new` for why this exists).
+    pub max_encode_dim: u32,
     pub token_ttl_secs: u64,
     pub identity_path: std::path::PathBuf,
     pub paired_store: Option<std::path::PathBuf>,
@@ -203,10 +206,10 @@ impl StreamControl {
 }
 
 /// Build the video source: real desktop capture on Windows, else the test clip.
-fn build_encoder(fps: u32) -> Box<dyn VideoEncoder> {
+fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
     #[cfg(windows)]
     {
-        match crate::capture::DesktopEncoder::new(fps) {
+        match crate::capture::DesktopEncoder::new(fps, max_encode_dim) {
             Ok(enc) => {
                 let (w, h) = enc.dimensions();
                 crate::logging::log(&format!("desktop capture ready — {w}x{h} @ {fps}fps"));
@@ -219,14 +222,14 @@ fn build_encoder(fps: u32) -> Box<dyn VideoEncoder> {
             }
         }
     }
-    let _ = fps;
+    let _ = (fps, max_encode_dim);
     Box::new(MockEncoder::bundled())
 }
 
 pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // One shared encoder feeds every connection (Desktop Duplication is
     // single-instance, so multiple simultaneous viewers aren't supported yet).
-    let encoder = build_encoder(config.fps);
+    let encoder = build_encoder(config.fps, config.max_encode_dim);
     let (width, height) = encoder.dimensions();
     let codec_config = encoder.codec_config();
     log!(
@@ -533,6 +536,11 @@ async fn handle_client(
         };
 
         match msg {
+            // `video.{max_width,max_height,max_fps}` is where a client could
+            // request its own resolution/fps cap, but the shared encoder is
+            // built once at host startup (`build_encoder`, before any session
+            // exists) — honoring a per-client request means deferring that
+            // build to the first SessionRequest instead. Not wired up yet.
             ClientMsg::SessionRequest { .. } => {
                 if let Some(data) = &codec_config {
                     write_msg(
@@ -653,29 +661,48 @@ async fn stream_video(
     ctl: Arc<StreamControl>,
     frame_interval: Duration,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let max_datagram = conn.max_datagram_size().unwrap_or(1200 + 16);
+    let max_datagram = conn
+        .max_datagram_size()
+        .unwrap_or(1200 + streambeam_proto::media::MEDIA_HEADER_LEN);
     let mut frame_id: u16 = 0;
+    // Rolling per-report-window timing, to find where per-frame latency goes:
+    // waiting on the encoder (capture+encode+channel round trip), FEC sharding,
+    // or actually pushing shards onto the wire.
+    let mut encode_wait_us: u128 = 0;
+    let mut shard_us: u128 = 0;
+    let mut send_us: u128 = 0;
+    let mut window_start = std::time::Instant::now();
 
     loop {
         if conn.close_reason().is_some() {
             break;
         }
 
+        // Pace to frame_interval from the START of this iteration, not on top
+        // of however long encode/shard/send already took — sleeping a full
+        // frame_interval unconditionally after a slow (e.g. 90ms) encoder wait
+        // was adding another 33ms on top of that every single frame, capping
+        // throughput well under what the encoder could otherwise sustain.
+        let iter_start = std::time::Instant::now();
+
         if ctl.take_force_idr() {
             let mut enc = encoder.lock().await;
             enc.force_idr();
         }
 
+        let t_encode = std::time::Instant::now();
         let frame = {
             let mut enc = encoder.lock().await;
             enc.encode_next().map_err(|e| e.to_string())?
         };
+        encode_wait_us += t_encode.elapsed().as_micros();
         // No frame this tick (e.g. screen unchanged) — wait and retry.
         let Some(frame) = frame else {
-            tokio::time::sleep(frame_interval).await;
+            tokio::time::sleep(frame_interval.saturating_sub(iter_start.elapsed())).await;
             continue;
         };
 
+        let t_shard = std::time::Instant::now();
         let shards = encode_video_frame(
             frame_id,
             &frame.data,
@@ -683,7 +710,9 @@ async fn stream_video(
             capture_ts_us(),
             max_datagram,
         )?;
+        shard_us += t_shard.elapsed().as_micros();
 
+        let t_send = std::time::Instant::now();
         for shard in shards {
             let mut dg = shard.header.encode().to_vec();
             dg.extend_from_slice(&shard.payload);
@@ -691,17 +720,27 @@ async fn stream_video(
                 return Ok(());
             }
         }
+        send_us += t_send.elapsed().as_micros();
 
         if frame_id % 30 == 0 {
+            let window_secs = window_start.elapsed().as_secs_f64().max(0.001);
             log!(
-                "sent frame {frame_id} ({} bytes, keyframe={})",
+                "sent frame {frame_id} ({} bytes, keyframe={}) — last 30 frames: {:.1} fps, avg encoder wait {} ms, FEC shard {} ms, send {} ms",
                 frame.data.len(),
-                frame.keyframe
+                frame.keyframe,
+                30.0 / window_secs,
+                encode_wait_us / 30 / 1000,
+                shard_us / 30 / 1000,
+                send_us / 30 / 1000,
             );
+            encode_wait_us = 0;
+            shard_us = 0;
+            send_us = 0;
+            window_start = std::time::Instant::now();
         }
 
         frame_id = frame_id.wrapping_add(1);
-        tokio::time::sleep(frame_interval).await;
+        tokio::time::sleep(frame_interval.saturating_sub(iter_start.elapsed())).await;
     }
     Ok(())
 }

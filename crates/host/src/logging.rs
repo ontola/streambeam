@@ -20,10 +20,12 @@ pub fn log(msg: &str) {
     let _guard = LOCK.lock().unwrap();
     let _ = ensure_data_dir();
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
+        // Millisecond precision: at a 30fps target each frame is ~33ms apart,
+        // so whole-second timestamps are too coarse to see real frame pacing.
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_millis();
         let _ = writeln!(f, "[{ts}] {msg}");
     }
 }
