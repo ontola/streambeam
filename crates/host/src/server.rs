@@ -227,6 +227,9 @@ fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
 }
 
 pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(windows)]
+    let _viiper = crate::viiper_server::ViiperGuard::ensure();
+
     // One shared encoder feeds every connection (Desktop Duplication is
     // single-instance, so multiple simultaneous viewers aren't supported yet).
     let encoder = build_encoder(config.fps, config.max_encode_dim);

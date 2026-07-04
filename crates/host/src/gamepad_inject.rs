@@ -1,71 +1,150 @@
-//! Virtual Xbox 360 controllers via ViGEmBus (Windows).
+//! Virtual Xbox 360 controllers via [VIIPER](https://github.com/Alia5/VIIPER) + USBIP.
+//!
+//! VIIPER runs device logic in userspace and presents real USB HID/XInput hardware
+//! through the generic usbip-win2 driver (bundle once in the Windows installer,
+//! Sunshine-style). Requires a local `viiper server` on port 3242.
 
 use streambeam_proto::input::InputEvent;
 
 #[cfg(windows)]
 mod imp {
-    use super::*;
+    use std::net::ToSocketAddrs;
     use std::sync::{Mutex, OnceLock};
-    use vigem_client::{Client, TargetId, XButtons, XGamepad, Xbox360Wired};
+
+    use viiper_client::client::ViiperClient;
+    use viiper_client::devices::xbox360::input::Xbox360Input;
+    use viiper_client::types::{Device, DeviceCreateRequest, DeviceStream};
+
+    const API_ADDR: &str = "127.0.0.1:3242";
 
     struct PadSlot {
-        target: Option<Xbox360Wired<Client>>,
+        bus_id: u32,
+        dev_id: String,
+        stream: Option<DeviceStream>,
     }
 
     struct GamepadManager {
-        vigem_ok: bool,
+        client: Option<ViiperClient>,
+        bus_id: Option<u32>,
         warned_missing: bool,
-        pads: [PadSlot; 4],
+        pads: [Option<PadSlot>; 4],
     }
 
     impl GamepadManager {
         fn new() -> Self {
-            let vigem_ok = Client::connect().is_ok();
             Self {
-                vigem_ok,
+                client: None,
+                bus_id: None,
                 warned_missing: false,
-                pads: std::array::from_fn(|_| PadSlot { target: None }),
+                pads: std::array::from_fn(|_| None),
             }
         }
 
-        fn warn_missing(&mut self) {
+        fn ensure_client(&mut self) -> bool {
+            if self.client.is_some() {
+                return true;
+            }
+            let Ok(addr) = API_ADDR.to_socket_addrs().and_then(|mut i| {
+                i.next()
+                    .ok_or_else(|| std::io::Error::other("no VIIPER API address"))
+            }) else {
+                self.warn_missing("invalid VIIPER API address");
+                return false;
+            };
+            let client = ViiperClient::new(addr);
+            match client.ping() {
+                Ok(_) => {
+                    tracing::info!("VIIPER API reachable at {API_ADDR}");
+                    self.client = Some(client);
+                    true
+                }
+                Err(e) => {
+                    self.warn_missing(&format!(
+                        "VIIPER server not running ({e}). Start bundled viiper or run: viiper server"
+                    ));
+                    false
+                }
+            }
+        }
+
+        fn ensure_bus(&mut self) -> Option<u32> {
+            if let Some(id) = self.bus_id {
+                return Some(id);
+            }
+            if !self.ensure_client() {
+                return None;
+            }
+            let client = self.client.as_ref()?;
+            match client.bus_create(None) {
+                Ok(resp) => {
+                    self.bus_id = Some(resp.bus_id);
+                    Some(resp.bus_id)
+                }
+                Err(e) => {
+                    tracing::warn!("VIIPER bus_create failed: {e}");
+                    None
+                }
+            }
+        }
+
+        fn warn_missing(&mut self, detail: &str) {
             if self.warned_missing {
                 return;
             }
             self.warned_missing = true;
             tracing::warn!(
-                "ViGEmBus is not installed — Bluetooth gamepad input is disabled. \
-                 Install from https://github.com/ViGEm/ViGEmBus/releases (mouse/touch still work)."
+                "{detail}. Phone gamepad input is ignored until VIIPER + usbip-win2 are \
+                 installed (bundled in the Windows installer)."
             );
         }
 
         fn plug(&mut self, pad: u8, connected: bool) {
-            let Some(slot) = self.pads.get_mut(pad as usize) else {
+            let idx = pad as usize;
+            if idx >= 4 {
                 return;
-            };
+            }
             if connected {
-                if slot.target.is_some() {
+                if self.pads[idx].is_some() {
                     return;
                 }
-                if !self.vigem_ok {
-                    self.warn_missing();
-                    return;
-                }
-                let Ok(client) = Client::connect() else {
-                    self.vigem_ok = false;
-                    self.warn_missing();
+                let Some(bus_id) = self.ensure_bus() else {
                     return;
                 };
-                let mut target = Xbox360Wired::new(client, TargetId::XBOX360_WIRED);
-                if target.plugin().is_err() || target.wait_ready().is_err() {
-                    tracing::warn!("ViGEm: failed to plug virtual pad {pad}");
+                let Some(client) = self.client.as_ref() else {
                     return;
+                };
+                let req = DeviceCreateRequest {
+                    r#type: Some("xbox360".into()),
+                    id_vendor: None,
+                    id_product: None,
+                    device_specific: None,
+                };
+                let device: Device = match client.bus_device_add(bus_id, &req) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("VIIPER add xbox360 pad {pad} failed: {e}");
+                        return;
+                    }
+                };
+                let stream = match client.connect_device(bus_id, &device.dev_id) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("VIIPER connect pad {pad} failed: {e}");
+                        let _ = client.bus_device_remove(bus_id, Some(&device.dev_id));
+                        return;
+                    }
+                };
+                tracing::info!("VIIPER virtual Xbox 360 pad {pad} connected ({})", device.dev_id);
+                self.pads[idx] = Some(PadSlot {
+                    bus_id,
+                    dev_id: device.dev_id,
+                    stream: Some(stream),
+                });
+            } else if let Some(slot) = self.pads[idx].take() {
+                if let Some(client) = self.client.as_ref() {
+                    let _ = client.bus_device_remove(slot.bus_id, Some(&slot.dev_id));
                 }
-                tracing::info!("ViGEm: virtual Xbox 360 pad {pad} connected");
-                slot.target = Some(target);
-            } else if let Some(target) = slot.target.take() {
-                let _ = target.unplug();
-                tracing::info!("ViGEm: virtual Xbox 360 pad {pad} disconnected");
+                tracing::info!("VIIPER virtual Xbox 360 pad {pad} disconnected");
             }
         }
 
@@ -80,27 +159,42 @@ mod imp {
             rx: i16,
             ry: i16,
         ) {
-            if self.pads.get(pad as usize).is_none() {
+            let idx = pad as usize;
+            if idx >= 4 {
                 return;
             }
-            if self.pads[pad as usize].target.is_none() {
+            if self.pads[idx].is_none() {
                 self.plug(pad, true);
             }
-            let Some(target) = self.pads[pad as usize].target.as_mut() else {
+            let Some(slot) = self.pads[idx].as_mut() else {
                 return;
             };
-            let report = XGamepad {
-                buttons: XButtons::from(buttons),
-                left_trigger: lt,
-                right_trigger: rt,
-                thumb_lx: lx,
-                thumb_ly: ly,
-                thumb_rx: rx,
-                thumb_ry: ry,
+            let Some(stream) = slot.stream.as_mut() else {
+                return;
             };
-            if let Err(e) = target.update(&report) {
-                tracing::warn!("ViGEm pad {pad} update failed: {e:?}");
+            let input = Xbox360Input {
+                buttons: u32::from(buttons),
+                lt,
+                rt,
+                lx,
+                ly,
+                rx,
+                ry,
+                ..Default::default()
+            };
+            if let Err(e) = stream.send(&input) {
+                tracing::warn!("VIIPER pad {pad} update failed: {e}");
             }
+        }
+
+        fn reset(&mut self) {
+            for pad in 0..4u8 {
+                self.plug(pad, false);
+            }
+            if let (Some(client), Some(bus_id)) = (self.client.as_ref(), self.bus_id) {
+                let _ = client.bus_remove(Some(bus_id));
+            }
+            self.bus_id = None;
         }
     }
 
@@ -129,9 +223,7 @@ mod imp {
     }
 
     pub fn reset() {
-        for pad in 0..4u8 {
-            mgr().lock().unwrap().plug(pad, false);
-        }
+        mgr().lock().unwrap().reset();
     }
 }
 

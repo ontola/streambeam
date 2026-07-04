@@ -12,6 +12,8 @@ pub mod logging;
 pub mod mock;
 pub mod qr;
 pub mod server;
+#[cfg(windows)]
+pub mod viiper_server;
 
 pub use config::{build_host_config, default_host_name};
 pub use encode::{EncodeError, EncodedFrame, VideoEncoder};

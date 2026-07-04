@@ -1235,8 +1235,7 @@ class _StreamMenu extends StatelessWidget {
                       'Drag from the right edge for menu\n'
                       '1 finger: move cursor · tap: left click\n'
                       '2 fingers: pinch zoom / pan (local only)\n'
-                      'Quick 2-finger tap: right click\n'
-                      'Bluetooth gamepad: forwarded as Xbox 360 (ViGEm on PC)',
+                      'Quick 2-finger tap: right click',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: compact ? 1.25 : 1.35,

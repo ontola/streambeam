@@ -28,8 +28,6 @@ class MainActivity : FlutterActivity() {
         )
         deepLinkChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                // Dart pulls the link that launched the app (cold start); the
-                // link is consumed so a hot restart doesn't replay it.
                 "getInitialLink" -> {
                     result.success(pendingLink)
                     pendingLink = null
@@ -61,16 +59,12 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun dispatchGenericMotionEvent(motionEvent: MotionEvent): Boolean {
-        if (gamepadBridge?.onMotionEvent(motionEvent) == true) {
-            return true
-        }
+        if (gamepadBridge?.onMotionEvent(motionEvent) == true) return true
         return super.dispatchGenericMotionEvent(motionEvent)
     }
 
     override fun dispatchKeyEvent(keyEvent: KeyEvent): Boolean {
-        if (gamepadBridge?.onKeyEvent(keyEvent) == true) {
-            return true
-        }
+        if (gamepadBridge?.onKeyEvent(keyEvent) == true) return true
         return super.dispatchKeyEvent(keyEvent)
     }
 
@@ -91,9 +85,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun releaseMulticastLock() {
-        multicastLock?.let {
-            if (it.isHeld) it.release()
-        }
+        multicastLock?.let { if (it.isHeld) it.release() }
         multicastLock = null
     }
 

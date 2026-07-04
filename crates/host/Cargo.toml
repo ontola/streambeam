@@ -31,7 +31,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
-vigem-client = "0.1.4"
+viiper-client = "0.7"
 # Higher-level COM bindings for desktop capture (DXGI) + H.264 encode (Media Foundation).
 windows = { version = "0.61", features = [
     "Win32_Foundation",

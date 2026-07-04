@@ -10,7 +10,7 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 | M3 — Android video path vs fakehost | 🔨 in progress | reconnect without QR; device verify pending |
 | M4 — End-to-end video | ⬜ | |
 | M5 — Audio | ⬜ | |
-| M6 — Input | 🔨 in progress | touch/mouse + phone gamepad→ViGEm; bundle driver in Win installer (M8); keyboard + rumble pending |
+| M6 — Input | 🔨 in progress | touch/mouse + phone gamepad→VIIPER (USBIP); bundle viiper + usbip-win2 in Win installer (M8); keyboard + rumble pending |
 | M7 — Pairing/discovery polish | ⬜ | |
 | M8 — Robustness + v1 tag | ⬜ | |
 
@@ -63,4 +63,5 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 - 2026-07-04 — Direction set: **symmetric apps, Flutter everywhere** (see [SYMMETRY.md](SYMMETRY.md)). One Flutter app + one Rust core per platform; every build watches, Windows+macOS builds can also host (macOS via ScreenCaptureKit/VideoToolbox/CGEvent). egui host GUI will retire in favor of the Flutter shell; `crates/hostcore` to be extracted from `crates/host`. Symmetric in code, not per platform. Not v1-blocking — M2 WGC→NVENC spike finishes first.
 - 2026-07-04 — **Flutter host UI on Windows** lands in `app/` (Beam tab + FRB `start_host`/`host_snapshot`). Legacy Win32 tray remains behind `streambeam-host --legacy-tray`; default CLI is headless. Data dir `%APPDATA%\\streambeam` shared with CLI host.
 - 2026-07-04 — Competitive analysis of the Sunshine/Apollo/Moonlight/Artemis landscape captured in [COMPETITION.md](COMPETITION.md): guides what to copy (virtual display, frame pacing, Android decoder low-latency tiering, RFI recovery) vs skip for v1.
+- 2026-07-04 — **Gamepad injection** switched from ViGEmBus (`vigem-client`) to [VIIPER](https://github.com/Alia5/VIIPER) (`viiper-client` + bundled `viiper server` + usbip-win2). Wire protocol and Android `GamepadBridge` unchanged (XInput layout).
 - 2026-07-04 — **Fixed auth-bypass**: `evaluate_hello`'s `NeedsApproval` verdict didn't distinguish a verified pairing proof from no proof at all, so `handle_hello` (the headless helper the default CLI host uses, since it runs with no approval UI / `approval_tx: None`) auto-enrolled *any* LAN client sending `Hello{pair_proof: None}` — no token check. `HelloVerdict::NeedsApproval` now carries `proof_verified: bool`; `handle_hello` rejects `proof_verified: false` instead of committing it. Interactive-approval hosts (with a UI) are unaffected — a human still approves proof-less devices by eyeballing them. See `crates/net/src/enroll.rs`, `crates/host/src/server.rs`, `docs/PROTOCOL.md` §Identity & transport security.

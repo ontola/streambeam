@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import 'src/rust/api.dart';
 
-/// XInput `wButtons` bitfield (matches Windows / ViGEm layout).
+/// XInput `wButtons` bitfield (matches Windows / VIIPER Xbox 360 layout).
 class XInputButtons {
   static const dpadUp = 0x0001;
   static const dpadDown = 0x0002;
@@ -23,7 +23,7 @@ class XInputButtons {
   static const y = 0x8000;
 }
 
-/// Forwards physical Bluetooth/USB gamepads to the host as XInput state.
+/// Forwards a phone-paired gamepad to the PC host as XInput state.
 class GamepadForwarder extends StatefulWidget {
   const GamepadForwarder({required this.enabled, super.key});
 
@@ -35,7 +35,7 @@ class GamepadForwarder extends StatefulWidget {
 
 class _GamepadForwarderState extends State<GamepadForwarder> {
   static const _channel = EventChannel('streambeam/gamepad');
-  static const _heartbeat = Duration(milliseconds: 50); // 20 Hz
+  static const _heartbeat = Duration(milliseconds: 50);
 
   StreamSubscription<dynamic>? _sub;
   Timer? _heartbeatTimer;
@@ -46,9 +46,7 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
   @override
   void initState() {
     super.initState();
-    if (widget.enabled) {
-      _start();
-    }
+    if (widget.enabled) _start();
   }
 
   @override
@@ -101,18 +99,14 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
         final value = (raw['value'] as num?)?.toDouble() ?? 0;
         if (name == null) return;
         _ensureConnected(gamepadId);
-        final state = _states[gamepadId];
-        if (state == null) return;
-        state.setButton(name, value >= 0.5);
+        _states[gamepadId]?.setButton(name, value >= 0.5);
         _sendState(gamepadId);
       case 'axis':
         final name = raw['name'] as String?;
         final value = (raw['value'] as num?)?.toDouble() ?? 0;
         if (name == null) return;
         _ensureConnected(gamepadId);
-        final state = _states[gamepadId];
-        if (state == null) return;
-        state.setAxis(name, value);
+        _states[gamepadId]?.setAxis(name, value);
         _sendState(gamepadId);
     }
   }
@@ -135,9 +129,7 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
   void _onDisconnected(String gamepadId) {
     final slot = _deviceToSlot.remove(gamepadId);
     _states.remove(gamepadId);
-    if (slot != null) {
-      sendGamepadPlug(pad: slot, connected: false);
-    }
+    if (slot != null) sendGamepadPlug(pad: slot, connected: false);
   }
 
   void _sendHeartbeats() {
@@ -227,31 +219,26 @@ class _LocalGamepadState {
 
   int get ltByte => (lt * 255).round().clamp(0, 255);
   int get rtByte => (rt * 255).round().clamp(0, 255);
-
   int get lxShort => (lx * 32767).round().clamp(-32768, 32767);
   int get lyShort => (ly * 32767).round().clamp(-32768, 32767);
   int get rxShort => (rx * 32767).round().clamp(-32768, 32767);
   int get ryShort => (ry * 32767).round().clamp(-32768, 32767);
 
-  int _buttonBit(String name) {
-    return switch (name) {
-      'a' => XInputButtons.a,
-      'b' => XInputButtons.b,
-      'x' => XInputButtons.x,
-      'y' => XInputButtons.y,
-      'leftBumper' => XInputButtons.leftShoulder,
-      'rightBumper' => XInputButtons.rightShoulder,
-      'leftTrigger' => 0,
-      'rightTrigger' => 0,
-      'back' => XInputButtons.back,
-      'start' => XInputButtons.start,
-      'leftStick' => XInputButtons.leftStick,
-      'rightStick' => XInputButtons.rightStick,
-      'dpadUp' => XInputButtons.dpadUp,
-      'dpadDown' => XInputButtons.dpadDown,
-      'dpadLeft' => XInputButtons.dpadLeft,
-      'dpadRight' => XInputButtons.dpadRight,
-      _ => 0,
-    };
-  }
+  int _buttonBit(String name) => switch (name) {
+        'a' => XInputButtons.a,
+        'b' => XInputButtons.b,
+        'x' => XInputButtons.x,
+        'y' => XInputButtons.y,
+        'leftBumper' => XInputButtons.leftShoulder,
+        'rightBumper' => XInputButtons.rightShoulder,
+        'back' => XInputButtons.back,
+        'start' => XInputButtons.start,
+        'leftStick' => XInputButtons.leftStick,
+        'rightStick' => XInputButtons.rightStick,
+        'dpadUp' => XInputButtons.dpadUp,
+        'dpadDown' => XInputButtons.dpadDown,
+        'dpadLeft' => XInputButtons.dpadLeft,
+        'dpadRight' => XInputButtons.dpadRight,
+        _ => 0,
+      };
 }

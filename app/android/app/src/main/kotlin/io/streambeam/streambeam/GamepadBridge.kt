@@ -25,7 +25,6 @@ class GamepadBridge(
     private val devices = mutableMapOf<Int, InputDevice>()
     private val lastAxis = mutableMapOf<Pair<Int, String>, Float>()
     private var decorView: View? = null
-    private var decorMotionListener: View.OnGenericMotionListener? = null
 
     private val axes = listOf(
         AxisSpec(MotionEvent.AXIS_X, "leftStickX"),
@@ -73,7 +72,6 @@ class GamepadBridge(
         inputManager.unregisterInputDeviceListener(this)
         decorView?.setOnGenericMotionListener(null)
         decorView = null
-        decorMotionListener = null
         sinkHolder.clear()
     }
 
@@ -88,7 +86,6 @@ class GamepadBridge(
         val decor = activity.window?.decorView
         decor?.setOnGenericMotionListener(listener)
         decorView = decor
-        decorMotionListener = listener
     }
 
     fun onKeyEvent(event: KeyEvent): Boolean {
@@ -162,7 +159,6 @@ class GamepadBridge(
     override fun onInputDeviceRemoved(deviceId: Int) {
         if (devices.remove(deviceId) != null) {
             emit(mapOf("kind" to "disconnected", "gamepadId" to deviceId.toString()))
-            Log.i(tag, "gamepad disconnected: $deviceId")
         }
     }
 

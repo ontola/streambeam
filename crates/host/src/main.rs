@@ -13,7 +13,6 @@ mod capture;
 pub mod config;
 pub mod data_dir;
 pub mod encode;
-#[cfg(windows)]
 pub mod gamepad_inject;
 pub mod input_inject;
 pub mod logging;
@@ -22,6 +21,8 @@ pub mod qr;
 pub mod server;
 #[cfg(windows)]
 mod tray;
+#[cfg(windows)]
+mod viiper_server;
 
 pub use config::{build_host_config, default_host_name};
 pub use encode::{EncodedFrame, EncodeError, VideoEncoder};
