@@ -10,7 +10,7 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 | M3 — Android video path vs fakehost | 🔨 in progress | reconnect without QR; device verify pending |
 | M4 — End-to-end video | ⬜ | |
 | M5 — Audio | ⬜ | |
-| M6 — Input | 🔨 in progress | touch/mouse done; BT gamepad→ViGEm wired; keyboard + rumble pending |
+| M6 — Input | 🔨 in progress | touch/mouse + phone gamepad→ViGEm; bundle driver in Win installer (M8); keyboard + rumble pending |
 | M7 — Pairing/discovery polish | ⬜ | |
 | M8 — Robustness + v1 tag | ⬜ | |
 
@@ -62,3 +62,4 @@ Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 - 2026-07-04 — Repo conventions codified in `AGENTS.md` (CLAUDE.md symlinks to it): docs-in-repo discipline, selective staging for concurrent agent sessions, protocol/docs lockstep, security invariants.
 - 2026-07-04 — Direction set: **symmetric apps, Flutter everywhere** (see [SYMMETRY.md](SYMMETRY.md)). One Flutter app + one Rust core per platform; every build watches, Windows+macOS builds can also host (macOS via ScreenCaptureKit/VideoToolbox/CGEvent). egui host GUI will retire in favor of the Flutter shell; `crates/hostcore` to be extracted from `crates/host`. Symmetric in code, not per platform. Not v1-blocking — M2 WGC→NVENC spike finishes first.
 - 2026-07-04 — **Flutter host UI on Windows** lands in `app/` (Beam tab + FRB `start_host`/`host_snapshot`). Legacy Win32 tray remains behind `streambeam-host --legacy-tray`; default CLI is headless. Data dir `%APPDATA%\\streambeam` shared with CLI host.
+- 2026-07-04 — Competitive analysis of the Sunshine/Apollo/Moonlight/Artemis landscape captured in [COMPETITION.md](COMPETITION.md): guides what to copy (virtual display, frame pacing, Android decoder low-latency tiering, RFI recovery) vs skip for v1.
