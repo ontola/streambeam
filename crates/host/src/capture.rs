@@ -24,7 +24,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use windows::core::{Interface, GUID};
@@ -68,7 +68,12 @@ enum Request {
 pub struct DesktopEncoder {
     width: u32,
     height: u32,
-    codec_config: Option<Vec<u8>>,
+    /// Shared with `Pipeline` on the capture thread — `codec_config()` isn't
+    /// known until the first real keyframe is encoded, which happens well
+    /// after `new()` returns (see `Pipeline::capture_and_encode`), so a
+    /// snapshot taken at construction time is always `None` and never
+    /// updates. This cell is the live view `server.rs`'s poll loop needs.
+    codec_config: Arc<Mutex<Option<Vec<u8>>>>,
     req_tx: Sender<Request>,
     frame_rx: Receiver<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
@@ -79,19 +84,31 @@ impl DesktopEncoder {
     /// `max_encode_dim` caps the encoded video's longest side (native capture
     /// resolution is unaffected) — see the field doc on `Pipeline` for why.
     pub fn new(fps: u32, max_encode_dim: u32) -> Result<Self, String> {
-        let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(u32, u32, Option<Vec<u8>>), String>>();
+        let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(u32, u32), String>>();
         let (req_tx, req_rx) = std::sync::mpsc::channel::<Request>();
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Option<EncodedFrame>>(4);
         let force_idr = Arc::new(AtomicBool::new(false));
         let thread_force = force_idr.clone();
+        let codec_config = Arc::new(Mutex::new(None));
+        let thread_codec_config = codec_config.clone();
 
         let thread = std::thread::Builder::new()
             .name("streambeam-capture".into())
-            .spawn(move || run_pipeline(fps, max_encode_dim, init_tx, req_rx, frame_tx, thread_force))
+            .spawn(move || {
+                run_pipeline(
+                    fps,
+                    max_encode_dim,
+                    init_tx,
+                    req_rx,
+                    frame_tx,
+                    thread_force,
+                    thread_codec_config,
+                )
+            })
             .map_err(|e| format!("spawn capture thread: {e}"))?;
 
         match init_rx.recv() {
-            Ok(Ok((width, height, codec_config))) => Ok(Self {
+            Ok(Ok((width, height))) => Ok(Self {
                 width,
                 height,
                 codec_config,
@@ -135,7 +152,7 @@ impl VideoEncoder for DesktopEncoder {
     }
 
     fn codec_config(&self) -> Option<Vec<u8>> {
-        self.codec_config.clone()
+        self.codec_config.lock().unwrap().clone()
     }
 }
 
@@ -143,10 +160,11 @@ impl VideoEncoder for DesktopEncoder {
 fn run_pipeline(
     fps: u32,
     max_encode_dim: u32,
-    init_tx: Sender<Result<(u32, u32, Option<Vec<u8>>), String>>,
+    init_tx: Sender<Result<(u32, u32), String>>,
     req_rx: Receiver<Request>,
     frame_tx: SyncSender<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
+    codec_config: Arc<Mutex<Option<Vec<u8>>>>,
 ) {
     let mut pipe = match Pipeline::new(fps, max_encode_dim) {
         Ok(p) => p,
@@ -155,10 +173,7 @@ fn run_pipeline(
             return;
         }
     };
-    if init_tx
-        .send(Ok((pipe.width, pipe.height, pipe.codec_config.clone())))
-        .is_err()
-    {
+    if init_tx.send(Ok((pipe.width, pipe.height))).is_err() {
         return;
     }
 
@@ -173,6 +188,12 @@ fn run_pipeline(
                     crate::logging::log(&format!("capture/encode error: {e}"));
                     None
                 });
+                if pipe.codec_config.is_some() {
+                    let mut shared = codec_config.lock().unwrap();
+                    if shared.is_none() {
+                        *shared = pipe.codec_config.clone();
+                    }
+                }
                 if frame_tx.send(frame).is_err() {
                     break;
                 }

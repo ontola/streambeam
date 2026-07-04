@@ -72,6 +72,12 @@ const NV_ENC_PRESET_P4_GUID: GUID = GUID::from_values(
     0x4862,
     [0xb9, 0xd2, 0xcd, 0x6d, 0x73, 0xa0, 0x86, 0x81],
 );
+const NV_ENC_H264_PROFILE_BASELINE_GUID: GUID = GUID::from_values(
+    0x0727bcaa,
+    0x78c4,
+    0x4c83,
+    [0x8c, 0x2f, 0xef, 0x3d, 0xff, 0x26, 0x7c, 0x6a],
+);
 
 // --- enums (only the values we actually use) ---
 const NVENC_DEVICE_TYPE_DIRECTX: u32 = 0x0;
@@ -500,6 +506,12 @@ impl NvencEncoder {
         let bitrate = ((width * height) as u64 * fps as u64 / 15).clamp(2_000_000, 20_000_000);
         config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
         config.frame_interval_p = 1; // no B-frames — lowest latency
+        // Force Baseline (no CABAC, no B-frames) to match the software
+        // encoder's known-good `eAVEncH264VProfile_Base` — the preset would
+        // otherwise leave this at whatever P4/UltraLowLatency defaults to
+        // (typically High/CABAC), which is a needless extra variable while
+        // debugging decode issues on real Android hardware decoders.
+        config.profile_guid = NV_ENC_H264_PROFILE_BASELINE_GUID;
         config.rc_params.rate_control_mode = NVENC_PARAMS_RC_MODE_CBR;
         config.rc_params.average_bit_rate = bitrate as u32;
         config.rc_params.max_bit_rate = bitrate as u32;
@@ -586,6 +598,7 @@ impl NvencEncoder {
         pic_params.version = NV_ENC_PIC_PARAMS_VER;
         pic_params.input_width = self.width;
         pic_params.input_height = self.height;
+        pic_params.input_pitch = self.width;
         pic_params.input_buffer = map_params.mapped_resource;
         pic_params.output_bitstream = self.bitstream_buffer;
         pic_params.completion_event = self.completion_event.0;
