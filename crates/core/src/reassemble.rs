@@ -110,9 +110,29 @@ impl FrameReassembler {
         Some(match pending.reference {
             None => LossReport::NeedIdr,
             Some(last_good) => {
-                // How far ahead the newest lost frame is of the last known-good
-                // reference. `wrap_distance(a, b)` returns `a - b` wrap-aware, so
-                // this is positive exactly when `last_good` precedes `pending.last`.
+                // `last_good` (frozen at first-loss time — see `PendingLoss`)
+                // normally precedes the lost range. But frames *after* a lost
+                // one can complete independently over FEC (each frame's shard
+                // group is decoded on its own) before the lost one is finally
+                // evicted as stale, which can leave `last_good` numerically
+                // *ahead* of `pending.first` — that says nothing about
+                // whether the lost frame(s) are actually recoverable, so
+                // don't let it flip the report to `NeedIdr`. Fall back to
+                // treating the frame right before the loss run as the
+                // reference instead: the most conservative point nameable
+                // without a decode-dependency model, which this
+                // network-layer reassembler doesn't have.
+                let last_good = if wrap_distance(pending.first, last_good) > 0 {
+                    last_good
+                } else {
+                    pending.first.wrapping_sub(1)
+                };
+                // How far ahead the newest lost frame is of that reference.
+                // `wrap_distance(a, b)` returns `a - b` wrap-aware, so this is
+                // positive exactly when `last_good` precedes `pending.last`
+                // (guaranteed now by construction, barring a `pending.last`
+                // that's somehow behind `pending.first`, which `record_loss`
+                // never produces).
                 let gap = wrap_distance(pending.last, last_good);
                 if gap <= 0 || gap as u16 > REF_WINDOW {
                     LossReport::NeedIdr
@@ -244,6 +264,19 @@ impl FrameReassembler {
 
         let shard = MediaShard { header, payload };
         let frame_id = shard.header.frame_id;
+
+        // A late shard for a frame_id we already fully delivered — most
+        // commonly a redundant FEC parity shard that simply wasn't needed
+        // (the frame completed from K data shards before all R parity
+        // shards arrived) but arrives anyway on a healthy link. Drop it
+        // before it can create a phantom bucket: `or_insert_with` below has
+        // no idea `frame_id` was already completed and removed from
+        // `buckets`, so without this check a harmless late shard would
+        // start a new incomplete bucket that later gets genuinely (but
+        // wrongly) abandoned as if the frame were lost.
+        if self.completed.contains(&frame_id) {
+            return Ok(None);
+        }
 
         if !self.buckets.contains_key(&frame_id) && self.buckets.len() >= MAX_INFLIGHT_FRAMES {
             self.evict_oldest_bucket(frame_id);
