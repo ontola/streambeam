@@ -428,10 +428,13 @@ impl Pipeline {
         let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
         let _ = media_buffer.Unlock();
 
-        let keyframe = sample
-            .GetUINT32(&MFSampleExtension_CleanPoint)
-            .map(|v| v == 1)
-            .unwrap_or(false);
+        // `MFSampleExtension_CleanPoint` is optional and this encoder doesn't
+        // reliably set it — reading it as "keyframe" produced a false
+        // negative on every single access unit (including ones that really
+        // were forced IDRs), which looked exactly like force_idr silently
+        // not working. Parse the actual NAL unit type instead — the same
+        // ground truth the Android client already uses to decide this.
+        let keyframe = streambeam_core::access_unit_is_keyframe(&bytes);
 
         Ok(EncodedFrame {
             data: bytes,
