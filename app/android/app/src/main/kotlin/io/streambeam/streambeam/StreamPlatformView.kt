@@ -1,9 +1,9 @@
 package io.streambeam.streambeam
 
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.view.Surface
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.TextureView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMessageCodec
@@ -13,35 +13,39 @@ import io.flutter.plugin.platform.PlatformViewFactory
 class StreamPlatformView(
     context: Context,
     messenger: BinaryMessenger,
-) : PlatformView, SurfaceHolder.Callback {
-    private val surfaceView = SurfaceView(context)
+) : PlatformView, TextureView.SurfaceTextureListener {
+    private val textureView = TextureView(context)
     private val channel = MethodChannel(messenger, "streambeam/video_surface")
     private var lastWindowPtr: Long = 0L
 
     init {
-        surfaceView.holder.addCallback(this)
+        textureView.surfaceTextureListener = this
+        textureView.isOpaque = true
     }
 
-    override fun getView() = surfaceView
+    override fun getView() = textureView
 
     override fun dispose() {
-        surfaceView.holder.removeCallback(this)
+        textureView.surfaceTextureListener = null
         lastWindowPtr = 0L
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        notifySurfaceReady(holder.surface)
+    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        notifySurfaceReady(Surface(surface))
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
         if (width > 0 && height > 0) {
-            notifySurfaceReady(holder.surface)
+            notifySurfaceReady(Surface(surface))
         }
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
+    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
         lastWindowPtr = 0L
+        return true
     }
+
+    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
 
     private fun notifySurfaceReady(surface: Surface) {
         val ptr = NativeStream.nativeWindowFromSurface(surface)

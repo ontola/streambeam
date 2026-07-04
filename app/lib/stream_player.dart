@@ -68,9 +68,15 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _videoTimedOut = false;
   DateTime? _streamStartedAt;
   Timer? _videoPoll;
+  Timer? _diagPoll;
   bool _panEnabled = false;
   bool _blockViewerGestures = false;
+  bool _multiTouchSession = false;
   PointerMode _pointerMode = PointerMode.direct;
+  _LiveDiagnostics _liveDiag = const _LiveDiagnostics();
+  int _diagLastBytes = 0;
+  int _diagLastFrames = 0;
+  DateTime? _diagLastSampleAt;
   final _keyboardFocus = FocusNode();
   final _keyboardCtrl = TextEditingController();
 
@@ -128,8 +134,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     }
     if (widget.isStreaming && !oldWidget.isStreaming) {
       _beginVideoWatch();
+      _beginDiagnostics();
     } else if (!widget.isStreaming && oldWidget.isStreaming) {
       _endVideoWatch();
+      _endDiagnostics();
     }
   }
 
@@ -167,6 +175,62 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _videoTimedOut = false;
   }
 
+  void _beginDiagnostics() {
+    _diagPoll?.cancel();
+    _liveDiag = const _LiveDiagnostics();
+    _diagLastBytes = 0;
+    _diagLastFrames = 0;
+    _diagLastSampleAt = null;
+    _diagPoll = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      _updateDiagnostics();
+    });
+  }
+
+  void _endDiagnostics() {
+    _diagPoll?.cancel();
+    _diagPoll = null;
+    _liveDiag = const _LiveDiagnostics();
+  }
+
+  void _updateDiagnostics() {
+    if (!mounted || !widget.isStreaming) return;
+    final snap = playbackDiagnostics();
+    final now = DateTime.now();
+    var bytesPerSec = _liveDiag.bytesPerSec;
+    var renderFps = _liveDiag.renderFps;
+    final bytes = snap.bytesReceived.toInt();
+    final frames = snap.framesRendered.toInt();
+    final sampleAt = _diagLastSampleAt;
+    if (sampleAt != null) {
+      final elapsed = now.difference(sampleAt).inMilliseconds / 1000.0;
+      if (elapsed >= 0.25) {
+        bytesPerSec = (bytes - _diagLastBytes) / elapsed;
+        renderFps = (frames - _diagLastFrames) / elapsed;
+        _diagLastBytes = bytes;
+        _diagLastFrames = frames;
+        _diagLastSampleAt = now;
+      }
+    } else {
+      _diagLastBytes = bytes;
+      _diagLastFrames = frames;
+      _diagLastSampleAt = now;
+    }
+
+    final width = snap.width > 0 ? snap.width : widget.streamWidth;
+    final height = snap.height > 0 ? snap.height : widget.streamHeight;
+    final next = _LiveDiagnostics(
+      width: width,
+      height: height,
+      targetFps: snap.fps,
+      renderFps: renderFps,
+      codec: snap.codec,
+      bytesPerSec: bytesPerSec,
+    );
+    if (next != _liveDiag) {
+      setState(() => _liveDiag = next);
+    }
+  }
+
   void _onTransformChanged() {
     final scale = _transformController.value.getMaxScaleOnAxis();
     final pan = scale > 1.01;
@@ -178,6 +242,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   @override
   void dispose() {
     _videoPoll?.cancel();
+    _diagPoll?.cancel();
     _hintController.removeListener(_onHintTick);
     _hintController.removeStatusListener(_onHintStatus);
     _hintController.dispose();
@@ -306,66 +371,76 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         color: Colors.black,
         child: LayoutBuilder(
           builder: (context, constraints) {
+            final viewport = Size(constraints.maxWidth, constraints.maxHeight);
+            final videoSize = _fitVideoSize(viewport);
+            final videoRect = Rect.fromLTWH(
+              (viewport.width - videoSize.width) / 2,
+              (viewport.height - videoSize.height) / 2,
+              videoSize.width,
+              videoSize.height,
+            );
             final menuSlide = _menuSlideOff;
             final edgeGrab = _edgeGrabFor(constraints.maxWidth);
+            final showStreamInput = widget.isStreaming &&
+                _hasVideo &&
+                !_menuBlocksPointer &&
+                !_keyboardOpen;
+            final mouseControlEnabled = showStreamInput && !_panEnabled;
 
             return Stack(
               clipBehavior: Clip.hardEdge,
               fit: StackFit.expand,
               children: [
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final viewport = Size(constraints.maxWidth, constraints.maxHeight);
-              final videoSize = _fitVideoSize(viewport);
-              return Center(
-                child: SizedBox(
-                  width: videoSize.width,
-                  height: videoSize.height,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      IgnorePointer(
-                        ignoring: _blockViewerGestures,
-                        child: InteractiveViewer(
-                          transformationController: _transformController,
-                          minScale: 1,
-                          maxScale: 4,
-                          panEnabled: _panEnabled,
-                          clipBehavior: Clip.none,
-                          child: SizedBox(
-                            width: videoSize.width,
-                            height: videoSize.height,
-                            child: const AndroidView(
-                              viewType: 'streambeam/video',
-                              layoutDirection: TextDirection.ltr,
-                            ),
+                Center(
+                  child: SizedBox(
+                    width: videoSize.width,
+                    height: videoSize.height,
+                    child: IgnorePointer(
+                      ignoring: _blockViewerGestures && !_multiTouchSession,
+                      child: InteractiveViewer(
+                        transformationController: _transformController,
+                        minScale: 1,
+                        maxScale: 4,
+                        panEnabled: _panEnabled,
+                        clipBehavior: Clip.none,
+                        child: SizedBox(
+                          width: videoSize.width,
+                          height: videoSize.height,
+                          child: const AndroidView(
+                            viewType: 'streambeam/video',
+                            layoutDirection: TextDirection.ltr,
                           ),
                         ),
                       ),
-                      if (widget.isStreaming &&
-                          _hasVideo &&
-                          !_panEnabled &&
-                          !_menuBlocksPointer &&
-                          !_keyboardOpen)
-                        _StreamTouchSurface(
-                          key: ValueKey(_pointerMode),
-                          videoSize: videoSize,
-                          refWidth: widget.streamWidth,
-                          refHeight: widget.streamHeight,
-                          mode: _pointerMode,
-                          screenEdgeGrab: edgeGrab,
-                          onCaptureChanged: (capturing) {
-                            if (_blockViewerGestures != capturing) {
-                              setState(() => _blockViewerGestures = capturing);
-                            }
-                          },
-                        ),
-                    ],
+                    ),
                   ),
                 ),
-              );
-            },
-          ),
+                if (showStreamInput)
+                  _StreamInputLayer(
+                    videoRect: videoRect,
+                    videoSize: videoSize,
+                    refWidth: widget.streamWidth,
+                    refHeight: widget.streamHeight,
+                    mode: _pointerMode,
+                    screenEdgeGrab: edgeGrab,
+                    mouseControlEnabled: mouseControlEnabled,
+                    multiTouchSession: _multiTouchSession,
+                    onCaptureChanged: (capturing) {
+                      if (_blockViewerGestures != capturing) {
+                        setState(() => _blockViewerGestures = capturing);
+                      }
+                    },
+                    onMultiTouchSessionChanged: (active) {
+                      if (_multiTouchSession != active) {
+                        setState(() {
+                          _multiTouchSession = active;
+                          if (active) {
+                            _blockViewerGestures = false;
+                          }
+                        });
+                      }
+                    },
+                  ),
           if (_showStatusOverlay)
             ColoredBox(
               color: Colors.black87,
@@ -477,9 +552,15 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                   ),
                   Expanded(
                     child: _StreamMenu(
+                      diagnostics: _liveDiag,
+                      showDiagnostics: widget.isStreaming,
                       pointerMode: _pointerMode,
                       onPointerModeChanged: (mode) {
-                        setState(() => _pointerMode = mode);
+                        setState(() {
+                          _pointerMode = mode;
+                          _blockViewerGestures = false;
+                          _multiTouchSession = false;
+                        });
                       },
                       onStop: _handleStop,
                       onKeyboard: _openKeyboard,
@@ -551,50 +632,103 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   }
 }
 
-/// Maps touch on the video area to PC mouse events (when not zoomed).
-class _StreamTouchSurface extends StatefulWidget {
-  const _StreamTouchSurface({
-    super.key,
+/// Tracks pointers and maps single-finger touch to PC mouse when [mouseControlEnabled].
+/// Two-finger gestures pass through to [InteractiveViewer] for local pinch/pan.
+class _StreamInputLayer extends StatefulWidget {
+  const _StreamInputLayer({
+    required this.videoRect,
     required this.videoSize,
     required this.refWidth,
     required this.refHeight,
     required this.mode,
     required this.screenEdgeGrab,
+    required this.mouseControlEnabled,
+    required this.multiTouchSession,
     required this.onCaptureChanged,
+    required this.onMultiTouchSessionChanged,
   });
 
+  final Rect videoRect;
   final Size videoSize;
   final int refWidth;
   final int refHeight;
   final PointerMode mode;
   final double screenEdgeGrab;
+  final bool mouseControlEnabled;
+  final bool multiTouchSession;
   final ValueChanged<bool> onCaptureChanged;
+  final ValueChanged<bool> onMultiTouchSessionChanged;
 
   @override
-  State<_StreamTouchSurface> createState() => _StreamTouchSurfaceState();
+  State<_StreamInputLayer> createState() => _StreamInputLayerState();
 }
 
-class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
+class _StreamInputLayerState extends State<_StreamInputLayer> {
   static const _tapSlop = 12.0;
+  static const _pinchSlop = 16.0;
   static const _tapTimeout = Duration(milliseconds: 280);
 
   final _pointers = <int, Offset>{};
   Offset? _singleOrigin;
   DateTime? _singleDownAt;
   double _singleTravel = 0;
-  DateTime? _twoFingerDownAt;
-  double _twoFingerTravel = 0;
-  bool _twoFingerGesture = false;
-  bool _twoFingerScrolled = false;
   Offset? _lastMovePos;
-  Offset? _twoFingerLastCenter;
+  double _relAccumX = 0;
+  double _relAccumY = 0;
+
+  int _pointerCount = 0;
+  bool _pendingTwoFinger = false;
+  double? _twoFingerStartSpan;
+  double _twoFingerTravel = 0;
+  DateTime? _twoFingerDownAt;
 
   int get _refW => widget.refWidth.clamp(1, 65535);
   int get _refH => widget.refHeight.clamp(1, 65535);
 
-  void _sendAbs(Offset local) {
-    final x = (local.dx / widget.videoSize.width * _refW).round().clamp(0, _refW);
-    final y = (local.dy / widget.videoSize.height * _refH).round().clamp(0, _refH);
+  @override
+  void didUpdateWidget(_StreamInputLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mode != widget.mode) {
+      _resetMouseState();
+    }
+    if (!widget.mouseControlEnabled || widget.multiTouchSession) {
+      _setCapturing(false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _setCapturing(false);
+    super.dispose();
+  }
+
+  void _resetMouseState() {
+    _pointers.clear();
+    _singleOrigin = null;
+    _singleDownAt = null;
+    _singleTravel = 0;
+    _lastMovePos = null;
+    _relAccumX = 0;
+    _relAccumY = 0;
+    _pendingTwoFinger = false;
+    _twoFingerStartSpan = null;
+    _twoFingerTravel = 0;
+    _twoFingerDownAt = null;
+    _setCapturing(false);
+  }
+
+  Offset? _videoLocal(Offset stackLocal) {
+    if (!widget.videoRect.contains(stackLocal)) return null;
+    return stackLocal - widget.videoRect.topLeft;
+  }
+
+  void _sendAbs(Offset videoLocal) {
+    final x = (videoLocal.dx / widget.videoSize.width * _refW)
+        .round()
+        .clamp(0, _refW);
+    final y = (videoLocal.dy / widget.videoSize.height * _refH)
+        .round()
+        .clamp(0, _refH);
     sendMouseAbs(
       x: x,
       y: y,
@@ -606,18 +740,14 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
   void _sendRel(Offset delta) {
     final scaleX = _refW / widget.videoSize.width;
     final scaleY = _refH / widget.videoSize.height;
-    final dx = (delta.dx * scaleX).round().clamp(-32768, 32767);
-    final dy = (delta.dy * scaleY).round().clamp(-32768, 32767);
-    if (dx != 0 || dy != 0) {
-      sendMouseMove(dx: dx, dy: dy);
-    }
-  }
-
-  void _sendScroll(double dyPixels) {
-    final lines = (dyPixels / 24).round().clamp(-32, 32);
-    if (lines != 0) {
-      sendMouseScroll(dx: 0, dy: -lines);
-    }
+    _relAccumX += delta.dx * scaleX;
+    _relAccumY += delta.dy * scaleY;
+    final dx = _relAccumX.round().clamp(-32768, 32767);
+    final dy = _relAccumY.round().clamp(-32768, 32767);
+    if (dx == 0 && dy == 0) return;
+    _relAccumX -= dx;
+    _relAccumY -= dy;
+    sendMouseMove(dx: dx, dy: dy);
   }
 
   void _setCapturing(bool on) {
@@ -629,77 +759,116 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
     return global.dx >= screenW - widget.screenEdgeGrab;
   }
 
+  bool get _canSendMouse =>
+      widget.mouseControlEnabled &&
+      !widget.multiTouchSession &&
+      !_pendingTwoFinger &&
+      _pointers.length < 2;
+
+  double? _twoFingerSpan() {
+    if (_pointers.length < 2) return null;
+    final pts = _pointers.values.toList(growable: false);
+    return (pts[0] - pts[1]).distance;
+  }
+
+  void _beginMultiTouchSession() {
+    if (widget.multiTouchSession) return;
+    _pendingTwoFinger = false;
+    _singleOrigin = null;
+    _singleDownAt = null;
+    _lastMovePos = null;
+    _relAccumX = 0;
+    _relAccumY = 0;
+    _setCapturing(false);
+    widget.onMultiTouchSessionChanged(true);
+  }
+
+  void _endMultiTouchSession() {
+    if (!widget.multiTouchSession) return;
+    widget.onMultiTouchSessionChanged(false);
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     if (_isInMenuEdgeZone(event.position)) return;
-    _pointers[event.pointer] = event.localPosition;
+    _pointerCount++;
+    final local = _videoLocal(event.localPosition);
+    if (local == null) return;
+
+    _pointers[event.pointer] = local;
     if (_pointers.length == 1) {
-      _singleOrigin = event.localPosition;
-      _singleDownAt = DateTime.now();
-      _singleTravel = 0;
-      _lastMovePos = event.localPosition;
-      _setCapturing(true);
-      if (widget.mode == PointerMode.direct) {
-        _sendAbs(event.localPosition);
+      if (_canSendMouse) {
+        _singleOrigin = local;
+        _singleDownAt = DateTime.now();
+        _singleTravel = 0;
+        _lastMovePos = local;
+        _relAccumX = 0;
+        _relAccumY = 0;
+        _setCapturing(true);
+        if (widget.mode == PointerMode.direct) {
+          _sendAbs(local);
+        }
       }
     } else if (_pointers.length == 2) {
-      _twoFingerGesture = true;
-      _twoFingerScrolled = false;
+      _pendingTwoFinger = true;
       _twoFingerDownAt = DateTime.now();
+      _twoFingerStartSpan = _twoFingerSpan();
       _twoFingerTravel = 0;
-      _twoFingerLastCenter = _twoFingerCenter();
-      _setCapturing(false);
+      _singleOrigin = null;
+      _singleDownAt = null;
+      _lastMovePos = null;
+      _relAccumX = 0;
+      _relAccumY = 0;
+      _beginMultiTouchSession();
+    } else if (_pointers.length > 2) {
+      _beginMultiTouchSession();
     }
   }
 
-  Offset? _twoFingerCenter() {
-    if (_pointers.length < 2) return null;
-    final pts = _pointers.values.toList(growable: false);
-    return Offset((pts[0].dx + pts[1].dx) / 2, (pts[0].dy + pts[1].dy) / 2);
-  }
-
   void _onPointerMove(PointerMoveEvent event) {
-    _pointers[event.pointer] = event.localPosition;
-    if (_pointers.length == 1 && _singleOrigin != null) {
-      _singleTravel = math.max(
-        _singleTravel,
-        (event.localPosition - _singleOrigin!).distance,
-      );
-      if (widget.mode == PointerMode.direct) {
-        _sendAbs(event.localPosition);
-      } else {
-        final last = _lastMovePos;
-        if (last != null) {
-          _sendRel(event.localPosition - last);
-        }
-        _lastMovePos = event.localPosition;
-      }
-    } else if (_pointers.length == 2 && _twoFingerDownAt != null) {
-      final pts = _pointers.values.toList(growable: false);
-      if (pts.length == 2) {
-        _twoFingerTravel = math.max(
-          _twoFingerTravel,
-          (pts[0] - pts[1]).distance,
-        );
-      }
-      final center = _twoFingerCenter();
-      final prev = _twoFingerLastCenter;
-      if (center != null && prev != null) {
-        final dy = center.dy - prev.dy;
-        if (dy.abs() > 1) {
-          _twoFingerScrolled = true;
-          _sendScroll(dy);
+    final local = _videoLocal(event.localPosition);
+    if (local == null) {
+      _pointers.remove(event.pointer);
+      return;
+    }
+    _pointers[event.pointer] = local;
+
+    if (_pointers.length >= 2) {
+      final span = _twoFingerSpan();
+      final startSpan = _twoFingerStartSpan;
+      if (span != null && startSpan != null) {
+        _twoFingerTravel = math.max(_twoFingerTravel, (span - startSpan).abs());
+        if (_twoFingerTravel >= _pinchSlop) {
+          _beginMultiTouchSession();
         }
       }
-      _twoFingerLastCenter = center;
+      return;
+    }
+
+    if (!_canSendMouse || _pointers.length != 1 || _singleOrigin == null) {
+      return;
+    }
+
+    _singleTravel = math.max(
+      _singleTravel,
+      (local - _singleOrigin!).distance,
+    );
+    if (widget.mode == PointerMode.direct) {
+      _sendAbs(local);
+    } else {
+      final last = _lastMovePos;
+      if (last != null) {
+        _sendRel(local - last);
+      }
+      _lastMovePos = local;
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    _pointerCount = math.max(0, _pointerCount - 1);
     final countBefore = _pointers.length;
+    final pendingTwo = _pendingTwoFinger;
     final twoStart = _twoFingerDownAt;
     final twoTravel = _twoFingerTravel;
-    final twoGesture = _twoFingerGesture;
-    final twoScroll = _twoFingerScrolled;
     final origin = _singleOrigin;
     final downAt = _singleDownAt;
     final travel = _singleTravel;
@@ -707,13 +876,13 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
     _pointers.remove(event.pointer);
 
     if (_pointers.isEmpty) {
-      if (twoGesture &&
-          !twoScroll &&
+      if (pendingTwo &&
           twoStart != null &&
           DateTime.now().difference(twoStart) < _tapTimeout &&
-          twoTravel < _tapSlop) {
+          twoTravel < _pinchSlop) {
         sendMouseClick(button: 1);
       } else if (countBefore == 1 &&
+          _canSendMouse &&
           origin != null &&
           downAt != null &&
           travel < _tapSlop &&
@@ -723,67 +892,102 @@ class _StreamTouchSurfaceState extends State<_StreamTouchSurface> {
         }
         sendMouseClick(button: 0);
       }
+
+      _resetMouseState();
+      _endMultiTouchSession();
+    } else if (_pointers.length == 1) {
+      // Lifting one finger after a pinch/pan — do not resume mouse until all
+      // fingers are up and a new touch begins.
+      _pendingTwoFinger = false;
+      _twoFingerStartSpan = null;
+      _twoFingerTravel = 0;
+      _twoFingerDownAt = null;
       _singleOrigin = null;
       _singleDownAt = null;
       _lastMovePos = null;
-      _twoFingerDownAt = null;
-      _twoFingerLastCenter = null;
-      _twoFingerGesture = false;
-      _twoFingerScrolled = false;
+      _relAccumX = 0;
+      _relAccumY = 0;
       _setCapturing(false);
-    } else if (_pointers.length == 1) {
-      _twoFingerDownAt = null;
-      _twoFingerLastCenter = null;
-      _twoFingerGesture = false;
-      _twoFingerScrolled = false;
-      _twoFingerTravel = 0;
-      final remaining = _pointers.values.first;
-      _singleOrigin = remaining;
-      _singleDownAt = DateTime.now();
-      _singleTravel = 0;
-      _lastMovePos = remaining;
-      _setCapturing(true);
-      if (widget.mode == PointerMode.direct) {
-        _sendAbs(remaining);
-      }
     }
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
+    _pointerCount = math.max(0, _pointerCount - 1);
     _pointers.remove(event.pointer);
     if (_pointers.isEmpty) {
-      _singleOrigin = null;
-      _singleDownAt = null;
-      _lastMovePos = null;
-      _twoFingerDownAt = null;
-      _twoFingerLastCenter = null;
-      _twoFingerGesture = false;
-      _twoFingerScrolled = false;
-      _setCapturing(false);
+      _resetMouseState();
+      _endMultiTouchSession();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: _onPointerDown,
-      onPointerMove: _onPointerMove,
-      onPointerUp: _onPointerUp,
-      onPointerCancel: _onPointerCancel,
-      child: const SizedBox.expand(),
+    return Positioned.fill(
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: _onPointerDown,
+        onPointerMove: _onPointerMove,
+        onPointerUp: _onPointerUp,
+        onPointerCancel: _onPointerCancel,
+        child: const SizedBox.expand(),
+      ),
     );
   }
 }
 
+class _LiveDiagnostics {
+  const _LiveDiagnostics({
+    this.width = 0,
+    this.height = 0,
+    this.targetFps = 0,
+    this.renderFps = 0,
+    this.codec = '',
+    this.bytesPerSec = 0,
+  });
+
+  final int width;
+  final int height;
+  final int targetFps;
+  final double renderFps;
+  final String codec;
+  final double bytesPerSec;
+
+  bool get hasResolution => width > 0 && height > 0;
+
+  @override
+  int get hashCode => Object.hash(
+        width,
+        height,
+        targetFps,
+        renderFps.round(),
+        bytesPerSec.round(),
+        codec,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _LiveDiagnostics &&
+          width == other.width &&
+          height == other.height &&
+          targetFps == other.targetFps &&
+          (renderFps - other.renderFps).abs() < 0.05 &&
+          (bytesPerSec - other.bytesPerSec).abs() < 100 &&
+          codec == other.codec;
+}
+
 class _StreamMenu extends StatelessWidget {
   const _StreamMenu({
+    required this.diagnostics,
+    required this.showDiagnostics,
     required this.pointerMode,
     required this.onPointerModeChanged,
     required this.onStop,
     required this.onKeyboard,
   });
 
+  final _LiveDiagnostics diagnostics;
+  final bool showDiagnostics;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
   final VoidCallback onStop;
@@ -839,6 +1043,28 @@ class _StreamMenu extends StatelessWidget {
                   metrics.bottom,
                 ),
                 children: [
+                  if (showDiagnostics) ...[
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        metrics.horizontal + 4,
+                        compact ? 4 : 8,
+                        metrics.horizontal + 4,
+                        compact ? 2 : 4,
+                      ),
+                      child: Text(
+                        'Connection',
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                      child: _DiagnosticsPanel(
+                        diagnostics: diagnostics,
+                        compact: compact,
+                      ),
+                    ),
+                    const Divider(height: 1),
+                  ],
                   Padding(
                     padding: EdgeInsets.fromLTRB(
                       metrics.horizontal + 4,
@@ -929,7 +1155,8 @@ class _StreamMenu extends StatelessWidget {
                     child: Text(
                       'Drag from the right edge for menu\n'
                       '1 finger: move · tap: left click\n'
-                      '2 fingers: scroll · tap: right click',
+                      '2 fingers: pinch zoom / pan (local)\n'
+                      'Quick 2-finger tap: right click',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: compact ? 1.25 : 1.35,
@@ -941,6 +1168,96 @@ class _StreamMenu extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _DiagnosticsPanel extends StatelessWidget {
+  const _DiagnosticsPanel({
+    required this.diagnostics,
+    required this.compact,
+  });
+
+  final _LiveDiagnostics diagnostics;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final labelStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final valueStyle = (compact
+            ? theme.textTheme.bodySmall
+            : theme.textTheme.bodyMedium)
+        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+
+    final resolution = diagnostics.hasResolution
+        ? '${diagnostics.width}×${diagnostics.height}'
+        : '—';
+    final fps = diagnostics.renderFps > 0.05
+        ? diagnostics.targetFps > 0
+            ? '${diagnostics.renderFps.toStringAsFixed(0)} fps (${diagnostics.targetFps} target)'
+            : '${diagnostics.renderFps.toStringAsFixed(0)} fps'
+        : diagnostics.targetFps > 0
+            ? '0 fps (${diagnostics.targetFps} target)'
+            : '—';
+    final rate = _formatDataRate(diagnostics.bytesPerSec);
+    final codec = diagnostics.codec.isNotEmpty ? diagnostics.codec : '—';
+
+    return Column(
+      children: [
+        _DiagRow(label: 'Resolution', value: resolution, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(label: 'Frame rate', value: fps, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(label: 'Data rate', value: rate, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(label: 'Codec', value: codec, labelStyle: labelStyle, valueStyle: valueStyle),
+      ],
+    );
+  }
+
+  static String _formatDataRate(double bytesPerSec) {
+    if (bytesPerSec <= 0) return '—';
+    if (bytesPerSec < 1024) {
+      return '${bytesPerSec.round()} B/s';
+    }
+    if (bytesPerSec < 1024 * 1024) {
+      return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s';
+    }
+    return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+  }
+}
+
+class _DiagRow extends StatelessWidget {
+  const _DiagRow({
+    required this.label,
+    required this.value,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  final String label;
+  final String value;
+  final TextStyle? labelStyle;
+  final TextStyle? valueStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 2, child: Text(label, style: labelStyle)),
+          Expanded(
+            flex: 3,
+            child: Text(
+              value,
+              style: valueStyle,
+              textAlign: TextAlign.end,
+            ),
+          ),
+        ],
       ),
     );
   }

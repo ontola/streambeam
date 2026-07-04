@@ -54,9 +54,28 @@ unsafe fn set_cursor_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
 
 #[cfg(windows)]
 unsafe fn mouse_move(dx: i16, dy: i16) {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{mouse_event, MOUSEEVENTF_MOVE};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT,
+    };
 
-    mouse_event(MOUSEEVENTF_MOVE, dx as i32, dy as i32, 0, 0);
+    if dx == 0 && dy == 0 {
+        return;
+    }
+
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: i32::from(dx),
+                dy: i32::from(dy),
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let _ = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
 }
 
 #[cfg(windows)]

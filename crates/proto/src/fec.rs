@@ -1,6 +1,6 @@
 //! Reed-Solomon frame sharding and recovery.
 
-use reed_solomon_simd;
+use reed_solomon_simd::ReedSolomonEncoder;
 
 use crate::media::{self, MediaHeader, DEFAULT_FEC_RATIO, FLAG_KEYFRAME, FLAG_PARITY};
 use crate::ProtoError;
@@ -11,6 +11,30 @@ use crate::ProtoError;
 /// single access unit needs anywhere near this many 1200-byte shards anyway
 /// (16,384 covers a ~19 MB frame).
 pub const MAX_DATA_SHARDS: usize = 16_384;
+
+/// Whether Reed-Solomon can encode/decode this `(k, r)` pair.
+pub fn fec_params_supported(k: usize, r: usize) -> bool {
+    if k == 0 {
+        return false;
+    }
+    ReedSolomonEncoder::supports(k, r)
+}
+
+/// Largest data-shard count that fits within [`MAX_DATA_SHARDS`] and the RS codec.
+pub fn max_supported_data_shards() -> usize {
+    let mut lo = 1usize;
+    let mut hi = MAX_DATA_SHARDS;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        let r = media::parity_count(mid, DEFAULT_FEC_RATIO);
+        if fec_params_supported(mid, r) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
 
 /// One encoded shard: header + payload bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +81,13 @@ pub fn encode_frame(
     if total > u16::MAX as usize {
         return Err(ProtoError::FrameTooLarge {
             max: u16::MAX as usize,
+            frame_len: frame.len(),
+            shard_len,
+        });
+    }
+    if !fec_params_supported(k, r) {
+        return Err(ProtoError::FrameTooLarge {
+            max: max_supported_data_shards(),
             frame_len: frame.len(),
             shard_len,
         });
@@ -123,6 +154,32 @@ pub fn decode_frame(shards: &[MediaShard]) -> Result<Vec<u8>, ProtoError> {
     let r = usize::from(h0.r);
     let frame_len = h0.frame_len as usize;
     let shard_len = shards[0].payload.len();
+
+    if k == 0 || k > MAX_DATA_SHARDS {
+        return Err(ProtoError::Invalid {
+            field: "k",
+            value: k as u64,
+        });
+    }
+    let expected_r = media::parity_count(k, DEFAULT_FEC_RATIO);
+    if r > expected_r.saturating_add(1) {
+        return Err(ProtoError::Invalid {
+            field: "r",
+            value: r as u64,
+        });
+    }
+    if !fec_params_supported(k, r) {
+        return Err(ProtoError::Invalid {
+            field: "shard_count",
+            value: ((k as u64) << 32) | r as u64,
+        });
+    }
+    if frame_len == 0 || frame_len > k.saturating_mul(shard_len) {
+        return Err(ProtoError::Invalid {
+            field: "frame_len",
+            value: frame_len as u64,
+        });
+    }
 
     if shard_len == 0 || shard_len % 2 != 0 {
         return Err(ProtoError::Invalid {
@@ -284,6 +341,15 @@ mod tests {
         assert_eq!(kept.len(), k);
         let recovered = decode_frame(&kept).unwrap();
         assert_eq!(recovered, frame);
+    }
+
+    #[test]
+    fn max_supported_data_shards_within_rs_limits() {
+        let max_k = max_supported_data_shards();
+        assert!(max_k >= 256, "expected at least 256 data shards supported");
+        let r = media::parity_count(max_k, DEFAULT_FEC_RATIO);
+        assert!(fec_params_supported(max_k, r));
+        assert!(max_k <= MAX_DATA_SHARDS);
     }
 
     #[test]

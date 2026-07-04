@@ -703,13 +703,24 @@ async fn stream_video(
         };
 
         let t_shard = std::time::Instant::now();
-        let shards = encode_video_frame(
+        let shards = match encode_video_frame(
             frame_id,
             &frame.data,
             frame.keyframe,
             capture_ts_us(),
             max_datagram,
-        )?;
+        ) {
+            Ok(shards) => shards,
+            Err(e) => {
+                log!(
+                    "dropping frame {frame_id} ({} bytes): FEC encode failed: {e}",
+                    frame.data.len()
+                );
+                frame_id = frame_id.wrapping_add(1);
+                tokio::time::sleep(frame_interval.saturating_sub(iter_start.elapsed())).await;
+                continue;
+            }
+        };
         shard_us += t_shard.elapsed().as_micros();
 
         let t_send = std::time::Instant::now();

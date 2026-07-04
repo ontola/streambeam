@@ -13,6 +13,28 @@ pub fn playback_frames_rendered() -> u64 {
     crate::playback::frames_rendered()
 }
 
+#[derive(Debug, Clone)]
+pub struct PlaybackDiagnostics {
+    pub width: u16,
+    pub height: u16,
+    pub fps: u8,
+    pub codec: String,
+    pub bytes_received: u64,
+    pub frames_rendered: u64,
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn playback_diagnostics() -> PlaybackDiagnostics {
+    PlaybackDiagnostics {
+        width: crate::playback::session_width(),
+        height: crate::playback::session_height(),
+        fps: crate::playback::session_fps(),
+        codec: crate::playback::session_codec(),
+        bytes_received: crate::playback::bytes_received(),
+        frames_rendered: crate::playback::frames_rendered(),
+    }
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_move(dx: i16, dy: i16) {
     #[cfg(target_os = "android")]

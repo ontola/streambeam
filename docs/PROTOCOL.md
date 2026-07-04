@@ -56,7 +56,7 @@ replies `PairAck`.
 - **S1** — client-opened uni: `InputEvent` frames only (same framing).
 - **Datagrams** — media (video ch 0, audio ch 1), unreliable.
 
-## Media datagram: 16-byte little-endian header + shard payload
+## Media datagram: 18-byte little-endian header + shard payload
 
 | off | field | notes |
 |---|---|---|
@@ -64,12 +64,12 @@ replies `PairAck`.
 | 1 | `u8 flags` | bit0 keyframe, bit1 parity shard |
 | 2 | `u16 frame_id` | wrapping, per channel |
 | 4 | `u16 shard_index` | 0..k+r |
-| 6 | `u8 k` | data shard count |
-| 7 | `u8 r` | parity shard count |
-| 8 | `u32 frame_len` | true frame byte length (strip FEC padding) |
-| 12 | `u32 capture_ts_us` | host clock µs, wrapping |
+| 6 | `u16 k` | data shard count |
+| 8 | `u16 r` | parity shard count |
+| 10 | `u32 frame_len` | true frame byte length (strip FEC padding) |
+| 14 | `u32 capture_ts_us` | host clock µs, wrapping |
 
-Per video frame: payload split into K shards of `min(max_datagram_size − 16, 1200)`
+Per video frame: payload split into K shards of `min(max_datagram_size − 18, 1200)`
 bytes (shard length rounded to even for the RS codec), R = ceil(K × fec_ratio)
 Reed-Solomon parity shards. Client recovers from any K of K+R; abandons a frame when
 a frame ≥ 2 ahead completes or after 50 ms, then sends `RequestIdr` (host rate-limits

@@ -53,6 +53,9 @@ abstract class StreambeamFfiApiImplPlatform
   SavedHostInfo? dco_decode_opt_box_autoadd_saved_host_info(dynamic raw);
 
   @protected
+  PlaybackDiagnostics dco_decode_playback_diagnostics(dynamic raw);
+
+  @protected
   SavedHostInfo dco_decode_saved_host_info(dynamic raw);
 
   @protected
@@ -109,6 +112,11 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   SavedHostInfo? sse_decode_opt_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PlaybackDiagnostics sse_decode_playback_diagnostics(
     SseDeserializer deserializer,
   );
 
@@ -184,6 +192,12 @@ abstract class StreambeamFfiApiImplPlatform
   @protected
   void sse_encode_opt_box_autoadd_saved_host_info(
     SavedHostInfo? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_playback_diagnostics(
+    PlaybackDiagnostics self,
     SseSerializer serializer,
   );
 

@@ -173,7 +173,7 @@ struct Pipeline {
     capture_width: u32,
     capture_height: u32,
     /// Encoded resolution — `capture_{width,height}` downscaled to
-    /// `MAX_ENCODE_DIM`, preserving aspect ratio. This is what `nv12`, the MF
+    /// `max_encode_dim`, preserving aspect ratio. This is what `nv12`, the MF
     /// encoder, and `EncodedFrame` all use.
     width: u32,
     height: u32,

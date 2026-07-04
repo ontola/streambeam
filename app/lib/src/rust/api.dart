@@ -7,10 +7,13 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `receive_stats`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
     StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
+
+PlaybackDiagnostics playbackDiagnostics() =>
+    StreambeamFfi.instance.api.crateApiPlaybackDiagnostics();
 
 void sendMouseMove({required int dx, required int dy}) =>
     StreambeamFfi.instance.api.crateApiSendMouseMove(dx: dx, dy: dy);
@@ -129,6 +132,45 @@ class DiscoveredHost {
           port == other.port &&
           addrs == other.addrs &&
           hostPubkey == other.hostPubkey;
+}
+
+class PlaybackDiagnostics {
+  final int width;
+  final int height;
+  final int fps;
+  final String codec;
+  final BigInt bytesReceived;
+  final BigInt framesRendered;
+
+  const PlaybackDiagnostics({
+    required this.width,
+    required this.height,
+    required this.fps,
+    required this.codec,
+    required this.bytesReceived,
+    required this.framesRendered,
+  });
+
+  @override
+  int get hashCode =>
+      width.hashCode ^
+      height.hashCode ^
+      fps.hashCode ^
+      codec.hashCode ^
+      bytesReceived.hashCode ^
+      framesRendered.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaybackDiagnostics &&
+          runtimeType == other.runtimeType &&
+          width == other.width &&
+          height == other.height &&
+          fps == other.fps &&
+          codec == other.codec &&
+          bytesReceived == other.bytesReceived &&
+          framesRendered == other.framesRendered;
 }
 
 /// Saved host details for the device list (shown even when offline).

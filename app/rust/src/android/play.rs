@@ -277,6 +277,12 @@ fn play_session_blocking(
 
     let width = i32::from(session.width);
     let height = i32::from(session.height);
+    crate::playback::set_session(
+        session.width,
+        session.height,
+        session.fps,
+        session.codec.clone(),
+    );
     let (mut codec, feed_mode) = start_decoder(&window, width, height, &sps, &pps, &avcc)?;
     codec.start().map_err(|e| codec_err("start", media_err_label(e)))?;
 
@@ -346,43 +352,53 @@ fn play_session_blocking(
         let last_index = batch.len() - 1;
 
         for (i, datagram) in batch.iter().enumerate() {
+            crate::playback::note_bytes_received(datagram.len() as u64);
+
             let header = MediaHeader::decode(datagram).map_err(|e| e.to_string())?;
             if header.channel == CHANNEL_AUDIO {
                 stats.audio_packets += 1;
                 continue;
             }
 
-            let Some((_id, frame)) = asm.push_datagram(datagram).map_err(|e| e.to_string())?
-            else {
-                continue;
-            };
-            let frame = access_unit_without_sei(&frame);
-            if frame.is_empty() {
-                continue;
-            }
-            let is_keyframe = access_unit_is_keyframe(&frame);
+            match asm.push_datagram(datagram) {
+                Ok(Some((_id, frame))) => {
+                    let frame = access_unit_without_sei(&frame);
+                    if frame.is_empty() {
+                        continue;
+                    }
+                    let is_keyframe = access_unit_is_keyframe(&frame);
 
-            // Always decode a keyframe (it resets the reference chain and is
-            // worth showing even a little late). Otherwise, while behind,
-            // only decode the freshest completion in this batch — the rest
-            // are already stale by the time we'd finish them, so decoding
-            // them would just burn time we need to spend catching up.
-            if behind && !is_keyframe && i != last_index {
-                consecutive_skipped += 1;
-                stats.video_frames = asm.stats().frames_complete;
-                continue;
-            }
+                    // Always decode a keyframe (it resets the reference chain and is
+                    // worth showing even a little late). Otherwise, while behind,
+                    // only decode the freshest completion in this batch — the rest
+                    // are already stale by the time we'd finish them, so decoding
+                    // them would just burn time we need to spend catching up.
+                    if behind && !is_keyframe && i != last_index {
+                        consecutive_skipped += 1;
+                        stats.video_frames = asm.stats().frames_complete;
+                        continue;
+                    }
 
-            let sample = encode_frame(feed_mode, &frame);
-            if sample.is_empty() {
-                continue;
+                    let sample = encode_frame(feed_mode, &frame);
+                    if sample.is_empty() {
+                        continue;
+                    }
+                    let flags = if is_keyframe {
+                        BUFFER_FLAG_KEY_FRAME
+                    } else {
+                        0
+                    };
+                    feed_sample(&mut codec, &sample, pts_us, flags)?;
+                    pts_us += 33_000;
+                    stats.video_frames = asm.stats().frames_complete;
+                    drain_output(&mut codec)?;
+                    consecutive_skipped = 0;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!("streambeam frame reassembly failed: {e}");
+                }
             }
-            let flags = if is_keyframe { BUFFER_FLAG_KEY_FRAME } else { 0 };
-            feed_sample(&mut codec, &sample, pts_us, flags)?;
-            pts_us += 33_000;
-            stats.video_frames = asm.stats().frames_complete;
-            drain_output(&mut codec)?;
-            consecutive_skipped = 0;
         }
 
         // We've been skipping non-keyframes for a while (they depend on a
