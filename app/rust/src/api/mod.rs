@@ -315,3 +315,162 @@ async fn receive_stats(
 
     Ok(stats)
 }
+
+// --- Host role (Windows desktop) ---
+
+#[derive(Debug, Clone)]
+pub struct HostClientInfo {
+    pub name: String,
+    pub addr: String,
+    pub host_pubkey: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostPairRequest {
+    pub id: u64,
+    pub client_name: String,
+    pub client_addr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostSnapshot {
+    pub running: bool,
+    pub host_name: String,
+    pub listen_addr: String,
+    pub pairing_link: Option<String>,
+    pub pairing_payload: Option<String>,
+    pub error: Option<String>,
+    pub discoverable: bool,
+    pub accepts_connections: bool,
+    pub clients: Vec<HostClientInfo>,
+    pub pending_approval: Option<HostPairRequest>,
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_platform_supported() -> bool {
+    cfg!(target_os = "windows")
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn start_host(
+    host_name: Option<String>,
+    listen: Option<String>,
+    fps: u32,
+    max_encode_dim: u32,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::host::start(host_name, listen, fps, max_encode_dim);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (host_name, listen, fps, max_encode_dim);
+        Err("hosting is only supported on Windows".into())
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn stop_host() {
+    #[cfg(target_os = "windows")]
+    crate::host::stop();
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_snapshot() -> HostSnapshot {
+    #[cfg(target_os = "windows")]
+    {
+        let s = crate::host::snapshot();
+        return HostSnapshot {
+            running: s.running,
+            host_name: s.host_name,
+            listen_addr: s.listen_addr,
+            pairing_link: s.pairing_link,
+            pairing_payload: s.pairing_payload,
+            error: s.error,
+            discoverable: s.discoverable,
+            accepts_connections: s.accepts_connections,
+            clients: s
+                .clients
+                .into_iter()
+                .map(|c| HostClientInfo {
+                    name: c.name,
+                    addr: c.addr,
+                    host_pubkey: c.pubkey,
+                })
+                .collect(),
+            pending_approval: s.pending_approval.map(|p| HostPairRequest {
+                id: p.id,
+                client_name: p.client_name,
+                client_addr: p.client_addr,
+            }),
+        };
+    }
+    #[cfg(not(target_os = "windows"))]
+    HostSnapshot {
+        running: false,
+        host_name: String::new(),
+        listen_addr: String::new(),
+        pairing_link: None,
+        pairing_payload: None,
+        error: None,
+        discoverable: false,
+        accepts_connections: false,
+        clients: Vec::new(),
+        pending_approval: None,
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_set_discoverable(on: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    return crate::host::set_discoverable(on);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = on;
+        Err("hosting is only supported on Windows".into())
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_set_accepts_connections(on: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    return crate::host::set_accepts_connections(on);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = on;
+        Err("hosting is only supported on Windows".into())
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_disconnect_client(addr: String) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    return crate::host::disconnect_client(&addr);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = addr;
+        Err("hosting is only supported on Windows".into())
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_forget_client(addr: String) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    return crate::host::forget_client(&addr);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = addr;
+        Err("hosting is only supported on Windows".into())
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_respond_pairing(id: u64, allow: bool) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    return crate::host::respond_pairing(id, allow);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (id, allow);
+        Err("hosting is only supported on Windows".into())
+    }
+}

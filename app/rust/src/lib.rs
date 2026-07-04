@@ -4,5 +4,8 @@ mod input;
 mod playback;
 mod store;
 
+#[cfg(target_os = "windows")]
+mod host;
+
 #[cfg(target_os = "android")]
 mod android;

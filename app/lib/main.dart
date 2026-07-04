@@ -6,9 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:window_manager/window_manager.dart';
 
+import 'beam_page.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 import 'stream_player.dart';
@@ -32,9 +33,22 @@ Future<void> openOntola() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await windowManager.ensureInitialized();
+    const windowOptions = WindowOptions(
+      size: Size(480, 720),
+      minimumSize: Size(400, 600),
+      center: true,
+      title: 'StreamBeam',
+    );
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
   await StreambeamFfi.init();
-  final dir = await getApplicationDocumentsDirectory();
-  setAppDataDir(dir: dir.path);
+  final dir = await streambeamDataDir();
+  setAppDataDir(dir: dir);
   runApp(const StreamBeamApp());
 }
 
@@ -49,7 +63,7 @@ class StreamBeamApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: const WatchPage(),
+      home: Platform.isAndroid ? const WatchPage() : const AppShell(),
     );
   }
 }

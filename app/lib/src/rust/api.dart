@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `receive_stats`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
     StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
@@ -103,6 +103,41 @@ Future<StreamStats> reconnectPlayStream({
   maxVideoFrames: maxVideoFrames,
 );
 
+bool hostPlatformSupported() =>
+    StreambeamFfi.instance.api.crateApiHostPlatformSupported();
+
+void startHost({
+  String? hostName,
+  String? listen,
+  required int fps,
+  required int maxEncodeDim,
+}) => StreambeamFfi.instance.api.crateApiStartHost(
+  hostName: hostName,
+  listen: listen,
+  fps: fps,
+  maxEncodeDim: maxEncodeDim,
+);
+
+void stopHost() => StreambeamFfi.instance.api.crateApiStopHost();
+
+HostSnapshot hostSnapshot() =>
+    StreambeamFfi.instance.api.crateApiHostSnapshot();
+
+void hostSetDiscoverable({required bool on_}) =>
+    StreambeamFfi.instance.api.crateApiHostSetDiscoverable(on_: on_);
+
+void hostSetAcceptsConnections({required bool on_}) =>
+    StreambeamFfi.instance.api.crateApiHostSetAcceptsConnections(on_: on_);
+
+bool hostDisconnectClient({required String addr}) =>
+    StreambeamFfi.instance.api.crateApiHostDisconnectClient(addr: addr);
+
+bool hostForgetClient({required String addr}) =>
+    StreambeamFfi.instance.api.crateApiHostForgetClient(addr: addr);
+
+bool hostRespondPairing({required BigInt id, required bool allow}) =>
+    StreambeamFfi.instance.api.crateApiHostRespondPairing(id: id, allow: allow);
+
 /// LAN hosts advertising via mDNS.
 class DiscoveredHost {
   final String name;
@@ -132,6 +167,109 @@ class DiscoveredHost {
           port == other.port &&
           addrs == other.addrs &&
           hostPubkey == other.hostPubkey;
+}
+
+class HostClientInfo {
+  final String name;
+  final String addr;
+  final Uint8List hostPubkey;
+
+  const HostClientInfo({
+    required this.name,
+    required this.addr,
+    required this.hostPubkey,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ addr.hashCode ^ hostPubkey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostClientInfo &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          addr == other.addr &&
+          hostPubkey == other.hostPubkey;
+}
+
+class HostPairRequest {
+  final BigInt id;
+  final String clientName;
+  final String clientAddr;
+
+  const HostPairRequest({
+    required this.id,
+    required this.clientName,
+    required this.clientAddr,
+  });
+
+  @override
+  int get hashCode => id.hashCode ^ clientName.hashCode ^ clientAddr.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostPairRequest &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          clientName == other.clientName &&
+          clientAddr == other.clientAddr;
+}
+
+class HostSnapshot {
+  final bool running;
+  final String hostName;
+  final String listenAddr;
+  final String? pairingLink;
+  final String? pairingPayload;
+  final String? error;
+  final bool discoverable;
+  final bool acceptsConnections;
+  final List<HostClientInfo> clients;
+  final HostPairRequest? pendingApproval;
+
+  const HostSnapshot({
+    required this.running,
+    required this.hostName,
+    required this.listenAddr,
+    this.pairingLink,
+    this.pairingPayload,
+    this.error,
+    required this.discoverable,
+    required this.acceptsConnections,
+    required this.clients,
+    this.pendingApproval,
+  });
+
+  @override
+  int get hashCode =>
+      running.hashCode ^
+      hostName.hashCode ^
+      listenAddr.hashCode ^
+      pairingLink.hashCode ^
+      pairingPayload.hashCode ^
+      error.hashCode ^
+      discoverable.hashCode ^
+      acceptsConnections.hashCode ^
+      clients.hashCode ^
+      pendingApproval.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSnapshot &&
+          runtimeType == other.runtimeType &&
+          running == other.running &&
+          hostName == other.hostName &&
+          listenAddr == other.listenAddr &&
+          pairingLink == other.pairingLink &&
+          pairingPayload == other.pairingPayload &&
+          error == other.error &&
+          discoverable == other.discoverable &&
+          acceptsConnections == other.acceptsConnections &&
+          clients == other.clients &&
+          pendingApproval == other.pendingApproval;
 }
 
 class PlaybackDiagnostics {

@@ -14,7 +14,10 @@ log = "0.4"
 streambeam-core = { path = "../../crates/core" }
 streambeam-proto = { path = "../../crates/proto" }
 streambeam-net = { path = "../../crates/net" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[target.'cfg(windows)'.dependencies]
+streambeam-host = { path = "../../crates/host" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.14"

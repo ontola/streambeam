@@ -10,6 +10,7 @@ use clap::Parser;
 pub mod audio;
 #[cfg(windows)]
 mod capture;
+pub mod config;
 pub mod data_dir;
 pub mod encode;
 pub mod input_inject;
@@ -20,9 +21,9 @@ pub mod server;
 #[cfg(windows)]
 mod tray;
 
+pub use config::{build_host_config, default_host_name};
 pub use encode::{EncodedFrame, EncodeError, VideoEncoder};
-
-use data_dir::{ensure_data_dir, identity_path, paired_store_path};
+pub use server::{ClientEntry, HostConfig, HostControls, PairApproval};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -52,12 +53,15 @@ struct Opt {
     /// Pairing token lifetime in seconds.
     #[arg(long, default_value_t = 600)]
     token_ttl: u64,
-}
 
-fn default_host_name() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "streambeam".into())
+    /// Run without the legacy Win32 tray window (default on Windows).
+    #[arg(long)]
+    headless: bool,
+
+    /// Legacy Win32 tray + QR window (deprecated — use the Flutter desktop app).
+    #[cfg(windows)]
+    #[arg(long)]
+    legacy_tray: bool,
 }
 
 fn main() {
@@ -72,10 +76,18 @@ fn main() {
 
     #[cfg(windows)]
     {
-        if let Err(e) = tray::run(opt) {
+        if opt.legacy_tray {
+            if let Err(e) = tray::run(opt) {
+                eprintln!("host error: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        if let Err(e) = run_cli(opt) {
             eprintln!("host error: {e}");
             std::process::exit(1);
         }
+        return;
     }
 
     #[cfg(not(windows))]
@@ -90,7 +102,7 @@ fn main() {
 fn build_config(
     opt: Opt,
     pairing_payload_tx: Option<std::sync::mpsc::Sender<String>>,
-    pairing_request_tx: Option<std::sync::mpsc::Sender<server::PairApproval>>,
+    pairing_request_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
     controls: std::sync::Arc<server::HostControls>,
 ) -> server::HostConfig {
     let listen = std::env::var("STREAMBEAM_LISTEN")
@@ -105,22 +117,18 @@ fn build_config(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(opt.max_encode_dim);
-    let _ = ensure_data_dir();
-    server::HostConfig {
+    build_host_config(
         listen,
-        host_name: opt
-            .name
+        opt.name
             .or_else(|| std::env::var("STREAMBEAM_HOST_NAME").ok())
             .unwrap_or_else(default_host_name),
         fps,
         max_encode_dim,
-        token_ttl_secs: opt.token_ttl,
-        identity_path: identity_path(),
-        paired_store: Some(paired_store_path()),
+        opt.token_ttl,
         pairing_payload_tx,
         pairing_request_tx,
         controls,
-    }
+    )
 }
 
 #[cfg(not(windows))]

@@ -25,10 +25,25 @@ abstract class StreambeamFfiApiImplPlatform
   String dco_decode_String(dynamic raw);
 
   @protected
+  bool dco_decode_bool(dynamic raw);
+
+  @protected
+  HostPairRequest dco_decode_box_autoadd_host_pair_request(dynamic raw);
+
+  @protected
   SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw);
 
   @protected
   DiscoveredHost dco_decode_discovered_host(dynamic raw);
+
+  @protected
+  HostClientInfo dco_decode_host_client_info(dynamic raw);
+
+  @protected
+  HostPairRequest dco_decode_host_pair_request(dynamic raw);
+
+  @protected
+  HostSnapshot dco_decode_host_snapshot(dynamic raw);
 
   @protected
   int dco_decode_i_16(dynamic raw);
@@ -43,6 +58,9 @@ abstract class StreambeamFfiApiImplPlatform
   List<DiscoveredHost> dco_decode_list_discovered_host(dynamic raw);
 
   @protected
+  List<HostClientInfo> dco_decode_list_host_client_info(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -50,6 +68,9 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  HostPairRequest? dco_decode_opt_box_autoadd_host_pair_request(dynamic raw);
 
   @protected
   SavedHostInfo? dco_decode_opt_box_autoadd_saved_host_info(dynamic raw);
@@ -82,12 +103,29 @@ abstract class StreambeamFfiApiImplPlatform
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  HostPairRequest sse_decode_box_autoadd_host_pair_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SavedHostInfo sse_decode_box_autoadd_saved_host_info(
     SseDeserializer deserializer,
   );
 
   @protected
   DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
+
+  @protected
+  HostClientInfo sse_decode_host_client_info(SseDeserializer deserializer);
+
+  @protected
+  HostPairRequest sse_decode_host_pair_request(SseDeserializer deserializer);
+
+  @protected
+  HostSnapshot sse_decode_host_snapshot(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_16(SseDeserializer deserializer);
@@ -104,6 +142,11 @@ abstract class StreambeamFfiApiImplPlatform
   );
 
   @protected
+  List<HostClientInfo> sse_decode_list_host_client_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -111,6 +154,11 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  HostPairRequest? sse_decode_opt_box_autoadd_host_pair_request(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SavedHostInfo? sse_decode_opt_box_autoadd_saved_host_info(
@@ -147,10 +195,16 @@ abstract class StreambeamFfiApiImplPlatform
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer);
+  void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
-  void sse_encode_String(String self, SseSerializer serializer);
+  void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_host_pair_request(
+    HostPairRequest self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_saved_host_info(
@@ -163,6 +217,21 @@ abstract class StreambeamFfiApiImplPlatform
     DiscoveredHost self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_host_client_info(
+    HostClientInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_pair_request(
+    HostPairRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_snapshot(HostSnapshot self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_16(int self, SseSerializer serializer);
@@ -180,6 +249,12 @@ abstract class StreambeamFfiApiImplPlatform
   );
 
   @protected
+  void sse_encode_list_host_client_info(
+    List<HostClientInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -190,6 +265,12 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_host_pair_request(
+    HostPairRequest? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_saved_host_info(
@@ -226,9 +307,6 @@ abstract class StreambeamFfiApiImplPlatform
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer);
 }
 
 // Section: wire_class
