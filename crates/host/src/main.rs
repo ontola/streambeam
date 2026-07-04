@@ -20,8 +20,6 @@ pub mod mock;
 pub mod qr;
 pub mod server;
 #[cfg(windows)]
-mod tray;
-#[cfg(windows)]
 mod viiper_server;
 
 pub use config::{build_host_config, default_host_name};
@@ -56,15 +54,6 @@ struct Opt {
     /// Pairing token lifetime in seconds.
     #[arg(long, default_value_t = 600)]
     token_ttl: u64,
-
-    /// Run without the legacy Win32 tray window (default on Windows).
-    #[arg(long)]
-    headless: bool,
-
-    /// Legacy Win32 tray + QR window (deprecated — use the Flutter desktop app).
-    #[cfg(windows)]
-    #[arg(long)]
-    legacy_tray: bool,
 }
 
 fn main() {
@@ -77,28 +66,9 @@ fn main() {
 
     let opt = Opt::parse();
 
-    #[cfg(windows)]
-    {
-        if opt.legacy_tray {
-            if let Err(e) = tray::run(opt) {
-                eprintln!("host error: {e}");
-                std::process::exit(1);
-            }
-            return;
-        }
-        if let Err(e) = run_cli(opt) {
-            eprintln!("host error: {e}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    #[cfg(not(windows))]
-    {
-        if let Err(e) = run_cli(opt) {
-            eprintln!("host error: {e}");
-            std::process::exit(1);
-        }
+    if let Err(e) = run_cli(opt) {
+        eprintln!("host error: {e}");
+        std::process::exit(1);
     }
 }
 

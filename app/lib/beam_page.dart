@@ -190,17 +190,6 @@ class _BeamPageState extends State<BeamPage> {
     }
   }
 
-  Future<void> _copyPayload() async {
-    final payload = _snap.pairingPayload;
-    if (payload == null || payload.isEmpty) return;
-    await Clipboard.setData(ClipboardData(text: payload));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('sbm1: payload copied')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!hostPlatformSupported()) {
@@ -219,27 +208,74 @@ class _BeamPageState extends State<BeamPage> {
     final link = _snap.pairingLink;
     final busy = _starting && !_snap.running;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
-            ),
-            const SizedBox(width: 10),
-            const Text('Beam my screen'),
-          ],
-        ),
+    final connectedDevicesSection = [
+      Text(
+        'Connected devices',
+        style: theme.textTheme.titleSmall,
       ),
-      body: busy
+      const SizedBox(height: 8),
+      if (_snap.clients.isEmpty)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No phone connected yet.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        )
+      else
+        ..._snap.clients.map((c) => Card(
+              child: ListTile(
+                leading: const Icon(Icons.smartphone),
+                title: Text(c.name),
+                subtitle: Text(c.addr),
+                trailing: Wrap(
+                  spacing: 4,
+                  children: [
+                    TextButton(
+                      onPressed: () {
+                        try {
+                          hostDisconnectClient(addr: c.addr);
+                          _refresh();
+                        } catch (e) {
+                          _setStatus(e.toString(), error: true);
+                        }
+                      },
+                      child: const Text('Stop'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        try {
+                          hostForgetClient(addr: c.addr);
+                          _refresh();
+                        } catch (e) {
+                          _setStatus(e.toString(), error: true);
+                        }
+                      },
+                      child: const Text('Remove'),
+                    ),
+                  ],
+                ),
+              ),
+            )),
+    ];
+
+    return Scaffold(
+      body: SafeArea(
+        child: busy
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: () async => _refresh(),
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  if (_snap.clients.isNotEmpty) ...[
+                    ...connectedDevicesSection,
+                    const SizedBox(height: 12),
+                  ],
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -295,25 +331,11 @@ class _BeamPageState extends State<BeamPage> {
                             ),
                           ),
                           const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: FilledButton.icon(
-                                  onPressed:
-                                      link == null ? null : () => _copyLink(),
-                                  icon: const Icon(Icons.link),
-                                  label: const Text('Copy link'),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              OutlinedButton.icon(
-                                onPressed: _snap.pairingPayload == null
-                                    ? null
-                                    : () => _copyPayload(),
-                                icon: const Icon(Icons.content_paste),
-                                label: const Text('sbm1:'),
-                              ),
-                            ],
+                          FilledButton.icon(
+                            onPressed:
+                                link == null ? null : () => _copyLink(),
+                            icon: const Icon(Icons.link),
+                            label: const Text('Copy link'),
                           ),
                         ],
                       ),
@@ -366,59 +388,10 @@ class _BeamPageState extends State<BeamPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Connected devices',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  if (_snap.clients.isEmpty)
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(
-                          'No phone connected yet.',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    ..._snap.clients.map((c) => Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.smartphone),
-                            title: Text(c.name),
-                            subtitle: Text(c.addr),
-                            trailing: Wrap(
-                              spacing: 4,
-                              children: [
-                                TextButton(
-                                  onPressed: () {
-                                    try {
-                                      hostDisconnectClient(addr: c.addr);
-                                      _refresh();
-                                    } catch (e) {
-                                      _setStatus(e.toString(), error: true);
-                                    }
-                                  },
-                                  child: const Text('Stop'),
-                                ),
-                                TextButton(
-                                  onPressed: () {
-                                    try {
-                                      hostForgetClient(addr: c.addr);
-                                      _refresh();
-                                    } catch (e) {
-                                      _setStatus(e.toString(), error: true);
-                                    }
-                                  },
-                                  child: const Text('Remove'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )),
+                  if (_snap.clients.isEmpty) ...[
+                    const SizedBox(height: 12),
+                    ...connectedDevicesSection,
+                  ],
                   if (_status != null) ...[
                     const SizedBox(height: 12),
                     MaterialBanner(
@@ -437,6 +410,7 @@ class _BeamPageState extends State<BeamPage> {
                 ],
               ),
             ),
+      ),
     );
   }
 }
@@ -702,45 +676,34 @@ class _DesktopWatchStub extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.phone_android,
+                  size: 48,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Watch on this PC',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Desktop playback is coming soon. Use your phone to watch for now, '
+                  'or stay on the Beam tab to host from this PC.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            const Text('Watch'),
-          ],
-        ),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.phone_android,
-                size: 48,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Watch on this PC',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Desktop playback is coming soon. Use your phone to watch for now, '
-                'or stay on the Beam tab to host from this PC.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
           ),
         ),
       ),

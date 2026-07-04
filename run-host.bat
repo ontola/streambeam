@@ -1,27 +1,45 @@
 @echo off
-REM Build the StreamBeam host from the WSL repo, then launch it as a tray app.
+REM Build and launch the StreamBeam Flutter desktop app -- this IS the host UI
+REM now (Beam tab: QR/pairing, connected devices, tray icon that shows/hides
+REM the window). The old standalone streambeam-host.exe + Win32 tray are gone;
+REM don't confuse this with `cargo build -p streambeam-host`, which only
+REM builds the headless CLI binary devtools/CI use, with no UI at all.
 
-REM Build artifacts (incl. the C/cmake opus build) go to a native NTFS folder,
-REM NOT the \\wsl.localhost share -- UNC build dirs break cmake/MSVC and are slow.
-set "CARGO_TARGET_DIR=C:\Users\joepm\streambeam-target"
-set "HOST_EXE=%CARGO_TARGET_DIR%\release\streambeam-host.exe"
+REM Flutter/cargokit can't build from the \\wsl.localhost UNC share: cmd.exe
+REM refuses a UNC path as its starting directory, and cargokit's deep build
+REM tree (build\windows\x64\...\cargokit_build\...) blows past MAX_PATH unless
+REM the project root itself is short. So we mirror the repo to a short native
+REM path first and build from there.
+set "MIRROR=C:\dev\sb"
+set "APP_EXE=%MIRROR%\app\build\windows\x64\runner\Release\streambeam.exe"
+set "FLUTTER=C:\src\flutter\bin\flutter.bat"
 
-REM A still-running previous instance locks the .exe, so the linker can't
-REM overwrite it ("Access is denied"). Close it first; ignore the error if it
-REM wasn't running.
+REM A previous instance keeps its exe file locked (and its own host server
+REM bound to the port), so close it first; ignore the error if it wasn't running.
+taskkill /IM streambeam.exe /F >nul 2>&1
 taskkill /IM streambeam-host.exe /F >nul 2>&1
 
-REM pushd maps the \\wsl.localhost UNC path to a temporary drive letter so cargo
-REM has a real working directory to read the source from.
-pushd "\\wsl.localhost\Ubuntu\home\joep\dev\streambeam"
-if errorlevel 1 (
-    echo Could not reach the WSL repo path. Is WSL running? Is the distro named "Ubuntu"?
+echo Syncing repo to %MIRROR% ...
+REM /XD matches bare directory names at any depth (a path like
+REM "android\.gradle" resolves relative to cwd, not the source root, and
+REM silently fails to match -- bare names avoid that footgun). /XF skips
+REM CLAUDE.md: it's a symlink to AGENTS.md, and robocopy can't follow
+REM symlinks over the \\wsl.localhost 9P share ("cannot find the path
+REM specified", retried until it aborts the whole sync).
+robocopy "\\wsl.localhost\Ubuntu\home\joep\dev\streambeam" "%MIRROR%" /MIR ^
+  /XD .dart_tool build .git target ephemeral .gradle ^
+  /XF CLAUDE.md ^
+  /R:2 /W:1 /MT:8 /NFL /NDL /NJH
+if %errorlevel% GEQ 8 (
+    echo.
+    echo Repo sync failed. Is WSL running? Is the distro named "Ubuntu"?
     pause
     exit /b 1
 )
 
-echo Building StreamBeam host (the first build is slow)...
-cargo build --release -p streambeam-host
+echo Building StreamBeam (the first build is slow)...
+pushd "%MIRROR%\app"
+call "%FLUTTER%" build windows
 set "BUILD_ERR=%errorlevel%"
 popd
 
@@ -32,8 +50,7 @@ if not "%BUILD_ERR%"=="0" (
     exit /b 1
 )
 
-REM Launch detached: the release build is a GUI app (no console). This window closes.
-REM --legacy-tray: headless (no UI at all) is now the binary's default, which
-REM looks identical to a crash from the outside. Keep the tray + QR window
-REM until the Flutter desktop app takes over that role.
-start "" "%HOST_EXE%" --legacy-tray
+REM Launch detached: the release build has no console. Look for the
+REM StreamBeam window and/or tray icon; check host.log
+REM (%%APPDATA%%\streambeam\host.log) if neither appears.
+start "" "%APP_EXE%"
