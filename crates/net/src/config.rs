@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rustls::crypto::ring::default_provider;
@@ -19,6 +20,16 @@ pub fn ensure_crypto_provider() {
     let _ = default_provider().install_default();
 }
 
+/// Keep the connection alive with periodic pings and a generous idle timeout, so
+/// it survives a slow pairing approval (the host may wait many seconds while the
+/// user taps a notification) rather than idling out in a second or two.
+fn tune_keepalive(transport: &mut quinn::TransportConfig) {
+    transport.keep_alive_interval(Some(Duration::from_secs(5)));
+    transport.max_idle_timeout(Some(
+        quinn::IdleTimeout::try_from(Duration::from_secs(30)).expect("30s idle timeout"),
+    ));
+}
+
 pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
     ensure_crypto_provider();
     let algs = supported_algs();
@@ -37,6 +48,7 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
     transport.max_concurrent_bidi_streams(4_u8.into());
     transport.datagram_send_buffer_size(4 * 1024 * 1024);
     transport.datagram_receive_buffer_size(Some(4 * 1024 * 1024));
+    tune_keepalive(transport);
     Ok(server)
 }
 
@@ -58,6 +70,7 @@ pub fn client_config(identity: &Identity, pinned_host: [u8; 32]) -> Result<quinn
         quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(rustls)?));
     let mut transport = quinn::TransportConfig::default();
     transport.datagram_receive_buffer_size(Some(4 * 1024 * 1024));
+    tune_keepalive(&mut transport);
     client.transport_config(Arc::new(transport));
     Ok(client)
 }

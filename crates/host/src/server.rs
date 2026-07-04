@@ -64,6 +64,10 @@ pub struct HostControls {
     clients: Mutex<Vec<ClientEntry>>,
     /// Set once by `run()` so `forget` can also drop the persisted pairing.
     pairing: Mutex<Option<(Arc<Mutex<PairingStore>>, Option<std::path::PathBuf>)>>,
+    /// Set by `request_shutdown` to stop `run`'s accept loop; the `Notify`
+    /// wakes it if it's currently parked on `endpoint.accept()`.
+    shutdown_requested: AtomicBool,
+    shutdown: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
@@ -82,7 +86,19 @@ impl HostControls {
             accept_connections: AtomicBool::new(true),
             clients: Mutex::new(Vec::new()),
             pairing: Mutex::new(None),
+            shutdown_requested: AtomicBool::new(false),
+            shutdown: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Ask `run` to stop accepting connections and return, releasing the port.
+    pub fn request_shutdown(&self) {
+        self.shutdown_requested.store(true, Ordering::Relaxed);
+        self.shutdown.notify_waiters();
+    }
+
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Relaxed)
     }
 
     /// Wire in the pairing store so `forget` can drop the persisted pairing,
@@ -384,7 +400,15 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     let frame_interval = Duration::from_micros(1_000_000 / u64::from(config.fps.max(1)));
 
     loop {
-        let Some(incoming) = endpoint.accept().await else {
+        if controls.is_shutdown_requested() {
+            break;
+        }
+        let incoming = tokio::select! {
+            biased;
+            _ = controls.shutdown.notified() => break,
+            inc = endpoint.accept() => inc,
+        };
+        let Some(incoming) = incoming else {
             break;
         };
         if !controls.accepts_connections() {
@@ -428,6 +452,9 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         });
     }
 
+    // Close any live connections immediately and release the UDP port so a
+    // restart (Stop → Start beaming) can bind it again.
+    endpoint.close(0u32.into(), b"host stopped");
     endpoint.wait_idle().await;
     Ok(())
 }

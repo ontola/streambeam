@@ -187,9 +187,18 @@ pub fn start(
 }
 
 pub fn stop() {
-    if let Ok(mut slot) = service_slot().lock() {
-        // Server thread runs until process exit; dropping the handle clears UI state.
-        slot.take();
+    // Take the service out (and release the slot lock) before joining, so a
+    // concurrent start()/snapshot() doesn't block on the lock while we wind down.
+    let svc = match service_slot().lock() {
+        Ok(mut slot) => slot.take(),
+        Err(_) => return,
+    };
+    if let Some(svc) = svc {
+        // Signal the accept loop to stop, then wait for run() to return so the
+        // UDP port is free — otherwise a Stop → Start leaves a stale server
+        // holding :47989 and the restart can't bind or mint a fresh QR.
+        svc.controls.request_shutdown();
+        let _ = svc.thread.join();
     }
 }
 
