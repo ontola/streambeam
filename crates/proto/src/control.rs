@@ -38,6 +38,17 @@ pub enum ClientMsg {
         bitrate_kbps: u32,
     },
     RequestIdr,
+    /// Reference-Frame-Invalidation (RFI) recovery: the client lost video
+    /// frame_ids `[first_frame, last_frame]` (inclusive, wrapping) but still
+    /// holds a recent-enough known-good frame to reference instead — cheaper
+    /// than `RequestIdr` since the host can encode a plain P-frame that skips
+    /// these as references rather than a full keyframe. See
+    /// `streambeam_core::reassemble::LossReport` for how the client decides
+    /// between this and `RequestIdr`.
+    InvalidateRefFrames {
+        first_frame: u16,
+        last_frame: u16,
+    },
     SetBitrate {
         kbps: u32,
     },
@@ -91,6 +102,17 @@ mod tests {
             proto_version: 1,
             client_name: "devclient".into(),
             pair_proof: Some([7u8; 32]),
+        };
+        let bytes = frame::encode_frame(&msg).unwrap();
+        let (decoded, _) = frame::decode_frame::<ClientMsg>(&bytes).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn invalidate_ref_frames_roundtrip() {
+        let msg = ClientMsg::InvalidateRefFrames {
+            first_frame: 65_534,
+            last_frame: 3,
         };
         let bytes = frame::encode_frame(&msg).unwrap();
         let (decoded, _) = frame::decode_frame::<ClientMsg>(&bytes).unwrap();

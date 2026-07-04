@@ -78,17 +78,41 @@ replies `PairAck`.
 Per video frame: payload split into K shards of `min(max_datagram_size − 18, 1200)`
 bytes (shard length rounded to even for the RS codec), R = ceil(K × fec_ratio)
 Reed-Solomon parity shards. Client recovers from any K of K+R; abandons a frame when
-a frame ≥ 4 ahead completes (headroom over reordering/jitter) or after 50 ms, then
-sends `RequestIdr` (host rate-limits IDR to 1 / 250 ms). Audio: one 10 ms Opus packet
-per datagram, K=1 R=0 (Opus in-band
-FEC + PLC covers loss).
+a frame ≥ 4 ahead completes (headroom over reordering/jitter) or after 50 ms.
+
+Recovery is **Reference-Frame-Invalidation (RFI)**, the same surgical approach
+Moonlight/Sunshine use: instead of always forcing a full IDR, the client reports
+exactly which video `frame_id`s it lost so the host's encoder can skip them as
+references for the next frame — a cheap P-frame instead of an expensive keyframe.
+`FrameReassembler` tracks the highest completed `frame_id` as its last known-good
+reference; when it abandons frame(s), it decides between two reports (see
+`streambeam_core::reassemble::LossReport`):
+
+- **`InvalidateRefFrames { first_frame, last_frame }`** — there's a known-good
+  reference within `REF_WINDOW` (32) frame_ids of the loss: the encoder almost
+  certainly still holds it, so ask the host to skip `[first_frame, last_frame]`
+  as references instead of forcing a keyframe.
+- **`RequestIdr`** (full refresh) — no known-good reference exists yet (stream
+  start), or the loss run is wider than `REF_WINDOW`: the encoder's reference
+  window has almost certainly moved past it, so a surgical fix can't work and a
+  full keyframe is requested instead.
+
+The host rate-limits `RequestIdr` to 1 / 250 ms and `InvalidateRefFrames` to
+1 / 60 ms (cheaper to service, but still capped against a runaway client).
+Real hardware-encoder invalidation (NVENC `NvEncInvalidateRefFrames`, AMF/QSV
+equivalents) is M2 scope — until then every encoder falls back to
+`force_idr()` behind the `VideoEncoder::invalidate_ref_frames` trait method,
+so this control loop is exercised end-to-end today, just not "surgically" yet.
+Audio: one 10 ms Opus packet per datagram, K=1 R=0 (Opus in-band FEC + PLC
+covers loss).
 
 ## Control messages (S0)
 
 ```rust
 ClientMsg { Hello { proto_version, client_name, pair_proof: Option<[u8;32]> },
             SessionRequest { video: VideoCaps, audio: AudioCaps, bitrate_kbps },
-            RequestIdr, SetBitrate { kbps }, Ping { t_us }, Bye }
+            RequestIdr, InvalidateRefFrames { first_frame: u16, last_frame: u16 },
+            SetBitrate { kbps }, Ping { t_us }, Bye }
 HostMsg   { PairAck, PairReject { reason }, SessionAccept { session_id, codec, width,
             height, fps, audio: AudioParams }, CodecConfig { data },
             Rumble { pad, low, high }, HostStats { capture_us, encode_us, send_queue },
