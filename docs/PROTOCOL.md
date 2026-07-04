@@ -78,8 +78,9 @@ replies `PairAck`.
 Per video frame: payload split into K shards of `min(max_datagram_size − 18, 1200)`
 bytes (shard length rounded to even for the RS codec), R = ceil(K × fec_ratio)
 Reed-Solomon parity shards. Client recovers from any K of K+R; abandons a frame when
-a frame ≥ 2 ahead completes or after 50 ms, then sends `RequestIdr` (host rate-limits
-IDR to 1 / 250 ms). Audio: one 10 ms Opus packet per datagram, K=1 R=0 (Opus in-band
+a frame ≥ 4 ahead completes (headroom over reordering/jitter) or after 50 ms, then
+sends `RequestIdr` (host rate-limits IDR to 1 / 250 ms). Audio: one 10 ms Opus packet
+per datagram, K=1 R=0 (Opus in-band
 FEC + PLC covers loss).
 
 ## Control messages (S0)
