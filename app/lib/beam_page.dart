@@ -31,10 +31,9 @@ class AppCapabilities {
 
 AppCapabilities appCapabilities() {
   if (Platform.isAndroid) {
-    // Android watches today; hosting (MediaProjection capture) is a future
-    // milestone — see docs/SYMMETRY.md.
+    // Android both watches and beams (screen capture via MediaProjection).
     return const AppCapabilities(
-      host: false,
+      host: true,
       watch: true,
       platformLabel: 'Android',
     );
@@ -93,10 +92,18 @@ class _BeamPageState extends State<BeamPage> {
   bool _statusError = false;
   BigInt? _shownApprovalId;
 
+  static const _screencast = MethodChannel('streambeam/screencast');
+
+  /// On Android, hosting needs the user to grant screen capture first, so we
+  /// don't auto-start — [_beaming] tracks whether the capture+host is running.
+  bool _beaming = false;
+
   @override
   void initState() {
     super.initState();
-    if (hostPlatformSupported()) {
+    // Desktop capture is always available, so start immediately. Android needs
+    // an explicit screen-capture permission grant (see [_startBeaming]).
+    if (hostPlatformSupported() && !Platform.isAndroid) {
       unawaited(_ensureHostRunning());
     }
     _poll = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
@@ -106,6 +113,46 @@ class _BeamPageState extends State<BeamPage> {
   void dispose() {
     _poll?.cancel();
     super.dispose();
+  }
+
+  Future<void> _startBeaming() async {
+    if (_starting) return;
+    setState(() {
+      _starting = true;
+      _status = null;
+    });
+    try {
+      final granted =
+          await _screencast.invokeMethod<bool>('requestCapture') ?? false;
+      if (!granted) {
+        _setStatus('Screen capture permission was declined.', error: true);
+        return;
+      }
+      // The capture service is now feeding frames; start the host server, which
+      // picks up the live screen encoder.
+      startHost(hostName: null, listen: null, fps: 30, maxEncodeDim: 1280);
+      _beaming = true;
+      _refresh();
+    } catch (e) {
+      _setStatus(e.toString(), error: true);
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
+
+  Future<void> _stopBeaming() async {
+    try {
+      stopHost();
+    } catch (_) {}
+    try {
+      await _screencast.invokeMethod('stopCapture');
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _beaming = false;
+        _status = null;
+      });
+    }
   }
 
   Future<void> _ensureHostRunning() async {
@@ -201,7 +248,7 @@ class _BeamPageState extends State<BeamPage> {
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
-            'Hosting is available on Windows only in this build.',
+            'Beaming this screen isn\'t supported on this platform yet.',
             textAlign: TextAlign.center,
           ),
         ),
@@ -209,6 +256,65 @@ class _BeamPageState extends State<BeamPage> {
     }
 
     final theme = Theme.of(context);
+
+    // Android: wait for the user to grant screen capture before hosting.
+    if (Platform.isAndroid && !_beaming) {
+      return Scaffold(
+        appBar: streamBeamAppBar(),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.cast, size: 48, color: theme.colorScheme.primary),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Beam this screen',
+                    style: theme.textTheme.titleMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Share this phone\'s screen to another device on your Wi‑Fi. '
+                    'Android will ask permission to capture your screen.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _starting ? null : () => unawaited(_startBeaming()),
+                    icon: _starting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.play_arrow),
+                    label: Text(_starting ? 'Starting…' : 'Start beaming'),
+                  ),
+                  if (_status != null) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      _status!,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: _statusError ? theme.colorScheme.error : null,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final link = _snap.pairingLink;
     final busy = _starting && !_snap.running;
 
@@ -314,7 +420,7 @@ class _BeamPageState extends State<BeamPage> {
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            'Scan this QR with StreamBeam on your phone, '
+                            'Scan this QR with StreamBeam on another device, '
                             'or copy the link below.',
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodySmall?.copyWith(
@@ -328,6 +434,14 @@ class _BeamPageState extends State<BeamPage> {
                             icon: const Icon(Icons.link),
                             label: const Text('Copy link'),
                           ),
+                          if (Platform.isAndroid) ...[
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: () => unawaited(_stopBeaming()),
+                              icon: const Icon(Icons.stop),
+                              label: const Text('Stop beaming'),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -344,7 +458,7 @@ class _BeamPageState extends State<BeamPage> {
                         SwitchListTile(
                           title: const Text('Discoverable on LAN'),
                           subtitle: const Text(
-                            'Phones can find this PC on the local network',
+                            'Other devices can find this one on the local network',
                           ),
                           value: _snap.discoverable,
                           onChanged: _snap.running
@@ -499,19 +613,13 @@ class _BeamComingSoon extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Hosting your Android screen isn\'t available yet. For now, '
-                  'StreamBeam on your phone watches streams from your PC — '
-                  'switch to the Watch tab. Hosting works today on Windows.',
+                  'Beaming this screen to another device is coming soon. For '
+                  'now, use the Watch tab to stream from another device to '
+                  'here.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
-                ),
-                const SizedBox(height: 24),
-                OutlinedButton.icon(
-                  onPressed: openGithubReleases,
-                  icon: const Icon(Icons.download),
-                  label: const Text('Get StreamBeam for Windows'),
                 ),
               ],
             ),

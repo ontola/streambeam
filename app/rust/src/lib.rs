@@ -4,7 +4,7 @@ mod input;
 mod playback;
 mod store;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 mod host;
 
 #[cfg(target_os = "android")]

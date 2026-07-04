@@ -1,7 +1,13 @@
 //! Opus packet source for the host dev/demo loop (real WASAPI capture in M5).
+//!
+//! Behind the `audio` feature (on by default). With it off — Android hosting is
+//! video-only in v1 — [`OpusCatalog::bundled`] yields an empty catalog and the
+//! host streams no audio, avoiding the Opus C dependency in the Android build.
 
+#[cfg(feature = "audio")]
 use std::f32::consts::PI;
 
+#[cfg(feature = "audio")]
 use opus::{Application, Channels, Encoder};
 
 /// Pre-encoded Opus packets (10 ms, 48 kHz stereo).
@@ -12,10 +18,20 @@ pub struct OpusCatalog {
 
 impl OpusCatalog {
     /// Two-second 440 Hz tone — matches the bundled 60-frame / 30 fps clip.
+    #[cfg(feature = "audio")]
     pub fn bundled() -> Self {
         Self::tone(2.0, 440.0)
     }
 
+    /// Empty catalog when audio is disabled at compile time.
+    #[cfg(not(feature = "audio"))]
+    pub fn bundled() -> Self {
+        Self {
+            packets: Vec::new(),
+        }
+    }
+
+    #[cfg(feature = "audio")]
     pub fn tone(seconds: f32, hz: f32) -> Self {
         const SAMPLE_RATE: u32 = 48_000;
         const FRAME_MS: u32 = 10;
@@ -46,5 +62,9 @@ impl OpusCatalog {
 
     pub fn len(&self) -> usize {
         self.packets.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.packets.is_empty()
     }
 }

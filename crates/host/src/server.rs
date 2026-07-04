@@ -239,6 +239,13 @@ fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
             }
         }
     }
+    #[cfg(target_os = "android")]
+    {
+        if crate::android_screen::is_active() {
+            crate::logging::log("android screen capture active — streaming live screen");
+            return Box::new(crate::android_screen::AndroidScreenEncoder);
+        }
+    }
     let _ = (fps, max_encode_dim);
     Box::new(MockEncoder::bundled())
 }
@@ -826,6 +833,11 @@ async fn stream_audio(
     catalog: Arc<OpusCatalog>,
     packet_interval: Duration,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // No audio (e.g. Android host, video-only build): nothing to stream.
+    if catalog.is_empty() {
+        return Ok(());
+    }
+
     let mut packet_id: u16 = 0;
     let mut idx = 0usize;
 

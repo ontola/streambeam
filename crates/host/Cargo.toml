@@ -15,8 +15,14 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 quinn = { workspace = true }
 clap = { workspace = true }
-opus = "0.3"
+opus = { version = "0.3", optional = true }
 qrcode = "0.14"
+
+[features]
+default = ["audio"]
+# Host-side Opus (test-tone) audio. Off for the Android host build, which is
+# video-only in v1 and would otherwise need the Opus C toolchain (audiopus_sys).
+audio = ["dep:opus"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

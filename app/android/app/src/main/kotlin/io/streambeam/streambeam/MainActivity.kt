@@ -1,7 +1,9 @@
 package io.streambeam.streambeam
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -14,6 +16,11 @@ class MainActivity : FlutterActivity() {
     private var pendingLink: String? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var gamepadBridge: GamepadBridge? = null
+    private var pendingCaptureResult: MethodChannel.Result? = null
+
+    private companion object {
+        const val REQUEST_SCREEN_CAPTURE = 9731
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -55,7 +62,52 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "streambeam/screencast",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "requestCapture" -> requestScreenCapture(result)
+                "stopCapture" -> {
+                    stopService(Intent(this, ScreenCaptureService::class.java))
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         pendingLink = linkFrom(intent)
+    }
+
+    private fun requestScreenCapture(result: MethodChannel.Result) {
+        if (pendingCaptureResult != null) {
+            result.error("busy", "a capture request is already in progress", null)
+            return
+        }
+        pendingCaptureResult = result
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQUEST_SCREEN_CAPTURE)
+    }
+
+    @Deprecated("startActivityForResult result routing")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_SCREEN_CAPTURE) return
+        val pending = pendingCaptureResult
+        pendingCaptureResult = null
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            val svc = Intent(this, ScreenCaptureService::class.java).apply {
+                putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
+                putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(svc)
+            } else {
+                startService(svc)
+            }
+            pending?.success(true)
+        } else {
+            pending?.success(false)
+        }
     }
 
     override fun dispatchGenericMotionEvent(motionEvent: MotionEvent): Boolean {

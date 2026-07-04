@@ -381,7 +381,7 @@ pub struct HostSnapshot {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_platform_supported() -> bool {
-    cfg!(target_os = "windows")
+    cfg!(any(target_os = "windows", target_os = "android"))
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -391,11 +391,11 @@ pub fn start_host(
     fps: u32,
     max_encode_dim: u32,
 ) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
         return crate::host::start(host_name, listen, fps, max_encode_dim);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (host_name, listen, fps, max_encode_dim);
         Err("hosting is only supported on Windows".into())
@@ -404,13 +404,13 @@ pub fn start_host(
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn stop_host() {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     crate::host::stop();
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_snapshot() -> HostSnapshot {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
         let s = crate::host::snapshot();
         return HostSnapshot {
@@ -438,7 +438,7 @@ pub fn host_snapshot() -> HostSnapshot {
             }),
         };
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     HostSnapshot {
         running: false,
         host_name: String::new(),
@@ -455,9 +455,9 @@ pub fn host_snapshot() -> HostSnapshot {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_set_discoverable(on: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     return crate::host::set_discoverable(on);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = on;
         Err("hosting is only supported on Windows".into())
@@ -466,9 +466,9 @@ pub fn host_set_discoverable(on: bool) -> Result<(), String> {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_set_accepts_connections(on: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     return crate::host::set_accepts_connections(on);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = on;
         Err("hosting is only supported on Windows".into())
@@ -477,9 +477,9 @@ pub fn host_set_accepts_connections(on: bool) -> Result<(), String> {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_disconnect_client(addr: String) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     return crate::host::disconnect_client(&addr);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = addr;
         Err("hosting is only supported on Windows".into())
@@ -488,9 +488,9 @@ pub fn host_disconnect_client(addr: String) -> Result<bool, String> {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_forget_client(addr: String) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     return crate::host::forget_client(&addr);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = addr;
         Err("hosting is only supported on Windows".into())
@@ -499,9 +499,9 @@ pub fn host_forget_client(addr: String) -> Result<bool, String> {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_respond_pairing(id: u64, allow: bool) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     return crate::host::respond_pairing(id, allow);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (id, allow);
         Err("hosting is only supported on Windows".into())

@@ -1074,7 +1074,7 @@ class _DevicesSection extends StatelessWidget {
       children: [
         Row(
           children: [
-            Text('Your PCs', style: theme.textTheme.titleMedium),
+            Text('Your devices', style: theme.textTheme.titleMedium),
             const Spacer(),
             if (discovering)
               Padding(
@@ -1127,7 +1127,7 @@ class _DevicesSection extends StatelessWidget {
         if (hosts.isNotEmpty && hosts.any((h) => h.hostPubkey.length != 32)) ...[
           const SizedBox(height: 4),
           Text(
-            'Update streambeam-host on your PC for tap-to-connect.',
+            'Update StreamBeam on that device for tap-to-connect.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1220,14 +1220,16 @@ class _EmptyDevices extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            discovering ? 'Searching your Wi‑Fi for PCs…' : 'No PCs found yet',
+            discovering
+                ? 'Searching your Wi‑Fi for devices…'
+                : 'No devices found yet',
             style: theme.textTheme.bodyMedium,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 4),
           Text(
-            'Run streambeam-host on your PC and keep both devices on the same '
-            'Wi‑Fi (not guest). Pull down to refresh, or scan the host QR below.',
+            'Run StreamBeam on another device (PC or Mac) and keep both on the '
+            'same Wi‑Fi (not guest). Pull down to refresh, or scan its QR below.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1261,8 +1263,8 @@ class _StreamFromPromo extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Don\'t see your PC? Make sure streambeam-host is running on the '
-              'same Wi‑Fi.',
+              'Don\'t see your device? Make sure StreamBeam is running on it, '
+              'on the same Wi‑Fi.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -1270,7 +1272,7 @@ class _StreamFromPromo extends StatelessWidget {
           ),
           TextButton(
             onPressed: openGithubReleases,
-            child: const Text('Download'),
+            child: const Text('Get app'),
           ),
         ],
       );
@@ -1291,14 +1293,15 @@ class _StreamFromPromo extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Stream from your PC',
+            'Stream from another device',
             style: theme.textTheme.titleMedium,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
           Text(
-            'Install StreamBeam on your Windows PC and run it — your phone will '
-            'find it here on the same Wi‑Fi, or scan its QR to pair.',
+            'Install StreamBeam on the device you want to watch — a PC or Mac — '
+            'and run it. It shows up here on the same Wi‑Fi, or scan its QR to '
+            'pair.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1308,7 +1311,7 @@ class _StreamFromPromo extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: openGithubReleases,
             icon: const Icon(Icons.download),
-            label: const Text('Download StreamBeam for Windows'),
+            label: const Text('Get StreamBeam for desktop'),
           ),
         ],
       ),

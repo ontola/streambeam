@@ -20,6 +20,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 streambeam-host = { path = "../../crates/host" }
 
 [target.'cfg(target_os = "android")'.dependencies]
+streambeam-host = { path = "../../crates/host", default-features = false }
 android_logger = "0.14"
 jni = "0.21"
 ndk = { version = "0.9", features = ["media", "nativewindow"] }
