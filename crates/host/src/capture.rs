@@ -176,6 +176,16 @@ struct Pipeline {
     duplication: IDXGIOutputDuplication,
     staging: ID3D11Texture2D,
     transform: IMFTransform,
+    /// Whether `transform` is a hardware encoder MFT, which Windows requires
+    /// to run under the async transform contract (event-driven
+    /// `ProcessInput`/`ProcessOutput` — see `encode_async`/`drain_output_async`)
+    /// rather than the eager synchronous calls the software encoder accepts.
+    is_async: bool,
+    /// Only used when `is_async`: the encoder's event source, and whether
+    /// we're currently allowed to `ProcessInput` (set by a `METransformNeedInput`
+    /// event, cleared once we've fed a sample).
+    event_gen: Option<IMFMediaEventGenerator>,
+    can_feed_input: bool,
     /// Native desktop resolution — the size of `staging` and of the BGRA data
     /// `capture_into_nv12` reads.
     capture_width: u32,
@@ -228,7 +238,20 @@ impl Pipeline {
                     "downscaling capture {capture_width}x{capture_height} -> {width}x{height} to stay within FEC shard limits"
                 ));
             }
-            let (transform, codec_config) = create_encoder(width, height, fps)?;
+            let (transform, is_async, codec_config) = create_encoder(&device, width, height, fps)?;
+            let event_gen: Option<IMFMediaEventGenerator> = if is_async {
+                match transform.cast() {
+                    Ok(evt_gen) => Some(evt_gen),
+                    Err(e) => {
+                        crate::logging::log(&format!(
+                            "hardware encoder has no IMFMediaEventGenerator ({e}) — falling back to synchronous calls, which may fail on a true hardware MFT"
+                        ));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             Ok(Self {
                 device,
@@ -236,6 +259,9 @@ impl Pipeline {
                 duplication,
                 staging,
                 transform,
+                is_async: is_async && event_gen.is_some(),
+                event_gen,
+                can_feed_input: false,
                 capture_width,
                 capture_height,
                 width,
@@ -381,8 +407,125 @@ impl Pipeline {
         ctx(sample.SetSampleDuration(hundred_ns), "SetSampleDuration")?;
         self.frame_index += 1;
 
-        ctx(self.transform.ProcessInput(0, &sample, 0), "ProcessInput")?;
-        self.drain_output()
+        if self.is_async {
+            self.encode_async(sample)
+        } else {
+            ctx(self.transform.ProcessInput(0, &sample, 0), "ProcessInput")?;
+            self.drain_output()
+        }
+    }
+
+    /// Async-MFT variant of `encode` (hardware encoders): only `ProcessInput`
+    /// after a `METransformNeedInput` event, and only `ProcessOutput` after a
+    /// `METransformHaveOutput` event — the eager retry-until-NEED_MORE_INPUT
+    /// pattern `drain_output` uses is specific to the synchronous contract
+    /// and returns `MF_E_TRANSFORM_ASYNC` on a real hardware MFT. We block
+    /// only long enough to feed this round's sample (the MFT signals
+    /// readiness promptly after consuming the previous one); we do NOT block
+    /// waiting for this sample's output, since a pipelined hardware encoder
+    /// may not emit 1:1 with input — any output already available is
+    /// collected non-blockingly before returning.
+    unsafe fn encode_async(&mut self, sample: IMFSample) -> Result<Option<EncodedFrame>, String> {
+        let event_gen = self
+            .event_gen
+            .clone()
+            .ok_or("async encoder has no event generator")?;
+        let mut result = None;
+        // IMFMediaEvent::GetType returns a raw u32, not the MF_EVENT_TYPE
+        // newtype the METransform* constants are typed as.
+        let need_input = METransformNeedInput.0 as u32;
+        let have_output = METransformHaveOutput.0 as u32;
+
+        // `GetEvent(MF_EVENT_FLAG_NONE)` blocks with NO timeout — if the MFT
+        // ever stops signaling (driver quirk, wrong assumption about this
+        // vendor's event cadence, etc.) that hangs the capture thread
+        // forever with no way to recover. Poll with MF_EVENT_FLAG_NO_WAIT
+        // under an explicit deadline instead, so a stuck encoder becomes a
+        // logged, recoverable error (run_pipeline already treats an Err from
+        // capture_and_encode as "skip this frame, keep going") rather than a
+        // silent freeze.
+        const EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + EVENT_TIMEOUT;
+
+        while !self.can_feed_input {
+            match event_gen.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
+                Ok(event) => {
+                    let met = ctx(event.GetType(), "event GetType")?;
+                    if met == need_input {
+                        self.can_feed_input = true;
+                    } else if met == have_output {
+                        if let Some(frame) = self.pull_output_async()? {
+                            result = Some(frame);
+                        }
+                    }
+                }
+                Err(e) if e.code() == MF_E_NO_EVENTS_AVAILABLE => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!(
+                            "hardware encoder produced no METransformNeedInput event within {EVENT_TIMEOUT:?}"
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_micros(500));
+                }
+                Err(e) => return Err(format!("GetEvent: {e}")),
+            }
+        }
+        ctx(self.transform.ProcessInput(0, &sample, 0), "ProcessInput (async)")?;
+        self.can_feed_input = false;
+
+        loop {
+            match event_gen.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
+                Ok(event) => {
+                    let met = ctx(event.GetType(), "event GetType")?;
+                    if met == need_input {
+                        self.can_feed_input = true;
+                    } else if met == have_output {
+                        if let Some(frame) = self.pull_output_async()? {
+                            result = Some(frame);
+                        }
+                    }
+                }
+                Err(e) if e.code() == MF_E_NO_EVENTS_AVAILABLE => break,
+                Err(e) => return Err(format!("GetEvent: {e}")),
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// One `ProcessOutput` call in response to a single `METransformHaveOutput`
+    /// event (async contract — each event corresponds to exactly one
+    /// available output, unlike the sync retry loop in `drain_output`).
+    unsafe fn pull_output_async(&mut self) -> Result<Option<EncodedFrame>, String> {
+        let info = ctx(self.transform.GetOutputStreamInfo(0), "GetOutputStreamInfo")?;
+        let out_sample = ctx(MFCreateSample(), "out MFCreateSample")?;
+        let out_buffer = ctx(
+            MFCreateMemoryBuffer(info.cbSize.max(1)),
+            "out MFCreateMemoryBuffer",
+        )?;
+        ctx(out_sample.AddBuffer(&out_buffer), "out AddBuffer")?;
+
+        let mut data = [MFT_OUTPUT_DATA_BUFFER {
+            dwStreamID: 0,
+            pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
+            dwStatus: 0,
+            pEvents: std::mem::ManuallyDrop::new(None),
+        }];
+        let mut status = 0u32;
+        let r = self.transform.ProcessOutput(0, &mut data, &mut status);
+        let produced = std::mem::ManuallyDrop::into_inner(std::mem::replace(
+            &mut data[0].pSample,
+            std::mem::ManuallyDrop::new(None),
+        ));
+
+        match r {
+            Ok(()) => match &produced {
+                Some(sample) => Ok(Some(self.read_access_unit(sample)?)),
+                None => Ok(None),
+            },
+            Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(None),
+            Err(e) => Err(format!("ProcessOutput (async): {e}")),
+        }
     }
 
     /// Pull every access unit the encoder has ready (a sync MFT must be drained
@@ -517,16 +660,131 @@ unsafe fn create_staging(
     texture.ok_or_else(|| "no staging texture".into())
 }
 
-/// Create + configure the Media Foundation H.264 encoder MFT.
+/// Enumerate hardware H.264 encoder MFTs (NVENC/QuickSync/AMF register one
+/// via their driver) and activate the first match. Returns `None` if the
+/// system has none (e.g. software-only VM), in which case `create_encoder`
+/// falls back to the built-in software encoder.
+///
+/// Windows requires hardware MFTs to implement the *async* transform
+/// contract (event-driven `ProcessInput`/`ProcessOutput`, unlike the
+/// synchronous software encoder this replaces as the default) — see
+/// `Pipeline::encode_async` / `drain_output_async`.
+unsafe fn find_hardware_h264_encoder() -> Option<IMFTransform> {
+    let input_info = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_NV12,
+    };
+    let output_info = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_H264,
+    };
+
+    let mut activates_ptr: *mut Option<IMFActivate> = std::ptr::null_mut();
+    let mut count: u32 = 0;
+    let result = MFTEnumEx(
+        MFT_CATEGORY_VIDEO_ENCODER,
+        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+        Some(&input_info),
+        Some(&output_info),
+        &mut activates_ptr,
+        &mut count,
+    );
+    if result.is_err() || activates_ptr.is_null() || count == 0 {
+        return None;
+    }
+
+    let activates = std::slice::from_raw_parts_mut(activates_ptr, count as usize);
+    let mut chosen: Option<IMFTransform> = None;
+    for slot in activates.iter_mut() {
+        let Some(activate) = slot.take() else { continue };
+        if chosen.is_none() {
+            match activate.ActivateObject::<IMFTransform>() {
+                Ok(t) => chosen = Some(t),
+                Err(e) => {
+                    crate::logging::log(&format!("hardware H264 MFT activation failed: {e}"));
+                }
+            }
+        }
+        // Dropping `activate` here releases the COM reference for every
+        // entry, including the one we activated (ActivateObject returns its
+        // own separately-refcounted interface pointer).
+    }
+    windows::Win32::System::Com::CoTaskMemFree(Some(activates_ptr as *const _));
+    chosen
+}
+
+/// Create + configure the Media Foundation H.264 encoder MFT — a hardware
+/// encoder (NVENC/QuickSync/AMF) if one is registered, else the built-in
+/// software encoder.
 unsafe fn create_encoder(
+    device: &ID3D11Device,
     width: u32,
     height: u32,
     fps: u32,
-) -> Result<(IMFTransform, Option<Vec<u8>>), String> {
-    let transform: IMFTransform = ctx(
-        CoCreateInstance(&CLSID_CMSH264ENCODER, None, CLSCTX_INPROC_SERVER),
-        "CoCreateInstance H264 encoder",
-    )?;
+) -> Result<(IMFTransform, bool, Option<Vec<u8>>), String> {
+    let (transform, is_hardware): (IMFTransform, bool) =
+        match find_hardware_h264_encoder() {
+            Some(t) => {
+                crate::logging::log("using hardware H264 encoder MFT");
+                (t, true)
+            }
+            None => {
+                crate::logging::log(
+                    "no hardware H264 encoder MFT found — falling back to software encoder",
+                );
+                let t = ctx(
+                    CoCreateInstance(&CLSID_CMSH264ENCODER, None, CLSCTX_INPROC_SERVER),
+                    "CoCreateInstance H264 encoder",
+                )?;
+                (t, false)
+            }
+        };
+
+    // Hardware MFTs are async by contract; unlock that mode explicitly (a
+    // no-op, harmless call for the synchronous software encoder, which
+    // doesn't have this attribute at all).
+    if is_hardware {
+        if let Ok(attrs) = transform.GetAttributes() {
+            let _ = attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
+        }
+
+        // Hardware MFTs are built around D3D-backed samples; observed
+        // behavior on this machine's NVIDIA encoder is that ProcessInput
+        // blocks forever (no error, no event) if it never gets a device
+        // manager — even when fed plain system-memory samples. Wire it up
+        // even though we're not yet handing it GPU surfaces directly
+        // (that's the next step: zero-copy DXGI-backed NV12 samples).
+        let mut reset_token: u32 = 0;
+        let mut device_manager: Option<IMFDXGIDeviceManager> = None;
+        match ctx(
+            MFCreateDXGIDeviceManager(&mut reset_token, &mut device_manager),
+            "MFCreateDXGIDeviceManager",
+        ) {
+            Ok(()) => match device_manager {
+                Some(dm) => match dm.ResetDevice(device, reset_token) {
+                    Ok(()) => {
+                        let raw = windows::core::Interface::as_raw(&dm) as usize;
+                        if let Err(e) =
+                            transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, raw)
+                        {
+                            crate::logging::log(&format!(
+                                "SET_D3D_MANAGER failed (continuing without it): {e}"
+                            ));
+                        }
+                    }
+                    Err(e) => crate::logging::log(&format!(
+                        "IMFDXGIDeviceManager::ResetDevice failed (continuing without it): {e}"
+                    )),
+                },
+                None => crate::logging::log(
+                    "MFCreateDXGIDeviceManager produced no device manager (continuing without it)",
+                ),
+            },
+            Err(e) => crate::logging::log(&format!(
+                "MFCreateDXGIDeviceManager failed (continuing without it): {e}"
+            )),
+        }
+    }
 
     let bitrate = ((width * height) as u64 * fps as u64 / 15)
         .clamp(2_000_000, 20_000_000) as u32;
@@ -614,7 +872,7 @@ unsafe fn create_encoder(
         "NOTIFY_START_OF_STREAM",
     )?;
 
-    Ok((transform, codec_config))
+    Ok((transform, is_hardware, codec_config))
 }
 
 unsafe fn read_sequence_header(out_type: &IMFMediaType) -> Option<Vec<u8>> {

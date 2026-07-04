@@ -129,6 +129,10 @@ class _BeamPageState extends State<BeamPage> {
   void _refresh() {
     if (!mounted || !hostPlatformSupported()) return;
     final next = hostSnapshot();
+    if (next.pairingLink != null) {
+      // ignore: avoid_print
+      print('DEBUG_PAIRING_LINK: ${next.pairingLink}');
+    }
     setState(() => _snap = next);
     if (next.error != null && next.error!.isNotEmpty) {
       _setStatus(next.error!, error: true);
@@ -214,53 +218,40 @@ class _BeamPageState extends State<BeamPage> {
         style: theme.textTheme.titleSmall,
       ),
       const SizedBox(height: 8),
-      if (_snap.clients.isEmpty)
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'No phone connected yet.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+      ..._snap.clients.map((c) => Card(
+            child: ListTile(
+              leading: const Icon(Icons.smartphone),
+              title: Text(c.name),
+              subtitle: Text(c.addr),
+              trailing: Wrap(
+                spacing: 4,
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      try {
+                        hostDisconnectClient(addr: c.addr);
+                        _refresh();
+                      } catch (e) {
+                        _setStatus(e.toString(), error: true);
+                      }
+                    },
+                    child: const Text('Stop'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      try {
+                        hostForgetClient(addr: c.addr);
+                        _refresh();
+                      } catch (e) {
+                        _setStatus(e.toString(), error: true);
+                      }
+                    },
+                    child: const Text('Remove'),
+                  ),
+                ],
               ),
             ),
-          ),
-        )
-      else
-        ..._snap.clients.map((c) => Card(
-              child: ListTile(
-                leading: const Icon(Icons.smartphone),
-                title: Text(c.name),
-                subtitle: Text(c.addr),
-                trailing: Wrap(
-                  spacing: 4,
-                  children: [
-                    TextButton(
-                      onPressed: () {
-                        try {
-                          hostDisconnectClient(addr: c.addr);
-                          _refresh();
-                        } catch (e) {
-                          _setStatus(e.toString(), error: true);
-                        }
-                      },
-                      child: const Text('Stop'),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        try {
-                          hostForgetClient(addr: c.addr);
-                          _refresh();
-                        } catch (e) {
-                          _setStatus(e.toString(), error: true);
-                        }
-                      },
-                      child: const Text('Remove'),
-                    ),
-                  ],
-                ),
-              ),
-            )),
+          )),
     ];
 
     return Scaffold(
@@ -388,10 +379,6 @@ class _BeamPageState extends State<BeamPage> {
                       ],
                     ),
                   ),
-                  if (_snap.clients.isEmpty) ...[
-                    const SizedBox(height: 12),
-                    ...connectedDevicesSection,
-                  ],
                   if (_status != null) ...[
                     const SizedBox(height: 12),
                     MaterialBanner(

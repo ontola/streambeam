@@ -613,10 +613,9 @@ async fn handle_client(
                     let ctl = stream_ctl.clone();
                     let enc = encoder.clone();
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            stream_video(media_conn, enc, ctl, frame_interval).await
-                        {
-                            log!("video stream ended: {e}");
+                        match stream_video(media_conn, enc, ctl, frame_interval).await {
+                            Ok(()) => log!("video stream ended: connection closed"),
+                            Err(e) => log!("video stream ended: {e}"),
                         }
                     });
                     let audio_conn = conn.clone();
@@ -730,7 +729,8 @@ async fn stream_video(
     let mut window_start = std::time::Instant::now();
 
     loop {
-        if conn.close_reason().is_some() {
+        if let Some(reason) = conn.close_reason() {
+            log!("stream_video: connection closed ({reason})");
             break;
         }
 

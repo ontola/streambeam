@@ -62,6 +62,15 @@ fn try_configure_decoder(
     format.set_i32("width", width);
     format.set_i32("height", height);
     format.set_i32("max-input-size", 512 * 1024);
+    // Without this, many vendor decoders default to a throughput-oriented
+    // pipeline that buffers several frames internally before emitting any
+    // output (better average efficiency, worse latency). If the decoder's
+    // real drain rate falls behind our real-time 30fps feed, the input
+    // buffer pool exhausts and `feed_sample`'s dequeue_input_buffer times
+    // out — which hard-errors the whole session, not just one frame. This
+    // is the same MediaFormat.KEY_LOW_LATENCY Moonlight's Android client
+    // sets for exactly this reason. Ignored (not fatal) on API < 30.
+    format.set_i32("low-latency", 1);
     set_csd(&mut format);
     codec.configure(&format, Some(window), MediaCodecDirection::Decoder)?;
     Ok(codec)
