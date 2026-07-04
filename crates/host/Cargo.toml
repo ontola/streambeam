@@ -31,12 +31,16 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 viiper-client = "0.7"
-# Higher-level COM bindings for desktop capture (DXGI) + H.264 encode (Media Foundation).
+libloading = "0.8"
+# Higher-level COM bindings for desktop capture (DXGI) + H.264 encode (Media Foundation)
+# + direct NVENC SDK (nvenc.rs) for hardware encoding.
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Variant",
     "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_Security",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",

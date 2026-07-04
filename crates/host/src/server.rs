@@ -628,15 +628,55 @@ async fn handle_client(
             // exists) — honoring a per-client request means deferring that
             // build to the first SessionRequest instead. Not wired up yet.
             ClientMsg::SessionRequest { .. } => {
-                // Read the codec config live: on Android the MediaCodec CSD
-                // (SPS/PPS) can arrive shortly after the host starts, so the
-                // value cached at startup may still be None. Fall back to it.
-                let config_data = encoder
-                    .lock()
-                    .await
-                    .codec_config()
-                    .or_else(|| codec_config.clone());
-                if let Some(data) = &config_data {
+                // Don't rely solely on the value captured at host startup
+                // (`codec_config`, passed in) — some encoders don't have it
+                // available immediately: hardware MFTs need a real keyframe
+                // produced first (see capture.rs), and on Android the
+                // MediaCodec CSD (SPS/PPS) can arrive shortly after the host
+                // starts. Start streaming *first* (below) so `stream_video`'s
+                // own naturally-paced, timeout-protected `encode_next()` loop
+                // is what actually drives the encoder — then just wait
+                // (asynchronously, not blocking a worker thread) for
+                // `codec_config` to show up as a side effect. Driving
+                // `encode_next()` synchronously here ourselves was tried and
+                // reverted: it can't tell "screen hasn't changed yet" from
+                // "encoder stalled", and blocked the whole connection for
+                // 50+ seconds in practice on this machine's hardware
+                // encoder — worse than the bug it was meant to fix.
+                if !streaming {
+                    streaming = true;
+                    stream_ctl.request_idr();
+                    let media_conn = conn.clone();
+                    let ctl = stream_ctl.clone();
+                    let enc = encoder.clone();
+                    tokio::spawn(async move {
+                        match stream_video(media_conn, enc, ctl, frame_interval).await {
+                            Ok(()) => log!("video stream ended: connection closed"),
+                            Err(e) => log!("video stream ended: {e}"),
+                        }
+                    });
+                    let audio_conn = conn.clone();
+                    let audio_cat = audio.clone();
+                    let audio_interval = Duration::from_millis(10);
+                    tokio::spawn(async move {
+                        if let Err(e) = stream_audio(audio_conn, audio_cat, audio_interval).await {
+                            log!("audio stream ended: {e}");
+                        }
+                    });
+                }
+
+                let mut fresh_config = encoder.lock().await.codec_config();
+                if fresh_config.is_none() {
+                    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                    while fresh_config.is_none() && std::time::Instant::now() < deadline {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        fresh_config = encoder.lock().await.codec_config();
+                    }
+                    if fresh_config.is_none() {
+                        log!("codec_config still unknown after 5s — sending SessionAccept without CodecConfig");
+                    }
+                }
+                if let Some(data) = fresh_config.as_ref().or(codec_config.as_ref()) {
                     write_msg(
                         &mut send,
                         &HostMsg::CodecConfig { data: data.clone() },
@@ -660,27 +700,6 @@ async fn handle_client(
                 )
                 .await?;
                 log!("session started — streaming to {client_name}");
-
-                if !streaming {
-                    streaming = true;
-                    let media_conn = conn.clone();
-                    let ctl = stream_ctl.clone();
-                    let enc = encoder.clone();
-                    tokio::spawn(async move {
-                        match stream_video(media_conn, enc, ctl, frame_interval).await {
-                            Ok(()) => log!("video stream ended: connection closed"),
-                            Err(e) => log!("video stream ended: {e}"),
-                        }
-                    });
-                    let audio_conn = conn.clone();
-                    let audio_cat = audio.clone();
-                    let audio_interval = Duration::from_millis(10);
-                    tokio::spawn(async move {
-                        if let Err(e) = stream_audio(audio_conn, audio_cat, audio_interval).await {
-                            log!("audio stream ended: {e}");
-                        }
-                    });
-                }
             }
             ClientMsg::Ping { t_us } => {
                 write_msg(&mut send, &HostMsg::Pong { t_us }).await?;

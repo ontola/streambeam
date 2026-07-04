@@ -2,8 +2,20 @@
 // big unsafe region rather than nesting `unsafe {}` around every call.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-//! Real desktop capture (DXGI Desktop Duplication) encoded to H.264 with the
-//! built-in Media Foundation encoder.
+//! Real desktop capture (DXGI Desktop Duplication) encoded to H.264.
+//!
+//! Hardware path: direct NVIDIA NVENC (see `nvenc.rs`) — a real `ID3D11Texture2D`
+//! registered once, the captured frame `CopyResource`'d into it every tick, no
+//! CPU touching pixel data. This replaced an earlier attempt that went through
+//! Media Foundation's generic hardware-encoder-MFT wrapper: that got NVENC
+//! producing frames, but hit an intermittent, unrecoverable silent freeze after
+//! a variable number of frames (confirmed via a live stack trace: the capture
+//! thread was parked on a normal wait, not stuck inside any MF/driver call).
+//! Sunshine and RustDesk both bypass MF for NVIDIA entirely — see `nvenc.rs`'s
+//! module doc for the full writeup. When no NVIDIA encoder is available (or it
+//! fails to initialize), this falls back to the built-in Media Foundation
+//! *software* H.264 encoder, run synchronously (that contract has none of the
+//! async-event failure modes above).
 //!
 //! All COM lives on one dedicated thread (COM objects have thread affinity and
 //! tokio moves tasks between workers). [`DesktopEncoder`] talks to that thread
@@ -19,14 +31,12 @@ use windows::core::{Interface, GUID};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
-    D3D11_BIND_FLAG, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_FLAG,
+    D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
     IDXGIAdapter, IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
@@ -38,6 +48,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VARIANT;
 
 use crate::encode::{EncodeError, EncodedFrame, VideoEncoder};
+use crate::nvenc::NvencEncoder;
 
 // The built-in software H.264 encoder MFT (synchronous — no async event plumbing).
 const CLSID_CMSH264ENCODER: GUID = GUID::from_u128(0x6ca5_0344_051a_4ded_9779_a433_0516_5e35);
@@ -170,34 +181,47 @@ fn run_pipeline(
     }
 }
 
+/// Which encoder is actually driving `Pipeline`, decided once at startup by
+/// whether NVENC initialized successfully.
+enum EncoderBackend {
+    /// Direct NVENC (see `nvenc.rs`). `encode_texture` is the D3D11 texture
+    /// registered with the encoder; each tick's captured frame is
+    /// `CopyResource`'d (GPU-to-GPU) or, if downscaling, resized on the CPU
+    /// and `UpdateSubresource`'d into it — see `Pipeline::capture_frame`.
+    Nvenc {
+        encoder: NvencEncoder,
+        encode_texture: ID3D11Texture2D,
+    },
+    /// Fallback for non-NVIDIA machines: the built-in Media Foundation
+    /// software H.264 encoder, fed NV12 converted from the captured BGRA.
+    Software {
+        transform: IMFTransform,
+        nv12: Vec<u8>,
+    },
+}
+
 struct Pipeline {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
+    /// CPU-readable copy of the captured frame — used directly by the
+    /// software encoder path, and as a scratch texture for the (rare) CPU
+    /// downscale fallback on the NVENC path.
     staging: ID3D11Texture2D,
-    transform: IMFTransform,
-    /// Whether `transform` is a hardware encoder MFT, which Windows requires
-    /// to run under the async transform contract (event-driven
-    /// `ProcessInput`/`ProcessOutput` — see `encode_async`/`drain_output_async`)
-    /// rather than the eager synchronous calls the software encoder accepts.
-    is_async: bool,
-    /// Only used when `is_async`: the encoder's event source, and whether
-    /// we're currently allowed to `ProcessInput` (set by a `METransformNeedInput`
-    /// event, cleared once we've fed a sample).
-    event_gen: Option<IMFMediaEventGenerator>,
-    can_feed_input: bool,
-    /// Native desktop resolution — the size of `staging` and of the BGRA data
-    /// `capture_into_nv12` reads.
+    backend: EncoderBackend,
+    /// Native desktop resolution — the size of `staging`.
     capture_width: u32,
     capture_height: u32,
     /// Encoded resolution — `capture_{width,height}` downscaled to
-    /// `max_encode_dim`, preserving aspect ratio. This is what `nv12`, the MF
-    /// encoder, and `EncodedFrame` all use.
+    /// `max_encode_dim`, preserving aspect ratio. This is what the encoder
+    /// and `EncodedFrame` use.
     width: u32,
     height: u32,
     fps: u32,
     codec_config: Option<Vec<u8>>,
-    nv12: Vec<u8>,
+    /// CPU BGRA scratch buffer, only populated when the NVENC path needs to
+    /// downscale (native resolution exceeds `max_encode_dim`).
+    bgra_scratch: Vec<u8>,
     have_last: bool,
     frame_index: i64,
     // Diagnostics: logged periodically so a black/frozen stream is debuggable
@@ -238,37 +262,47 @@ impl Pipeline {
                     "downscaling capture {capture_width}x{capture_height} -> {width}x{height} to stay within FEC shard limits"
                 ));
             }
-            let (transform, is_async, codec_config) = create_encoder(&device, width, height, fps)?;
-            let event_gen: Option<IMFMediaEventGenerator> = if is_async {
-                match transform.cast() {
-                    Ok(evt_gen) => Some(evt_gen),
-                    Err(e) => {
-                        crate::logging::log(&format!(
-                            "hardware encoder has no IMFMediaEventGenerator ({e}) — falling back to synchronous calls, which may fail on a true hardware MFT"
-                        ));
-                        None
+
+            let nvenc_attempt: Result<(NvencEncoder, ID3D11Texture2D), String> =
+                match create_encode_texture(&device, width, height) {
+                    Ok(tex) => NvencEncoder::new(&device, &tex, width, height, fps)
+                        .map(|enc| (enc, tex)),
+                    Err(e) => Err(e),
+                };
+            let backend = match nvenc_attempt {
+                Ok((encoder, encode_texture)) => {
+                    crate::logging::log("using direct NVENC hardware encoder");
+                    EncoderBackend::Nvenc {
+                        encoder,
+                        encode_texture,
                     }
                 }
-            } else {
-                None
+                Err(e) => {
+                    crate::logging::log(&format!(
+                        "NVENC unavailable ({e}) — falling back to Media Foundation software encoder"
+                    ));
+                    let transform = create_software_encoder(width, height, fps)?;
+                    EncoderBackend::Software {
+                        transform,
+                        nv12: vec![0u8; (width * height * 3 / 2) as usize],
+                    }
+                }
             };
+            let codec_config = None;
 
             Ok(Self {
                 device,
                 context,
                 duplication,
                 staging,
-                transform,
-                is_async: is_async && event_gen.is_some(),
-                event_gen,
-                can_feed_input: false,
+                backend,
                 capture_width,
                 capture_height,
                 width,
                 height,
                 fps,
                 codec_config,
-                nv12: vec![0u8; (width * height * 3 / 2) as usize],
+                bgra_scratch: vec![0u8; (width * height * 4) as usize],
                 have_last: false,
                 frame_index: 0,
                 stat_calls: 0,
@@ -288,7 +322,7 @@ impl Pipeline {
         self.stat_calls += 1;
 
         let t_capture = std::time::Instant::now();
-        let captured = unsafe { self.capture_into_nv12() };
+        let captured = unsafe { self.capture_frame() };
         self.stat_capture_us += t_capture.elapsed().as_micros() as u64;
 
         let result = captured.and_then(|()| {
@@ -298,6 +332,25 @@ impl Pipeline {
             r
         });
 
+        // Neither backend reliably exposes SPS/PPS ahead of the first real
+        // frame (the software MFT's `MF_MT_MPEG_SEQUENCE_HEADER` requires a
+        // frame to have gone through; NVENC's preset config doesn't carry it
+        // either) — pull SPS/PPS straight out of the first keyframe's
+        // Annex-B bytes instead, which works regardless of encoder vendor.
+        if self.codec_config.is_none() {
+            if let Ok(Some(frame)) = &result {
+                if frame.keyframe {
+                    if let Some((sps, pps)) =
+                        streambeam_core::extract_avc_decoder_config(&frame.data)
+                    {
+                        let mut config = streambeam_core::nal_with_start_code(&sps);
+                        config.extend(streambeam_core::nal_with_start_code(&pps));
+                        self.codec_config = Some(config);
+                    }
+                }
+            }
+        }
+
         if let Ok(Some(_)) = result {
             self.stat_produced += 1;
         }
@@ -305,9 +358,8 @@ impl Pipeline {
         // without flooding host.log.
         const REPORT_WINDOW: u64 = 90;
         if self.stat_calls % REPORT_WINDOW as u32 == 0 {
-            let avg_luma = average_luma(&self.nv12, self.width, self.height);
             crate::logging::log(&format!(
-                "capture stats: {} calls — {} acquired, {} timeout, {} access-lost, {} AUs produced, avg Y={avg_luma}, avg capture={} ms, avg encode={} ms",
+                "capture stats: {} calls — {} acquired, {} timeout, {} access-lost, {} AUs produced, avg capture={} ms, avg encode={} ms",
                 self.stat_calls,
                 self.stat_acquired,
                 self.stat_timeout,
@@ -322,7 +374,10 @@ impl Pipeline {
         result
     }
 
-    unsafe fn capture_into_nv12(&mut self) -> Result<(), String> {
+    /// Acquire the newest desktop frame and land it wherever the active
+    /// backend needs it: `encode_texture` (GPU-to-GPU, or CPU-resized only if
+    /// downscaling) for NVENC, `nv12` for the software encoder.
+    unsafe fn capture_frame(&mut self) -> Result<(), String> {
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
         match self
@@ -334,12 +389,16 @@ impl Pipeline {
             }
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 self.stat_timeout += 1;
-                // No change since last frame; reuse the last NV12 (or a black
-                // frame if we have never captured yet).
+                // No change since last frame; reuse whatever the backend already
+                // holds (or, the very first time, a black software frame — the
+                // NVENC texture's undefined initial content is one frame's worth
+                // of harmless garbage, replaced as soon as a real frame lands).
                 if !self.have_last {
-                    self.nv12.iter_mut().enumerate().for_each(|(i, b)| {
-                        *b = if i < (self.width * self.height) as usize { 16 } else { 128 };
-                    });
+                    if let EncoderBackend::Software { nv12, .. } = &mut self.backend {
+                        nv12.iter_mut().enumerate().for_each(|(i, b)| {
+                            *b = if i < (self.width * self.height) as usize { 16 } else { 128 };
+                        });
+                    }
                     self.have_last = true;
                 }
                 return Ok(());
@@ -357,29 +416,76 @@ impl Pipeline {
         let result = (|| -> Result<(), String> {
             let resource = resource.ok_or("duplication returned no resource")?;
             let texture: ID3D11Texture2D = ctx(resource.cast(), "resource.cast texture")?;
-            self.context.CopyResource(&self.staging, &texture);
 
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            ctx(
-                self.context
-                    .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)),
-                "Map staging",
-            )?;
-            let stride = mapped.RowPitch as usize;
-            let src = std::slice::from_raw_parts(
-                mapped.pData as *const u8,
-                stride * self.capture_height as usize,
-            );
-            bgra_to_nv12(
-                src,
-                stride,
-                self.capture_width,
-                self.capture_height,
-                self.width,
-                self.height,
-                &mut self.nv12,
-            );
-            self.context.Unmap(&self.staging, 0);
+            match &self.backend {
+                EncoderBackend::Nvenc { encode_texture, .. } => {
+                    if (self.capture_width, self.capture_height) == (self.width, self.height) {
+                        self.context.CopyResource(encode_texture, &texture);
+                    } else {
+                        // Rare: native resolution exceeds max_encode_dim. One CPU
+                        // round trip of a straight BGRA resize (no YUV math) —
+                        // still far cheaper than the old full NV12 conversion.
+                        self.context.CopyResource(&self.staging, &texture);
+                        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                        ctx(
+                            self.context
+                                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)),
+                            "Map staging",
+                        )?;
+                        let stride = mapped.RowPitch as usize;
+                        let src = std::slice::from_raw_parts(
+                            mapped.pData as *const u8,
+                            stride * self.capture_height as usize,
+                        );
+                        resize_bgra(
+                            src,
+                            stride,
+                            self.capture_width,
+                            self.capture_height,
+                            self.width,
+                            self.height,
+                            &mut self.bgra_scratch,
+                        );
+                        self.context.Unmap(&self.staging, 0);
+                        self.context.UpdateSubresource(
+                            encode_texture,
+                            0,
+                            None,
+                            self.bgra_scratch.as_ptr() as *const _,
+                            self.width * 4,
+                            0,
+                        );
+                    }
+                }
+                EncoderBackend::Software { .. } => {
+                    self.context.CopyResource(&self.staging, &texture);
+                }
+            }
+
+            if let EncoderBackend::Software { nv12, .. } = &mut self.backend {
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                ctx(
+                    self.context
+                        .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)),
+                    "Map staging",
+                )?;
+                let stride = mapped.RowPitch as usize;
+                let src = std::slice::from_raw_parts(
+                    mapped.pData as *const u8,
+                    stride * self.capture_height as usize,
+                );
+                bgra_to_nv12(
+                    src,
+                    stride,
+                    self.capture_width,
+                    self.capture_height,
+                    self.width,
+                    self.height,
+                    nv12,
+                );
+                self.context.Unmap(&self.staging, 0);
+            }
+
             self.have_last = true;
             Ok(())
         })();
@@ -389,115 +495,49 @@ impl Pipeline {
     }
 
     unsafe fn encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
-        if force_idr {
-            let _ = set_codec_u32(&self.transform, &CODECAPI_FORCEKEYFRAME, 1);
-        }
-
-        let sample = ctx(MFCreateSample(), "MFCreateSample")?;
-        let buffer = ctx(MFCreateMemoryBuffer(self.nv12.len() as u32), "MFCreateMemoryBuffer")?;
-        let mut ptr: *mut u8 = std::ptr::null_mut();
-        ctx(buffer.Lock(&mut ptr, None, None), "buffer.Lock")?;
-        std::ptr::copy_nonoverlapping(self.nv12.as_ptr(), ptr, self.nv12.len());
-        ctx(buffer.Unlock(), "buffer.Unlock")?;
-        ctx(buffer.SetCurrentLength(self.nv12.len() as u32), "SetCurrentLength")?;
-        ctx(sample.AddBuffer(&buffer), "AddBuffer")?;
-
-        let hundred_ns = 10_000_000i64 / self.fps.max(1) as i64;
-        ctx(sample.SetSampleTime(self.frame_index * hundred_ns), "SetSampleTime")?;
-        ctx(sample.SetSampleDuration(hundred_ns), "SetSampleDuration")?;
-        self.frame_index += 1;
-
-        if self.is_async {
-            self.encode_async(sample)
-        } else {
-            ctx(self.transform.ProcessInput(0, &sample, 0), "ProcessInput")?;
-            self.drain_output()
-        }
-    }
-
-    /// Async-MFT variant of `encode` (hardware encoders): only `ProcessInput`
-    /// after a `METransformNeedInput` event, and only `ProcessOutput` after a
-    /// `METransformHaveOutput` event — the eager retry-until-NEED_MORE_INPUT
-    /// pattern `drain_output` uses is specific to the synchronous contract
-    /// and returns `MF_E_TRANSFORM_ASYNC` on a real hardware MFT. We block
-    /// only long enough to feed this round's sample (the MFT signals
-    /// readiness promptly after consuming the previous one); we do NOT block
-    /// waiting for this sample's output, since a pipelined hardware encoder
-    /// may not emit 1:1 with input — any output already available is
-    /// collected non-blockingly before returning.
-    unsafe fn encode_async(&mut self, sample: IMFSample) -> Result<Option<EncodedFrame>, String> {
-        let event_gen = self
-            .event_gen
-            .clone()
-            .ok_or("async encoder has no event generator")?;
-        let mut result = None;
-        // IMFMediaEvent::GetType returns a raw u32, not the MF_EVENT_TYPE
-        // newtype the METransform* constants are typed as.
-        let need_input = METransformNeedInput.0 as u32;
-        let have_output = METransformHaveOutput.0 as u32;
-
-        // `GetEvent(MF_EVENT_FLAG_NONE)` blocks with NO timeout — if the MFT
-        // ever stops signaling (driver quirk, wrong assumption about this
-        // vendor's event cadence, etc.) that hangs the capture thread
-        // forever with no way to recover. Poll with MF_EVENT_FLAG_NO_WAIT
-        // under an explicit deadline instead, so a stuck encoder becomes a
-        // logged, recoverable error (run_pipeline already treats an Err from
-        // capture_and_encode as "skip this frame, keep going") rather than a
-        // silent freeze.
-        const EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-        let deadline = std::time::Instant::now() + EVENT_TIMEOUT;
-
-        while !self.can_feed_input {
-            match event_gen.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
-                Ok(event) => {
-                    let met = ctx(event.GetType(), "event GetType")?;
-                    if met == need_input {
-                        self.can_feed_input = true;
-                    } else if met == have_output {
-                        if let Some(frame) = self.pull_output_async()? {
-                            result = Some(frame);
-                        }
-                    }
+        match &mut self.backend {
+            EncoderBackend::Nvenc { encoder, .. } => encoder.encode(force_idr),
+            EncoderBackend::Software { transform, nv12 } => {
+                if force_idr {
+                    let _ = set_codec_u32(transform, &CODECAPI_FORCEKEYFRAME, 1);
                 }
-                Err(e) if e.code() == MF_E_NO_EVENTS_AVAILABLE => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(format!(
-                            "hardware encoder produced no METransformNeedInput event within {EVENT_TIMEOUT:?}"
-                        ));
-                    }
-                    std::thread::sleep(std::time::Duration::from_micros(500));
-                }
-                Err(e) => return Err(format!("GetEvent: {e}")),
+                let sample = build_nv12_sample(nv12, self.fps, self.frame_index)?;
+                self.frame_index += 1;
+                ctx(transform.ProcessInput(0, &sample, 0), "ProcessInput")?;
+                drain_output_sync(transform, self.width, self.height)
             }
         }
-        ctx(self.transform.ProcessInput(0, &sample, 0), "ProcessInput (async)")?;
-        self.can_feed_input = false;
-
-        loop {
-            match event_gen.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
-                Ok(event) => {
-                    let met = ctx(event.GetType(), "event GetType")?;
-                    if met == need_input {
-                        self.can_feed_input = true;
-                    } else if met == have_output {
-                        if let Some(frame) = self.pull_output_async()? {
-                            result = Some(frame);
-                        }
-                    }
-                }
-                Err(e) if e.code() == MF_E_NO_EVENTS_AVAILABLE => break,
-                Err(e) => return Err(format!("GetEvent: {e}")),
-            }
-        }
-
-        Ok(result)
     }
+}
 
-    /// One `ProcessOutput` call in response to a single `METransformHaveOutput`
-    /// event (async contract — each event corresponds to exactly one
-    /// available output, unlike the sync retry loop in `drain_output`).
-    unsafe fn pull_output_async(&mut self) -> Result<Option<EncodedFrame>, String> {
-        let info = ctx(self.transform.GetOutputStreamInfo(0), "GetOutputStreamInfo")?;
+unsafe fn build_nv12_sample(nv12: &[u8], fps: u32, frame_index: i64) -> Result<IMFSample, String> {
+    let sample = ctx(MFCreateSample(), "MFCreateSample")?;
+    let buffer = ctx(MFCreateMemoryBuffer(nv12.len() as u32), "MFCreateMemoryBuffer")?;
+    let mut ptr: *mut u8 = std::ptr::null_mut();
+    ctx(buffer.Lock(&mut ptr, None, None), "buffer.Lock")?;
+    std::ptr::copy_nonoverlapping(nv12.as_ptr(), ptr, nv12.len());
+    ctx(buffer.Unlock(), "buffer.Unlock")?;
+    ctx(buffer.SetCurrentLength(nv12.len() as u32), "SetCurrentLength")?;
+    ctx(sample.AddBuffer(&buffer), "AddBuffer")?;
+
+    let hundred_ns = 10_000_000i64 / fps.max(1) as i64;
+    ctx(sample.SetSampleTime(frame_index * hundred_ns), "SetSampleTime")?;
+    ctx(sample.SetSampleDuration(hundred_ns), "SetSampleDuration")?;
+    Ok(sample)
+}
+
+/// Pull every access unit the encoder has ready (a sync MFT must be drained
+/// to `NEED_MORE_INPUT` before the next `ProcessInput`). Returns the first
+/// (in practice only) AU produced this round.
+unsafe fn drain_output_sync(
+    transform: &IMFTransform,
+    width: u32,
+    height: u32,
+) -> Result<Option<EncodedFrame>, String> {
+    let info = ctx(transform.GetOutputStreamInfo(0), "GetOutputStreamInfo")?;
+    let mut result = None;
+
+    loop {
         let out_sample = ctx(MFCreateSample(), "out MFCreateSample")?;
         let out_buffer = ctx(
             MFCreateMemoryBuffer(info.cbSize.max(1)),
@@ -512,88 +552,49 @@ impl Pipeline {
             pEvents: std::mem::ManuallyDrop::new(None),
         }];
         let mut status = 0u32;
-        let r = self.transform.ProcessOutput(0, &mut data, &mut status);
-        let produced = std::mem::ManuallyDrop::into_inner(std::mem::replace(
-            &mut data[0].pSample,
-            std::mem::ManuallyDrop::new(None),
-        ));
+        let r = transform.ProcessOutput(0, &mut data, &mut status);
+        // Reclaim (and thus release) the sample we handed to the MFT.
+        let produced =
+            std::mem::ManuallyDrop::into_inner(std::mem::replace(&mut data[0].pSample, std::mem::ManuallyDrop::new(None)));
 
         match r {
-            Ok(()) => match &produced {
-                Some(sample) => Ok(Some(self.read_access_unit(sample)?)),
-                None => Ok(None),
-            },
-            Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(None),
-            Err(e) => Err(format!("ProcessOutput (async): {e}")),
-        }
-    }
-
-    /// Pull every access unit the encoder has ready (a sync MFT must be drained
-    /// to `NEED_MORE_INPUT` before the next `ProcessInput`). Returns the first
-    /// (in practice only) AU produced this round.
-    unsafe fn drain_output(&mut self) -> Result<Option<EncodedFrame>, String> {
-        let info = ctx(self.transform.GetOutputStreamInfo(0), "GetOutputStreamInfo")?;
-        let mut result = None;
-
-        loop {
-            let out_sample = ctx(MFCreateSample(), "out MFCreateSample")?;
-            let out_buffer = ctx(
-                MFCreateMemoryBuffer(info.cbSize.max(1)),
-                "out MFCreateMemoryBuffer",
-            )?;
-            ctx(out_sample.AddBuffer(&out_buffer), "out AddBuffer")?;
-
-            let mut data = [MFT_OUTPUT_DATA_BUFFER {
-                dwStreamID: 0,
-                pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
-                dwStatus: 0,
-                pEvents: std::mem::ManuallyDrop::new(None),
-            }];
-            let mut status = 0u32;
-            let r = self.transform.ProcessOutput(0, &mut data, &mut status);
-            // Reclaim (and thus release) the sample we handed to the MFT.
-            let produced =
-                std::mem::ManuallyDrop::into_inner(std::mem::replace(&mut data[0].pSample, std::mem::ManuallyDrop::new(None)));
-
-            match r {
-                Ok(()) => {
-                    if result.is_none() {
-                        if let Some(sample) = &produced {
-                            result = Some(self.read_access_unit(sample)?);
-                        }
+            Ok(()) => {
+                if result.is_none() {
+                    if let Some(sample) = &produced {
+                        result = Some(read_access_unit(sample, width, height)?);
                     }
                 }
-                Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
-                Err(e) => return Err(format!("ProcessOutput: {e}")),
             }
+            Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
+            Err(e) => return Err(format!("ProcessOutput: {e}")),
         }
-
-        Ok(result)
     }
 
-    unsafe fn read_access_unit(&self, sample: &IMFSample) -> Result<EncodedFrame, String> {
-        let media_buffer = ctx(sample.ConvertToContiguousBuffer(), "ConvertToContiguousBuffer")?;
-        let mut ptr: *mut u8 = std::ptr::null_mut();
-        let mut len = 0u32;
-        ctx(media_buffer.Lock(&mut ptr, None, Some(&mut len)), "out Lock")?;
-        let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
-        let _ = media_buffer.Unlock();
+    Ok(result)
+}
 
-        // `MFSampleExtension_CleanPoint` is optional and this encoder doesn't
-        // reliably set it — reading it as "keyframe" produced a false
-        // negative on every single access unit (including ones that really
-        // were forced IDRs), which looked exactly like force_idr silently
-        // not working. Parse the actual NAL unit type instead — the same
-        // ground truth the Android client already uses to decide this.
-        let keyframe = streambeam_core::access_unit_is_keyframe(&bytes);
+unsafe fn read_access_unit(sample: &IMFSample, width: u32, height: u32) -> Result<EncodedFrame, String> {
+    let media_buffer = ctx(sample.ConvertToContiguousBuffer(), "ConvertToContiguousBuffer")?;
+    let mut ptr: *mut u8 = std::ptr::null_mut();
+    let mut len = 0u32;
+    ctx(media_buffer.Lock(&mut ptr, None, Some(&mut len)), "out Lock")?;
+    let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+    let _ = media_buffer.Unlock();
 
-        Ok(EncodedFrame {
-            data: bytes,
-            keyframe,
-            width: self.width,
-            height: self.height,
-        })
-    }
+    // `MFSampleExtension_CleanPoint` is optional and this encoder doesn't
+    // reliably set it — reading it as "keyframe" produced a false
+    // negative on every single access unit (including ones that really
+    // were forced IDRs), which looked exactly like force_idr silently
+    // not working. Parse the actual NAL unit type instead — the same
+    // ground truth the Android client already uses to decide this.
+    let keyframe = streambeam_core::access_unit_is_keyframe(&bytes);
+
+    Ok(EncodedFrame {
+        data: bytes,
+        keyframe,
+        width,
+        height,
+    })
 }
 
 unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
@@ -660,131 +661,45 @@ unsafe fn create_staging(
     texture.ok_or_else(|| "no staging texture".into())
 }
 
-/// Enumerate hardware H.264 encoder MFTs (NVENC/QuickSync/AMF register one
-/// via their driver) and activate the first match. Returns `None` if the
-/// system has none (e.g. software-only VM), in which case `create_encoder`
-/// falls back to the built-in software encoder.
-///
-/// Windows requires hardware MFTs to implement the *async* transform
-/// contract (event-driven `ProcessInput`/`ProcessOutput`, unlike the
-/// synchronous software encoder this replaces as the default) — see
-/// `Pipeline::encode_async` / `drain_output_async`.
-unsafe fn find_hardware_h264_encoder() -> Option<IMFTransform> {
-    let input_info = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: MFVideoFormat_NV12,
-    };
-    let output_info = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: MFVideoFormat_H264,
-    };
-
-    let mut activates_ptr: *mut Option<IMFActivate> = std::ptr::null_mut();
-    let mut count: u32 = 0;
-    let result = MFTEnumEx(
-        MFT_CATEGORY_VIDEO_ENCODER,
-        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
-        Some(&input_info),
-        Some(&output_info),
-        &mut activates_ptr,
-        &mut count,
-    );
-    if result.is_err() || activates_ptr.is_null() || count == 0 {
-        return None;
-    }
-
-    let activates = std::slice::from_raw_parts_mut(activates_ptr, count as usize);
-    let mut chosen: Option<IMFTransform> = None;
-    for slot in activates.iter_mut() {
-        let Some(activate) = slot.take() else { continue };
-        if chosen.is_none() {
-            match activate.ActivateObject::<IMFTransform>() {
-                Ok(t) => chosen = Some(t),
-                Err(e) => {
-                    crate::logging::log(&format!("hardware H264 MFT activation failed: {e}"));
-                }
-            }
-        }
-        // Dropping `activate` here releases the COM reference for every
-        // entry, including the one we activated (ActivateObject returns its
-        // own separately-refcounted interface pointer).
-    }
-    windows::Win32::System::Com::CoTaskMemFree(Some(activates_ptr as *const _));
-    chosen
-}
-
-/// Create + configure the Media Foundation H.264 encoder MFT — a hardware
-/// encoder (NVENC/QuickSync/AMF) if one is registered, else the built-in
-/// software encoder.
-unsafe fn create_encoder(
+/// GPU-resident texture registered with NVENC (`D3D11_USAGE_DEFAULT` +
+/// `D3D11_BIND_RENDER_TARGET`, required for `NvEncRegisterResource` to accept
+/// it as a DirectX input resource) — the captured frame is `CopyResource`'d
+/// into this every tick; NVENC reads it directly, no CPU round trip.
+unsafe fn create_encode_texture(
     device: &ID3D11Device,
     width: u32,
     height: u32,
-    fps: u32,
-) -> Result<(IMFTransform, bool, Option<Vec<u8>>), String> {
-    let (transform, is_hardware): (IMFTransform, bool) =
-        match find_hardware_h264_encoder() {
-            Some(t) => {
-                crate::logging::log("using hardware H264 encoder MFT");
-                (t, true)
-            }
-            None => {
-                crate::logging::log(
-                    "no hardware H264 encoder MFT found — falling back to software encoder",
-                );
-                let t = ctx(
-                    CoCreateInstance(&CLSID_CMSH264ENCODER, None, CLSCTX_INPROC_SERVER),
-                    "CoCreateInstance H264 encoder",
-                )?;
-                (t, false)
-            }
-        };
+) -> Result<ID3D11Texture2D, String> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0).0 as u32,
+    };
+    let mut texture: Option<ID3D11Texture2D> = None;
+    ctx(
+        device.CreateTexture2D(&desc, None, Some(&mut texture)),
+        "CreateTexture2D encode",
+    )?;
+    texture.ok_or_else(|| "no encode texture".into())
+}
 
-    // Hardware MFTs are async by contract; unlock that mode explicitly (a
-    // no-op, harmless call for the synchronous software encoder, which
-    // doesn't have this attribute at all).
-    if is_hardware {
-        if let Ok(attrs) = transform.GetAttributes() {
-            let _ = attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
-        }
-
-        // Hardware MFTs are built around D3D-backed samples; observed
-        // behavior on this machine's NVIDIA encoder is that ProcessInput
-        // blocks forever (no error, no event) if it never gets a device
-        // manager — even when fed plain system-memory samples. Wire it up
-        // even though we're not yet handing it GPU surfaces directly
-        // (that's the next step: zero-copy DXGI-backed NV12 samples).
-        let mut reset_token: u32 = 0;
-        let mut device_manager: Option<IMFDXGIDeviceManager> = None;
-        match ctx(
-            MFCreateDXGIDeviceManager(&mut reset_token, &mut device_manager),
-            "MFCreateDXGIDeviceManager",
-        ) {
-            Ok(()) => match device_manager {
-                Some(dm) => match dm.ResetDevice(device, reset_token) {
-                    Ok(()) => {
-                        let raw = windows::core::Interface::as_raw(&dm) as usize;
-                        if let Err(e) =
-                            transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, raw)
-                        {
-                            crate::logging::log(&format!(
-                                "SET_D3D_MANAGER failed (continuing without it): {e}"
-                            ));
-                        }
-                    }
-                    Err(e) => crate::logging::log(&format!(
-                        "IMFDXGIDeviceManager::ResetDevice failed (continuing without it): {e}"
-                    )),
-                },
-                None => crate::logging::log(
-                    "MFCreateDXGIDeviceManager produced no device manager (continuing without it)",
-                ),
-            },
-            Err(e) => crate::logging::log(&format!(
-                "MFCreateDXGIDeviceManager failed (continuing without it): {e}"
-            )),
-        }
-    }
+/// Create + configure the built-in Media Foundation software H.264 encoder —
+/// used only when NVENC isn't available (no NVIDIA GPU, or it failed to init).
+unsafe fn create_software_encoder(width: u32, height: u32, fps: u32) -> Result<IMFTransform, String> {
+    let transform: IMFTransform = ctx(
+        CoCreateInstance(&CLSID_CMSH264ENCODER, None, CLSCTX_INPROC_SERVER),
+        "CoCreateInstance H264 encoder",
+    )?;
 
     let bitrate = ((width * height) as u64 * fps as u64 / 15)
         .clamp(2_000_000, 20_000_000) as u32;
@@ -860,9 +775,6 @@ unsafe fn create_encoder(
     ctx(set_ratio(&in_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "in par")?;
     ctx(transform.SetInputType(0, &in_type, 0), "SetInputType")?;
 
-    // SPS/PPS for the CodecConfig control message, if the encoder exposes it.
-    let codec_config = read_sequence_header(&out_type);
-
     ctx(
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0),
         "NOTIFY_BEGIN_STREAMING",
@@ -872,19 +784,7 @@ unsafe fn create_encoder(
         "NOTIFY_START_OF_STREAM",
     )?;
 
-    Ok((transform, is_hardware, codec_config))
-}
-
-unsafe fn read_sequence_header(out_type: &IMFMediaType) -> Option<Vec<u8>> {
-    let size = out_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER).ok()?;
-    if size == 0 {
-        return None;
-    }
-    let mut buf = vec![0u8; size as usize];
-    out_type
-        .GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut buf, None)
-        .ok()?;
-    Some(buf)
+    Ok(transform)
 }
 
 unsafe fn set_size(t: &IMFMediaType, key: &GUID, w: u32, h: u32) -> windows::core::Result<()> {
@@ -907,9 +807,9 @@ unsafe fn set_codec_bool(transform: &IMFTransform, key: &GUID, value: bool) -> R
     ctx(codec.SetValue(key, &var), "ICodecAPI.SetValue bool")
 }
 
-/// BGRA (from Desktop Duplication) → NV12 (what the encoder wants), BT.601 limited.
-/// Convert (and, when `dst` is smaller than `src`, nearest-neighbor downscale)
-/// a captured BGRA desktop frame to NV12 for the encoder.
+/// BGRA (from Desktop Duplication) → NV12 (what the software encoder wants),
+/// BT.601 limited. Convert (and, when `dst` is smaller than `src`,
+/// nearest-neighbor downscale) a captured BGRA desktop frame to NV12.
 #[allow(clippy::too_many_arguments)]
 fn bgra_to_nv12(
     src: &[u8],
@@ -955,6 +855,31 @@ fn bgra_to_nv12(
     }
 }
 
+/// Nearest-neighbor BGRA resize (no color conversion) — used only on the
+/// NVENC path when native resolution exceeds `max_encode_dim`, since NVENC
+/// consumes BGRA directly and needs no YUV conversion at all.
+fn resize_bgra(
+    src: &[u8],
+    stride: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+    out: &mut [u8],
+) {
+    let (sw, sh) = (src_width as usize, src_height as usize);
+    let (w, h) = (dst_width as usize, dst_height as usize);
+    for y in 0..h {
+        let sy = (y * sh / h).min(sh.saturating_sub(1));
+        for x in 0..w {
+            let sx = (x * sw / w).min(sw.saturating_sub(1));
+            let sp = sy * stride + sx * 4;
+            let dp = (y * w + x) * 4;
+            out[dp..dp + 4].copy_from_slice(&src[sp..sp + 4]);
+        }
+    }
+}
+
 /// Scale `(w, h)` down so the longer side is at most `max_dim`, preserving
 /// aspect ratio and keeping both dimensions even (required by NV12/H.264).
 /// A no-op when `(w, h)` already fits.
@@ -967,24 +892,4 @@ fn scaled_dimensions(w: u32, h: u32, max_dim: u32) -> (u32, u32) {
     let sw = ((f64::from(w) * scale) as u32).max(2) & !1;
     let sh = ((f64::from(h) * scale) as u32).max(2) & !1;
     (sw, sh)
-}
-
-/// Mean of the Y plane, sampled sparsely for speed. Near 16 means the frame
-/// fed to the encoder is (still) solid black — the giveaway for a stuck or
-/// misdirected capture, vs. a real desktop image which is essentially never
-/// uniformly black.
-fn average_luma(nv12: &[u8], width: u32, height: u32) -> u32 {
-    let y_plane_len = (width * height) as usize;
-    let y_plane = &nv12[..y_plane_len.min(nv12.len())];
-    if y_plane.is_empty() {
-        return 0;
-    }
-    let stride = (y_plane.len() / 4096).max(1);
-    let mut sum = 0u64;
-    let mut n = 0u64;
-    for &b in y_plane.iter().step_by(stride) {
-        sum += b as u64;
-        n += 1;
-    }
-    (sum / n.max(1)) as u32
 }

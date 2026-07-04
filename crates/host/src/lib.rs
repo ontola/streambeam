@@ -12,6 +12,8 @@ pub mod gamepad_inject;
 pub mod input_inject;
 pub mod logging;
 pub mod mock;
+#[cfg(windows)]
+pub mod nvenc;
 pub mod qr;
 pub mod server;
 #[cfg(windows)]
