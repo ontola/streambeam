@@ -7,13 +7,16 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'main.dart';
 import 'src/rust/api.dart';
 
 const _logoAsset = 'assets/streambeam-logo.svg';
 
-/// What the desktop build can do on this OS.
-class DesktopCapabilities {
-  const DesktopCapabilities({
+/// What this StreamBeam build can do on the current OS.
+///
+/// `host` = can beam (send this screen). `watch` = can receive & play a stream.
+class AppCapabilities {
+  const AppCapabilities({
     required this.host,
     required this.watch,
     required this.platformLabel,
@@ -26,32 +29,41 @@ class DesktopCapabilities {
   bool get anySupported => host || watch;
 }
 
-DesktopCapabilities desktopCapabilities() {
+AppCapabilities appCapabilities() {
+  if (Platform.isAndroid) {
+    // Android watches today; hosting (MediaProjection capture) is a future
+    // milestone — see docs/SYMMETRY.md.
+    return const AppCapabilities(
+      host: false,
+      watch: true,
+      platformLabel: 'Android',
+    );
+  }
   final host = hostPlatformSupported();
   // Desktop decode/watch is not wired yet on any desktop OS.
   const watch = false;
   if (Platform.isWindows) {
-    return DesktopCapabilities(
+    return AppCapabilities(
       host: host,
       watch: watch,
       platformLabel: 'Windows',
     );
   }
   if (Platform.isMacOS) {
-    return const DesktopCapabilities(
+    return const AppCapabilities(
       host: false,
       watch: false,
       platformLabel: 'macOS',
     );
   }
   if (Platform.isLinux) {
-    return const DesktopCapabilities(
+    return const AppCapabilities(
       host: false,
       watch: false,
       platformLabel: 'Linux',
     );
   }
-  return DesktopCapabilities(
+  return AppCapabilities(
     host: host,
     watch: watch,
     platformLabel: 'this platform',
@@ -429,7 +441,10 @@ class _BeamPageState extends State<BeamPage> {
   }
 }
 
-/// Desktop shell: host + (future) watch tabs.
+/// App shell shared by every platform: two tabs — **Watch** (stream *from*
+/// another device) and **Beam** (stream *to* another device). Each platform
+/// leads with the tab it actually supports (phones watch, desktops beam) and
+/// shows a "coming soon" placeholder for the other.
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
@@ -442,41 +457,105 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    final caps = desktopCapabilities();
+    final caps = appCapabilities();
 
     if (!caps.anySupported) {
       return _DesktopUnsupportedPage(platformLabel: caps.platformLabel);
     }
 
-    final pages = <Widget>[
-      if (caps.host) const BeamPage(),
-      if (!caps.watch) const _DesktopWatchStub(),
-    ];
-    final destinations = <NavigationDestination>[
-      if (caps.host)
-        const NavigationDestination(
-          icon: Icon(Icons.cast),
-          label: 'Beam',
-        ),
-      const NavigationDestination(
-        icon: Icon(Icons.play_circle_outline),
-        label: 'Watch',
-      ),
-    ];
+    // "Watch" = stream FROM another device; "Beam" = stream TO another device.
+    final Widget watchTab =
+        caps.watch ? const WatchPage() : const _DesktopWatchStub();
+    final Widget beamTab =
+        caps.host ? const BeamPage() : const _BeamComingSoon();
 
-    if (destinations.length < 2) {
-      return pages.first;
+    const watchDest = NavigationDestination(
+      icon: Icon(Icons.download_for_offline_outlined),
+      selectedIcon: Icon(Icons.download_for_offline),
+      label: 'Watch',
+    );
+    const beamDest = NavigationDestination(
+      icon: Icon(Icons.cast),
+      selectedIcon: Icon(Icons.cast_connected),
+      label: 'Beam',
+    );
+
+    // Lead with the tab this platform supports.
+    final List<Widget> pages;
+    final List<NavigationDestination> destinations;
+    if (caps.host && !caps.watch) {
+      pages = [beamTab, watchTab];
+      destinations = [beamDest, watchDest];
+    } else {
+      pages = [watchTab, beamTab];
+      destinations = [watchDest, beamDest];
     }
 
-    return Scaffold(
-      body: IndexedStack(
-        index: _index.clamp(0, pages.length - 1),
-        children: pages,
+    // While a tab is playing fullscreen video, drop the tab bar so the stream
+    // fills the screen (and the immersive player isn't framed by chrome).
+    return ValueListenableBuilder<bool>(
+      valueListenable: appImmersive,
+      builder: (context, immersive, _) => Scaffold(
+        body: IndexedStack(
+          index: _index.clamp(0, pages.length - 1),
+          children: pages,
+        ),
+        bottomNavigationBar: immersive
+            ? null
+            : NavigationBar(
+                selectedIndex: _index.clamp(0, destinations.length - 1),
+                onDestinationSelected: (i) => setState(() => _index = i),
+                destinations: destinations,
+              ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index.clamp(0, destinations.length - 1),
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: destinations,
+    );
+  }
+}
+
+/// Beam tab on a platform that can't host yet (Android today).
+class _BeamComingSoon extends StatelessWidget {
+  const _BeamComingSoon();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: streamBeamAppBar(),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cast, size: 48, color: theme.colorScheme.primary),
+                const SizedBox(height: 16),
+                Text(
+                  'Beam from this device',
+                  style: theme.textTheme.titleMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Hosting your Android screen isn\'t available yet. For now, '
+                  'StreamBeam on your phone watches streams from your PC — '
+                  'switch to the Watch tab. Hosting works today on Windows.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                OutlinedButton.icon(
+                  onPressed: openGithubReleases,
+                  icon: const Icon(Icons.download),
+                  label: const Text('Get StreamBeam for Windows'),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

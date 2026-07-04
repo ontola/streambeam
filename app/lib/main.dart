@@ -32,6 +32,35 @@ Future<void> openOntola() async {
   await launchUrl(_ontolaUrl, mode: LaunchMode.externalApplication);
 }
 
+/// The shared top bar (logo + "StreamBeam" + GitHub link), identical on every
+/// tab so the header doesn't change as you switch between Watch and Beam.
+AppBar streamBeamAppBar() {
+  return AppBar(
+    title: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
+        ),
+        const SizedBox(width: 10),
+        const Text('StreamBeam'),
+      ],
+    ),
+    actions: [
+      TextButton.icon(
+        onPressed: openGithubRepo,
+        icon: const Icon(Icons.open_in_new, size: 18),
+        label: const Text('GitHub'),
+      ),
+    ],
+  );
+}
+
+/// True while a tab is showing fullscreen content (the video player), so the
+/// [AppShell] hides its tab bar and the stream fills the screen.
+final ValueNotifier<bool> appImmersive = ValueNotifier<bool>(false);
+
 /// Brings the window to front when the tray icon is clicked. The embedded
 /// host (see `app/rust/src/host.rs`) runs on the Dart isolate's background
 /// thread regardless of window visibility, so this is purely a "show me the
@@ -92,7 +121,7 @@ class StreamBeamApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: Platform.isAndroid ? const WatchPage() : const AppShell(),
+      home: const AppShell(),
     );
   }
 }
@@ -453,6 +482,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   void _teardownVideo() {
     _showVideo = false;
+    appImmersive.value = false;
     _reconnectPending = false;
     _surfaceReady = false;
     _pendingWindow = null;
@@ -551,6 +581,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     setState(() {
       _busy = true;
       _showVideo = true;
+      appImmersive.value = true;
       _reconnectPending = reconnect;
       _surfaceReady = false;
       _pendingWindow = null;
@@ -764,26 +795,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
-            ),
-            const SizedBox(width: 10),
-            const Text('StreamBeam'),
-          ],
-        ),
-        actions: [
-          TextButton.icon(
-            onPressed: openGithubRepo,
-            icon: const Icon(Icons.open_in_new, size: 18),
-            label: const Text('GitHub'),
-          ),
-        ],
-      ),
+      appBar: streamBeamAppBar(),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
@@ -795,7 +807,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _IdleHero(
+                // Devices first — the whole point of the screen.
+                _DevicesSection(
                   busy: _busy,
                   hosts: _hostEntries(),
                   discovering: _discoveryBusy,
@@ -807,7 +820,17 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                       ? null
                       : (_) => unawaited(_forgetSavedHost()),
                 ),
-                const SizedBox(height: 20),
+                if (_status != null) ...[
+                  const SizedBox(height: 12),
+                  _StatusNotice(
+                    message: _status!,
+                    isError: _statusIsError,
+                    onCopy: () => unawaited(_copyStatus()),
+                    onDismiss: _statusIsError ? _dismissStatus : null,
+                  ),
+                ],
+                const SizedBox(height: 16),
+                // Add a host by QR or pasted code.
                 if (Platform.isAndroid && _qrPreviewOpen) ...[
                   _QrScanPreview(
                     controller: _scannerController,
@@ -833,27 +856,24 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     ),
                     if (Platform.isAndroid) ...[
                       const SizedBox(width: 8),
-                      IconButton.filledTonal(
-                        onPressed: _busy ? null : _toggleQrPreview,
-                        tooltip: _qrPreviewOpen
-                            ? 'Hide QR scanner'
-                            : 'Scan host QR',
-                        isSelected: _qrPreviewOpen,
-                        icon: const Icon(Icons.qr_code_scanner),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          onPressed: _busy ? null : _toggleQrPreview,
+                          icon: Icon(
+                            _qrPreviewOpen
+                                ? Icons.close
+                                : Icons.qr_code_scanner,
+                          ),
+                          label: Text(_qrPreviewOpen ? 'Hide scanner' : 'Scan QR'),
+                        ),
                       ),
                     ],
                   ],
                 ),
-                if (_status != null) ...[
-                  const SizedBox(height: 12),
-                  _StatusNotice(
-                    message: _status!,
-                    isError: _statusIsError,
-                    onCopy: () => unawaited(_copyStatus()),
-                    onDismiss: _statusIsError ? _dismissStatus : null,
-                  ),
-                ],
                 const SizedBox(height: 24),
+                // Onboarding / "get the host" info, de-emphasised below.
+                _StreamFromPromo(compact: _hostEntries().isNotEmpty),
+                const SizedBox(height: 20),
                 Center(
                   child: TextButton(
                     onPressed: openOntola,
@@ -1025,8 +1045,10 @@ class _HostListEntry {
   }
 }
 
-class _IdleHero extends StatelessWidget {
-  const _IdleHero({
+/// The saved + discovered PCs, shown at the TOP of the Watch screen — the
+/// primary thing you came here to do.
+class _DevicesSection extends StatelessWidget {
+  const _DevicesSection({
     required this.busy,
     required this.hosts,
     required this.discovering,
@@ -1042,14 +1064,220 @@ class _IdleHero extends StatelessWidget {
   final void Function(_HostListEntry host)? onHostTap;
   final void Function(_HostListEntry host)? onForgetHost;
 
-  bool get _hasSavedHost => hosts.any((h) => h.isSaved);
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final onlineCount = hosts.where((h) => h.online).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text('Your PCs', style: theme.textTheme.titleMedium),
+            const Spacer(),
+            if (discovering)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
+            Text(
+              discovering
+                  ? 'Searching…'
+                  : hosts.isEmpty
+                      ? 'None found'
+                      : '$onlineCount online · ${hosts.length} listed',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (hosts.isEmpty)
+          _EmptyDevices(discovering: discovering)
+        else
+          ...hosts.map(
+            (h) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _HostCard(
+                host: h,
+                busy: busy,
+                onTap: onHostTap,
+                onForget: onForgetHost,
+              ),
+            ),
+          ),
+        if (discoveryError != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            discoveryError!,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.error,
+            ),
+          ),
+        ],
+        if (hosts.isNotEmpty && hosts.any((h) => h.hostPubkey.length != 32)) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Update streambeam-host on your PC for tap-to-connect.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+        if (busy) ...[
+          const SizedBox(height: 16),
+          const Center(child: CircularProgressIndicator()),
+        ],
+      ],
+    );
+  }
+}
+
+/// One saved/discovered PC. Online hosts are highlighted and tappable.
+class _HostCard extends StatelessWidget {
+  const _HostCard({
+    required this.host,
+    required this.busy,
+    this.onTap,
+    this.onForget,
+  });
+
+  final _HostListEntry host;
+  final bool busy;
+  final void Function(_HostListEntry host)? onTap;
+  final void Function(_HostListEntry host)? onForget;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final canTap = onTap != null && host.online;
+    return Material(
+      color: host.online
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.45)
+          : theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        enabled: canTap,
+        leading: Icon(
+          Icons.computer,
+          color: host.online
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurfaceVariant,
+        ),
+        title: Text(host.name),
+        subtitle: Text(host.addressLabel),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _HostStatusChip(online: host.online),
+            if (host.isSaved && onForget != null)
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Forget ${host.name}',
+                onPressed: busy ? null : () => onForget!(host),
+              )
+            else if (canTap)
+              Icon(Icons.play_circle_fill, color: theme.colorScheme.primary),
+          ],
+        ),
+        onTap: canTap ? () => onTap!(host) : null,
+      ),
+    );
+  }
+}
+
+/// Shown in place of the device list when nothing has been found yet.
+class _EmptyDevices extends StatelessWidget {
+  const _EmptyDevices({required this.discovering});
+
+  final bool discovering;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Icon(
+            Icons.wifi_find,
+            size: 36,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            discovering ? 'Searching your Wi‑Fi for PCs…' : 'No PCs found yet',
+            style: theme.textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Run streambeam-host on your PC and keep both devices on the same '
+            'Wi‑Fi (not guest). Pull down to refresh, or scan the host QR below.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Get the host" onboarding, shown BELOW the device list: a full hero when no
+/// PCs are listed yet, or a slim reminder once some are.
+class _StreamFromPromo extends StatelessWidget {
+  const _StreamFromPromo({required this.compact});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    if (compact) {
+      return Row(
+        children: [
+          Icon(
+            Icons.info_outline,
+            size: 18,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Don\'t see your PC? Make sure streambeam-host is running on the '
+              'same Wi‑Fi.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: openGithubReleases,
+            child: const Text('Download'),
+          ),
+        ],
+      );
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
@@ -1058,7 +1286,7 @@ class _IdleHero extends StatelessWidget {
         children: [
           Icon(
             Icons.cast_connected,
-            size: 64,
+            size: 56,
             color: theme.colorScheme.primary,
           ),
           const SizedBox(height: 16),
@@ -1069,9 +1297,8 @@ class _IdleHero extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            _hasSavedHost
-                ? 'Tap an online host to connect.'
-                : 'Run streambeam-host on your PC, then tap a host on your LAN or scan the QR.',
+            'Install StreamBeam on your Windows PC and run it — your phone will '
+            'find it here on the same Wi‑Fi, or scan its QR to pair.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1083,122 +1310,6 @@ class _IdleHero extends StatelessWidget {
             icon: const Icon(Icons.download),
             label: const Text('Download StreamBeam for Windows'),
           ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (discovering)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                ),
-              Icon(
-                Icons.wifi_find,
-                size: 18,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                discovering
-                    ? 'Searching LAN for hosts…'
-                    : hosts.isEmpty
-                    ? 'No hosts found on LAN'
-                    : '${hosts.where((h) => h.online).length} online · ${hosts.length} listed',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          if (discoveryError != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              discoveryError!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.error,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-          if (!discovering && hosts.isEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Phone and PC must be on the same Wi‑Fi (not guest). '
-              'In streambeam-host, check Discoverable is on. '
-              'Pull down to search again.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-          if (hosts.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            ...hosts.map(
-              (h) => Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Material(
-                  color: theme.colorScheme.surface,
-                  borderRadius: BorderRadius.circular(8),
-                  child: ListTile(
-                    dense: true,
-                    enabled: onHostTap != null && h.online,
-                    leading: Icon(
-                      Icons.computer,
-                      color: h.online
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                    title: Text(h.name),
-                    subtitle: Text(h.addressLabel),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _HostStatusChip(online: h.online),
-                        if (h.isSaved && onForgetHost != null) ...[
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            tooltip: 'Forget ${h.name}',
-                            onPressed: busy ? null : () => onForgetHost!(h),
-                          ),
-                        ] else if (h.online && onHostTap != null)
-                          Icon(
-                            Icons.play_circle_outline,
-                            color: theme.colorScheme.primary,
-                          ),
-                      ],
-                    ),
-                    onTap: onHostTap == null || !h.online
-                        ? null
-                        : () => onHostTap!(h),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              hosts.any((h) => h.isSaved && !h.online)
-                  ? 'Saved PCs stay listed when offline.'
-                  : hosts.any((h) => h.hostPubkey.length != 32)
-                  ? 'Update streambeam-host on your PC for tap-to-connect.'
-                  : 'Tap an online host to connect. Approve on your PC if this is the first time.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-          if (busy) ...[
-            const SizedBox(height: 20),
-            const CircularProgressIndicator(),
-          ],
         ],
       ),
     );
