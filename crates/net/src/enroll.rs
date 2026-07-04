@@ -47,8 +47,15 @@ pub enum HelloDecision {
 pub enum HelloVerdict {
     /// Client is already enrolled — connect immediately, no approval needed.
     AcceptedKnown,
-    /// Valid pairing proof from a new client — ask the user to approve.
-    NeedsApproval,
+    /// New client — ask the user to approve.
+    ///
+    /// `proof_verified` distinguishes a client that presented a valid pairing
+    /// proof (cryptographically tied to the QR token) from one that presented
+    /// none at all. Both still require an *interactive* human approval to
+    /// enroll: a headless host (no approval UI) must never auto-approve a
+    /// `proof_verified: false` verdict, or any LAN device could self-enroll
+    /// by omitting the proof.
+    NeedsApproval { proof_verified: bool },
     /// Proof missing/invalid or token expired — refuse.
     Rejected(String),
 }
@@ -141,9 +148,13 @@ impl PairingStore {
 
     /// Validate a Hello without mutating the store.
     ///
-    /// Returns [`HelloVerdict::NeedsApproval`] when the proof is valid but the
-    /// client is new, so the host can gate enrollment on a user prompt before
-    /// calling [`commit_new_pair`](Self::commit_new_pair).
+    /// Returns [`HelloVerdict::NeedsApproval`] when the client is new, so the
+    /// host can gate enrollment on a user prompt before calling
+    /// [`commit_new_pair`](Self::commit_new_pair). The `proof_verified` flag
+    /// tells the caller whether that prompt is backed by a cryptographic
+    /// proof (QR token) or is bare trust-on-first-use — callers without an
+    /// interactive approval UI must reject the latter (see
+    /// [`Self::handle_hello`]).
     pub fn evaluate_hello(
         &self,
         client_pubkey: [u8; 32],
@@ -155,7 +166,9 @@ impl PairingStore {
         }
 
         let Some(proof) = pair_proof else {
-            return HelloVerdict::NeedsApproval;
+            return HelloVerdict::NeedsApproval {
+                proof_verified: false,
+            };
         };
 
         let Some(token) = self.active_token() else {
@@ -166,7 +179,9 @@ impl PairingStore {
             return HelloVerdict::Rejected("invalid pair proof".into());
         }
 
-        HelloVerdict::NeedsApproval
+        HelloVerdict::NeedsApproval {
+            proof_verified: true,
+        }
     }
 
     /// Enroll a client the user has approved, consuming the one-time token.
@@ -184,8 +199,15 @@ impl PairingStore {
         });
     }
 
-    /// Validate and (if the proof is valid) enroll in one step, auto-approving
-    /// new clients. Used by headless hosts with no interactive approval UI.
+    /// Validate and (if the proof is cryptographically verified) enroll in
+    /// one step. Used by headless hosts with no interactive approval UI.
+    ///
+    /// A `NeedsApproval { proof_verified: false }` verdict (no pairing proof
+    /// presented) is *rejected* here, never auto-enrolled: without a human to
+    /// eyeball the device and click Allow, a bare Hello with no proof is
+    /// indistinguishable from any other LAN device trying to self-enroll.
+    /// Only a client that proves knowledge of the current QR token is
+    /// trusted enough to be enrolled without interactive approval.
     pub fn handle_hello(
         &mut self,
         client_pubkey: [u8; 32],
@@ -196,10 +218,17 @@ impl PairingStore {
         match self.evaluate_hello(client_pubkey, pair_proof, exporter) {
             HelloVerdict::AcceptedKnown => HelloDecision::AcceptedKnown,
             HelloVerdict::Rejected(reason) => HelloDecision::Rejected(reason),
-            HelloVerdict::NeedsApproval => {
+            HelloVerdict::NeedsApproval {
+                proof_verified: true,
+            } => {
                 self.commit_new_pair(client_pubkey, client_name);
                 HelloDecision::AcceptedNewPair
             }
+            HelloVerdict::NeedsApproval {
+                proof_verified: false,
+            } => HelloDecision::Rejected(
+                "pairing requires a valid proof or interactive approval".into(),
+            ),
         }
     }
 }

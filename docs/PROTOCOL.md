@@ -11,8 +11,14 @@ pinned Ed25519 keys. `PROTO_VERSION = 1`.
   (from the QR on first contact, from `hosts.json` thereafter). No CAs, no hostnames.
 - The **host** requires a client cert and accepts any well-formed one at the TLS
   layer; authorization happens at the first control message (`Hello`): the client's
-  key must be in the paired store, or the message must carry a valid pairing proof.
-  Nothing is sent to a peer before `Hello` is verified.
+  key must already be in the paired store, or the client must be freshly enrolled.
+  Enrollment always requires an explicit approval step — either a valid pairing
+  proof presented alongside *interactive* host-side approval, or (headless hosts
+  with no approval UI) a valid pairing proof alone. A `Hello` with no proof is
+  never auto-enrolled: on a headless host it is rejected outright, and even on a
+  host with an approval UI it still requires a human to accept the prompt before
+  the client is committed to the paired store. Nothing is sent to a peer before
+  `Hello` is verified.
 
 ## Pairing
 
