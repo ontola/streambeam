@@ -4,6 +4,8 @@ import FlutterMacOS
 class MainFlutterWindow: NSWindow {
   private var videoChannel: FlutterMethodChannel?
   private var video: StreamBeamVideo?
+  private var discoveryChannel: FlutterMethodChannel?
+  private let discovery = StreamBeamDiscovery()
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -13,8 +15,34 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     setUpVideoChannel(flutterViewController)
+    setUpDiscoveryChannel(flutterViewController)
 
     super.awakeFromNib()
+  }
+
+  /// Native Bonjour host discovery (the Rust mdns-sd library can't reliably
+  /// receive on macOS — mDNSResponder owns port 5353).
+  private func setUpDiscoveryChannel(_ controller: FlutterViewController) {
+    let registrar = controller.registrar(forPlugin: "StreamBeamDiscovery")
+    let channel = FlutterMethodChannel(
+      name: "streambeam/native_discovery",
+      binaryMessenger: registrar.messenger)
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else { return }
+      switch call.method {
+      case "start":
+        self.discovery.start()
+        result(nil)
+      case "getHosts":
+        result(self.discovery.currentHosts())
+      case "stop":
+        self.discovery.stop()
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    discoveryChannel = channel
   }
 
   /// Desktop watch: Rust hands us Annex-B frames over this channel; we decode

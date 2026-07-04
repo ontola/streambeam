@@ -260,7 +260,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _hintController.removeStatusListener(_onHintStatus);
     _hintController.dispose();
     _transformController.removeListener(_onTransformChanged);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    // Restore the system bars (back/home) when leaving the fullscreen player.
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
     _transformController.dispose();
     _liveDiagListenable.dispose();
     _keyboardFocus.dispose();

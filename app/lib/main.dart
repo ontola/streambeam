@@ -109,6 +109,14 @@ Future<void> main() async {
   final dir = await streambeamDataDir();
   setAppDataDir(dir: dir);
   await _applyDeviceName();
+  if (Platform.isAndroid) {
+    // Keep the system nav (back/home) visible; the fullscreen player goes
+    // immersive on its own while watching.
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+  }
   runApp(const StreamBeamApp());
 }
 
@@ -458,8 +466,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   Future<void> _toggleQrPreview() async {
     if (_busy) return;
-    setState(() => _qrPreviewOpen = !_qrPreviewOpen);
-    await _syncScanner();
+    final opening = !_qrPreviewOpen;
+    setState(() => _qrPreviewOpen = opening);
+    if (opening) {
+      // Start the camera only after the MobileScanner widget is actually in the
+      // tree — calling start() immediately races the not-yet-attached platform
+      // view, leaving the preview blank until you toggle again.
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_syncScanner()));
+    } else {
+      unawaited(_syncScanner());
+    }
   }
 
   void _closeQrPreview() {
@@ -531,6 +547,28 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  static const _nativeDiscoveryChannel =
+      MethodChannel('streambeam/native_discovery');
+
+  /// Desktop host discovery via native Bonjour (macOS). The browser runs
+  /// continuously once started, so results accumulate across refreshes.
+  Future<List<DiscoveredHost>> _discoverHostsNative() async {
+    await _nativeDiscoveryChannel.invokeMethod('start');
+    await Future<void>.delayed(const Duration(seconds: 1));
+    final raw =
+        await _nativeDiscoveryChannel.invokeMethod<List<dynamic>>('getHosts');
+    return (raw ?? const []).map((entry) {
+      final map = entry as Map;
+      final addrs = (map['addrs'] as List?) ?? const [];
+      return DiscoveredHost(
+        name: map['name'] as String? ?? '',
+        port: map['port'] as int? ?? 0,
+        addrs: addrs.map((e) => e as String).toList(),
+        hostPubkey: (map['pubkey'] as Uint8List?) ?? Uint8List(0),
+      );
+    }).toList();
+  }
+
   Future<void> _discoverHosts() async {
     if (_discoveryBusy) return;
     if (mounted) {
@@ -540,8 +578,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     }
     try {
-      await _ensureMdnsLock();
-      final hosts = await discoverHosts(timeoutMs: 6000);
+      final List<DiscoveredHost> hosts;
+      if (Platform.isAndroid) {
+        await _ensureMdnsLock();
+        hosts = await discoverHosts(timeoutMs: 6000);
+      } else {
+        // macOS: Rust mdns-sd can't reliably receive (mDNSResponder owns 5353),
+        // so browse via native Bonjour instead.
+        hosts = await _discoverHostsNative();
+      }
       if (!mounted) return;
       setState(() {
         _lanHosts = hosts;
