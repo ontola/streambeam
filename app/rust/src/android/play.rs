@@ -12,8 +12,8 @@ use ndk::native_window::NativeWindow;
 use streambeam_core::{
     access_unit_is_keyframe, access_unit_to_avcc_sample, access_unit_without_sei,
     avcc_from_sps_pps, connect_as_identity, connect_known, extract_avc_decoder_config,
-    idr_sample_avcc, nal_with_start_code, request_idr, save_saved_host, ClientSession,
-    FrameReassembler, SavedHost,
+    idr_sample_avcc, nal_with_start_code, request_idr, request_invalidate_ref_frames,
+    save_saved_host, ClientSession, FrameReassembler, LossReport, SavedHost,
 };
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
@@ -455,10 +455,10 @@ fn play_session_blocking(
         }
 
         // We've been skipping non-keyframes for a while (they depend on a
-        // reference chain we're no longer decoding) — ask the host for a
-        // fresh keyframe so the picture recovers instead of degrading. Only
-        // if we're not still cooling down from the last request, so a host
-        // that's persistently a little behind doesn't get spammed.
+        // reference chain we're no longer decoding) — ask the host to
+        // recover so the picture stops degrading. Only if we're not still
+        // cooling down from the last request, so a host that's persistently
+        // a little behind doesn't get spammed.
         if consecutive_skipped >= IDR_RESYNC_THRESHOLD {
             consecutive_skipped = 0;
             let cooled_down = last_idr_request
@@ -466,8 +466,30 @@ fn play_session_blocking(
                 .unwrap_or(true);
             if cooled_down {
                 last_idr_request = Some(std::time::Instant::now());
-                if let Err(e) = runtime.block_on(request_idr(&mut session)) {
-                    log::warn!("streambeam catch-up request_idr failed (continuing): {e}");
+                // Prefer the cheaper, surgical RFI recovery when the
+                // reassembler still has a recent-enough reference to
+                // invalidate around; fall back to a full keyframe request
+                // otherwise (no report at all, or NeedIdr).
+                match asm.take_loss_report() {
+                    Some(LossReport::Invalidate {
+                        first_frame,
+                        last_frame,
+                    }) => {
+                        if let Err(e) = runtime.block_on(request_invalidate_ref_frames(
+                            &mut session,
+                            first_frame,
+                            last_frame,
+                        )) {
+                            log::warn!(
+                                "streambeam catch-up invalidate-ref-frames failed (continuing): {e}"
+                            );
+                        }
+                    }
+                    Some(LossReport::NeedIdr) | None => {
+                        if let Err(e) = runtime.block_on(request_idr(&mut session)) {
+                            log::warn!("streambeam catch-up request_idr failed (continuing): {e}");
+                        }
+                    }
                 }
             }
         }
