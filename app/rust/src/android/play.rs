@@ -321,7 +321,15 @@ fn play_session_blocking(
     // How many decodable (non-keyframe) completions we've skipped in a row
     // because we were catching up on a backlog — see the loop body.
     let mut consecutive_skipped = 0u32;
-    const IDR_RESYNC_THRESHOLD: u32 = 10;
+    const IDR_RESYNC_THRESHOLD: u32 = 20;
+    // Don't hammer the host with repeated keyframe requests: a forced
+    // keyframe is itself a large burst (150-300 KB even at 1080p) that can
+    // cause the very backlog it's meant to fix if requested too often —
+    // without this, a host that's merely a bit slow (not catastrophically
+    // behind) oscillates between huge keyframe bursts and near-stalls instead
+    // of settling down.
+    const IDR_REQUEST_COOLDOWN: Duration = Duration::from_secs(3);
+    let mut last_idr_request: Option<std::time::Instant> = None;
 
     while stats.video_frames < target {
         drain_output(&mut codec)?;
@@ -403,12 +411,20 @@ fn play_session_blocking(
 
         // We've been skipping non-keyframes for a while (they depend on a
         // reference chain we're no longer decoding) — ask the host for a
-        // fresh keyframe so the picture recovers instead of degrading.
+        // fresh keyframe so the picture recovers instead of degrading. Only
+        // if we're not still cooling down from the last request, so a host
+        // that's persistently a little behind doesn't get spammed.
         if consecutive_skipped >= IDR_RESYNC_THRESHOLD {
-            if let Err(e) = runtime.block_on(request_idr(&mut session)) {
-                log::warn!("streambeam catch-up request_idr failed (continuing): {e}");
-            }
             consecutive_skipped = 0;
+            let cooled_down = last_idr_request
+                .map(|t| t.elapsed() >= IDR_REQUEST_COOLDOWN)
+                .unwrap_or(true);
+            if cooled_down {
+                last_idr_request = Some(std::time::Instant::now());
+                if let Err(e) = runtime.block_on(request_idr(&mut session)) {
+                    log::warn!("streambeam catch-up request_idr failed (continuing): {e}");
+                }
+            }
         }
     }
 
