@@ -33,3 +33,15 @@ pub fn log(msg: &str) {
         let _ = writeln!(f, "[{ts}] {msg}");
     }
 }
+
+/// Route panics into the same log file. Without this, a panic on a detached
+/// background thread/task (capture, encode, or an NVENC session recreate)
+/// unwinds silently in release builds — no console to print to — and the
+/// video path just stops forever with nothing in `host.log` explaining why.
+pub fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log(&format!("PANIC: {info}"));
+        default_hook(info);
+    }));
+}

@@ -57,6 +57,15 @@ dev_dependencies:
   integration_test:
     sdk: flutter
 
+# path_provider_android >=2.3.0 rewrote its Android bindings on top of the
+# `jni` package's JNIgen-generated APIs (JObject/JType/.reference), but its
+# own `jni: ^1.0.0` constraint is satisfied by jni 1.0.0 — which doesn't
+# actually define those APIs yet. Pinned to the last pre-rewrite version
+# (plain platform channels, no jni dependency) until upstream fixes the
+# constraint. https://github.com/flutter/flutter/issues (path_provider label)
+dependency_overrides:
+  path_provider_android: 2.2.23
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

@@ -15,6 +15,7 @@ use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::OnceCell;
 use tokio::sync::oneshot;
 
 use crate::active_stream::{ActiveStreamTracker, CloseableConn};
@@ -328,14 +329,15 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
 
     // One shared encoder feeds every connection (Desktop Duplication is
     // single-instance, so multiple simultaneous viewers aren't supported yet).
-    let encoder = build_encoder(config.fps, config.max_encode_dim);
-    let (width, height) = encoder.dimensions();
-    let codec_config = encoder.codec_config();
-    log!(
-        "encoder ready — {width}x{height}, {} opus packets",
-        OpusCatalog::bundled().len()
-    );
-    let encoder = Arc::new(AsyncMutex::new(encoder));
+    // Built lazily on the first real connection, not here: DXGI Desktop
+    // Duplication + the NVENC session are expensive, persistent GPU
+    // resources, and used to be created unconditionally at host startup —
+    // held open for the whole process lifetime even with zero viewers ever
+    // connecting. That's wasteful and was a suspected contributor to
+    // GPU/audio hiccups observed with no active stream at all.
+    let encoder_cell: Arc<
+        OnceCell<(Arc<AsyncMutex<Box<dyn VideoEncoder>>>, u16, u16, Option<Vec<u8>>)>,
+    > = Arc::new(OnceCell::new());
 
     let identity = Identity::load_or_generate(&config.identity_path)?;
     let paired_path = config.paired_store.clone();
@@ -459,16 +461,31 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
             incoming.refuse();
             continue;
         }
+        let (encoder, width, height, codec_config) = encoder_cell
+            .get_or_init(|| async {
+                let encoder = build_encoder(config.fps, config.max_encode_dim);
+                let (width, height) = encoder.dimensions();
+                let codec_config = encoder.codec_config();
+                log!(
+                    "encoder ready — {width}x{height}, {} opus packets",
+                    OpusCatalog::bundled().len()
+                );
+                (
+                    Arc::new(AsyncMutex::new(encoder)),
+                    width as u16,
+                    height as u16,
+                    codec_config,
+                )
+            })
+            .await
+            .clone();
+
         let store = store.clone();
         let audio = audio.clone();
-        let codec_config = codec_config.clone();
         let paired_path = paired_path.clone();
         let approval_tx = config.pairing_request_tx.clone();
         let controls = controls.clone();
-        let encoder = encoder.clone();
         let fps = config.fps;
-        let width = width as u16;
-        let height = height as u16;
 
         tokio::spawn(async move {
             if let Err(e) = handle_client(

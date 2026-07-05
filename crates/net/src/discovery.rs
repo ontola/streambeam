@@ -5,8 +5,10 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use std::sync::Mutex as StdMutex;
+
 use base64::Engine;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use crate::NetError;
 
@@ -180,6 +182,73 @@ pub fn browse(timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
     }
 
     Ok(seen.into_values().collect())
+}
+
+/// A long-lived mDNS browser that keeps one `ServiceDaemon` (and its warm,
+/// continuously-updated resolver state) alive for as long as the caller
+/// holds it, instead of [`browse`]'s cold start-resolve-discard cycle.
+///
+/// [`browse`] creates a brand new daemon on every call, which matters for a
+/// UI that polls repeatedly (e.g. an app's "hosts on your LAN" screen on a
+/// timer): each call re-probes the network from scratch within its own
+/// short timeout, so a response that lands a beat late — mDNS responders
+/// intentionally jitter replies — makes that poll (and every host in it)
+/// look offline even though nothing is actually wrong. It also means the
+/// daemon's background thread and multicast socket get torn down and
+/// recreated every cycle for the app's whole lifetime, which is wasteful
+/// and was observed to flood the log with query/response churn. `Browser`
+/// instead resolves once and keeps a cache that only gets updated
+/// (services found/removed), never rebuilt from nothing.
+pub struct Browser {
+    _daemon: ServiceDaemon,
+    receiver: Receiver<ServiceEvent>,
+    cache: StdMutex<HashMap<String, DiscoveredHost>>,
+}
+
+impl Browser {
+    pub fn new() -> Result<Self, NetError> {
+        let daemon = ServiceDaemon::new().map_err(|e| NetError::Discovery(e.to_string()))?;
+        let receiver = daemon
+            .browse(SERVICE_TYPE)
+            .map_err(|e| NetError::Discovery(e.to_string()))?;
+        Ok(Self {
+            _daemon: daemon,
+            receiver,
+            cache: StdMutex::new(HashMap::new()),
+        })
+    }
+
+    /// Drain any events that have arrived since the last call and return the
+    /// current set of known hosts. Never blocks.
+    pub fn snapshot(&self) -> Vec<DiscoveredHost> {
+        let mut cache = self.cache.lock().unwrap();
+        while let Ok(event) = self.receiver.try_recv() {
+            match event {
+                ServiceEvent::ServiceResolved(info) => {
+                    let fullname = info.get_fullname().to_string();
+                    let name = instance_name_from_fullname(&fullname);
+                    let port = info.get_port();
+                    let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
+                    addrs.sort_by_key(|ip| ip.is_loopback());
+                    let host_pubkey = parse_pubkey(&info);
+                    cache.insert(
+                        fullname,
+                        DiscoveredHost {
+                            name,
+                            port,
+                            addrs,
+                            host_pubkey,
+                        },
+                    );
+                }
+                ServiceEvent::ServiceRemoved(_ty, fullname) => {
+                    cache.remove(&fullname);
+                }
+                _ => {}
+            }
+        }
+        cache.values().cloned().collect()
+    }
 }
 
 /// Best-effort non-loopback IPv4 for LAN pairing payloads.

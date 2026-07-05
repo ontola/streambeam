@@ -10,7 +10,8 @@ pub mod verify;
 
 pub use config::{client_config, ensure_crypto_provider, peer_certs, peer_pubkey, server_config};
 pub use discovery::{
-    Advertiser, DiscoveredHost, SERVICE_TYPE, advertise, advertise_ips, browse, guess_lan_ip,
+    Advertiser, Browser, DiscoveredHost, SERVICE_TYPE, advertise, advertise_ips, browse,
+    guess_lan_ip,
 };
 pub use enroll::{
     HelloDecision, HelloVerdict, PairedClient, PairingStore, build_pair_proof,

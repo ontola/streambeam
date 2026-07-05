@@ -430,8 +430,15 @@ fn play_session_blocking(
             }
             Ok::<_, String>(batch)
         })?;
-        let behind = batch.len() > 1;
-
+        // A single access unit is FEC-sharded into many ~1200-byte datagrams
+        // (see MAX_SHARD_PAYLOAD) — a 15 KB P-frame is a dozen-plus shards
+        // that legitimately arrive back-to-back within this batch's 2ms
+        // drain window. So `batch.len() > 1` is almost always true and isn't
+        // a backlog signal at all; the real signal is how many *complete
+        // frames* this batch reassembled. More than one completed frame in
+        // a single poll iteration means decode/render didn't keep up with
+        // the last real-time tick — that's genuine backlog.
+        let mut completions: Vec<(bool, Vec<u8>)> = Vec::new();
         for datagram in batch.iter() {
             crate::playback::note_bytes_received(datagram.len() as u64);
 
@@ -448,44 +455,45 @@ fn play_session_blocking(
                         continue;
                     }
                     let is_keyframe = access_unit_is_keyframe(&frame);
-
-                    // Always decode a keyframe (it resets the reference chain and is
-                    // worth showing even a little late). Otherwise, while behind, skip
-                    // every non-keyframe completion in this batch — including the
-                    // last one. Feeding a lone P-frame here previously fed the
-                    // decoder a sample whose reference chain was just broken by all
-                    // the frames we skipped ahead of it (P-frames predict from the
-                    // immediately preceding frame, which we never decoded), which
-                    // MediaCodec still "successfully" decodes into garbage/corrupted
-                    // output rather than erroring — indistinguishable from a black
-                    // screen. Better to show nothing until the next keyframe resyncs
-                    // the reference chain than to render corrupted frames.
-                    if behind && !is_keyframe {
-                        consecutive_skipped += 1;
-                        stats.video_frames = asm.stats().frames_complete;
-                        continue;
-                    }
-
-                    let sample = encode_frame(feed_mode, &frame);
-                    if sample.is_empty() {
-                        continue;
-                    }
-                    let flags = if is_keyframe {
-                        BUFFER_FLAG_KEY_FRAME
-                    } else {
-                        0
-                    };
-                    feed_sample(&mut codec, &sample, pts_us, flags)?;
-                    pts_us += 33_000;
-                    stats.video_frames = asm.stats().frames_complete;
-                    drain_output(&mut codec)?;
-                    consecutive_skipped = 0;
+                    completions.push((is_keyframe, frame));
                 }
                 Ok(None) => {}
                 Err(e) => {
                     log::warn!("streambeam frame reassembly failed: {e}");
                 }
             }
+        }
+
+        let behind = completions.len() > 1;
+
+        for (is_keyframe, frame) in completions {
+            // Always decode a keyframe (it resets the reference chain and is
+            // worth showing even a little late). Otherwise, while behind, skip
+            // every non-keyframe completion in this batch — including the
+            // last one. Feeding a lone P-frame here previously fed the
+            // decoder a sample whose reference chain was just broken by all
+            // the frames we skipped ahead of it (P-frames predict from the
+            // immediately preceding frame, which we never decoded), which
+            // MediaCodec still "successfully" decodes into garbage/corrupted
+            // output rather than erroring — indistinguishable from a black
+            // screen. Better to show nothing until the next keyframe resyncs
+            // the reference chain than to render corrupted frames.
+            if behind && !is_keyframe {
+                consecutive_skipped += 1;
+                stats.video_frames = asm.stats().frames_complete;
+                continue;
+            }
+
+            let sample = encode_frame(feed_mode, &frame);
+            if sample.is_empty() {
+                continue;
+            }
+            let flags = if is_keyframe { BUFFER_FLAG_KEY_FRAME } else { 0 };
+            feed_sample(&mut codec, &sample, pts_us, flags)?;
+            pts_us += 33_000;
+            stats.video_frames = asm.stats().frames_complete;
+            drain_output(&mut codec)?;
+            consecutive_skipped = 0;
         }
 
         // We've been skipping non-keyframes for a while (they depend on a

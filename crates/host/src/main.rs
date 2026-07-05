@@ -62,6 +62,7 @@ struct Opt {
 }
 
 fn main() {
+    logging::install_panic_hook();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

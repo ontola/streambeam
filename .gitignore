@@ -9,6 +9,11 @@
 /.streambeam-dev/
 .streambeam/
 
+# Machine-specific WSL<->Windows dev-bridge scripts (hardcoded paths/ports/
+# device ids for this dev machine — see scripts/local/README.md). Not
+# portable, not for the repo; kept locally because we need them often.
+/scripts/local/
+
 # Flutter (app/ added in M3)
 app/.dart_tool/
 app/build/

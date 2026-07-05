@@ -101,6 +101,8 @@ pub fn send_gamepad_state(
 
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
+    #[cfg(any(target_os = "windows", target_os = "android"))]
+    streambeam_host::logging::install_panic_hook();
     flutter_rust_bridge::setup_default_user_utils();
     #[cfg(target_os = "android")]
     {
@@ -187,13 +189,35 @@ pub struct DiscoveredHost {
     pub host_pubkey: Vec<u8>,
 }
 
+// One `ServiceDaemon` for the app's whole lifetime, not a fresh one per poll.
+// `streambeam_net::browse` cold-starts mDNS resolution from nothing on every
+// call — fine for a one-shot CLI lookup, but this UI polls every few
+// seconds, and a response landing a beat late (mDNS responders jitter
+// replies) made a host that's perfectly fine look "offline" for that cycle.
+// A persistent `Browser` instead keeps a continuously-updated cache: once a
+// host has been seen, it stays known until a ServiceRemoved event actually
+// says otherwise.
+static BROWSER: std::sync::OnceLock<Result<streambeam_net::Browser, String>> =
+    std::sync::OnceLock::new();
+
 #[flutter_rust_bridge::frb]
 pub async fn discover_hosts(timeout_ms: u32) -> Result<Vec<DiscoveredHost>, String> {
     use std::time::Duration;
 
-    let timeout = Duration::from_millis(u64::from(timeout_ms.max(1000)));
-    log::info!("discover_hosts: browsing for {timeout_ms} ms");
-    let hosts = streambeam_net::browse(timeout).map_err(|e| e.to_string())?;
+    let browser = BROWSER
+        .get_or_init(|| streambeam_net::Browser::new().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|e| e.clone())?;
+
+    let mut hosts = browser.snapshot();
+    if hosts.is_empty() {
+        // Give a just-created browser (or a host that only just came online)
+        // a moment to hear a response before reporting nothing — subsequent
+        // polls return whatever's cached immediately, no re-probing needed.
+        let grace = Duration::from_millis(u64::from(timeout_ms.max(1000)).min(3000));
+        tokio::time::sleep(grace).await;
+        hosts = browser.snapshot();
+    }
     log::info!("discover_hosts: found {} host(s)", hosts.len());
     Ok(hosts
         .into_iter()
