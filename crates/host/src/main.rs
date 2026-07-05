@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 
 use clap::Parser;
 
+mod active_stream;
 pub mod audio;
 #[cfg(windows)]
 mod capture;
@@ -20,12 +21,14 @@ pub mod mock;
 #[cfg(windows)]
 mod nvenc;
 pub mod qr;
+#[cfg(windows)]
+mod scale;
 pub mod server;
 #[cfg(windows)]
 mod viiper_server;
 
 pub use config::{build_host_config, default_host_name};
-pub use encode::{EncodedFrame, EncodeError, VideoEncoder};
+pub use encode::{EncodeError, EncodedFrame, VideoEncoder};
 pub use server::{ClientEntry, HostConfig, HostControls, PairApproval};
 
 #[derive(Parser, Debug)]

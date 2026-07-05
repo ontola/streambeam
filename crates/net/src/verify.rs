@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use rustls::pki_types::{CertificateDer, UnixTime};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::DigitallySignedStruct;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::{WebPkiSupportedAlgorithms, verify_tls12_signature, verify_tls13_signature};
+use rustls::pki_types::{CertificateDer, UnixTime};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{CertificateError, DistinguishedName, Error, SignatureScheme};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, WebPkiSupportedAlgorithms};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 use crate::error::{NetError, Result};

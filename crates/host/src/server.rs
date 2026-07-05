@@ -6,20 +6,27 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
-    advertise_ips, export_pairing_secret, peer_pubkey, read_msg, server_config, write_msg,
-    Advertiser, HelloVerdict, Identity, PairingStore,
+    Advertiser, HelloVerdict, Identity, PairingStore, advertise_ips, export_pairing_secret,
+    peer_pubkey, read_msg, server_config, write_msg,
 };
-use tokio::sync::oneshot;
+use streambeam_proto::PROTO_VERSION;
 use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
 use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
-use streambeam_proto::PROTO_VERSION;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::oneshot;
 
+use crate::active_stream::{ActiveStreamTracker, CloseableConn};
 use crate::audio::OpusCatalog;
 use crate::encode::VideoEncoder;
 use crate::mock::MockEncoder;
+
+impl CloseableConn for quinn::Connection {
+    fn close_stream(&self) {
+        self.close(0u32.into(), b"superseded by new session");
+    }
+}
 
 /// `eprintln!`-alike that also survives into `host.log` — plain `eprintln!`
 /// is invisible once the release build has no console attached.
@@ -57,11 +64,20 @@ pub struct HostConfig {
 
 /// Runtime state the tray GUI reads and flips: discoverability, whether new
 /// connections are accepted, and the list of currently connected clients.
-#[derive(Default)]
 pub struct HostControls {
     discoverable: AtomicBool,
     accept_connections: AtomicBool,
     clients: Mutex<Vec<ClientEntry>>,
+    /// The connection currently driving `stream_video`/`stream_audio`, if
+    /// any. The shared encoder (Desktop Duplication is single-instance) only
+    /// supports one real viewer: without this, a stale connection that never
+    /// got a clean QUIC close (app backgrounded, force-closed, network drop)
+    /// keeps its `stream_video` loop alive forever, silently competing with
+    /// any later connection for the same `encode_next()` calls — each
+    /// connection only gets a fraction of the frames, which looks exactly
+    /// like "0 fps, black screen" to whichever client loses the race. See
+    /// `active_stream.rs` for the handoff logic and its regression test.
+    active_stream: ActiveStreamTracker<quinn::Connection>,
     /// Set once by `run()` so `forget` can also drop the persisted pairing.
     pairing: Mutex<Option<(Arc<Mutex<PairingStore>>, Option<std::path::PathBuf>)>>,
     /// Set by `request_shutdown` to stop `run`'s accept loop; the `Notify`
@@ -78,6 +94,12 @@ pub struct ClientEntry {
     conn: quinn::Connection,
 }
 
+impl Default for HostControls {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostControls {
     /// Both toggles start enabled.
     pub fn new() -> Self {
@@ -85,6 +107,9 @@ impl HostControls {
             discoverable: AtomicBool::new(true),
             accept_connections: AtomicBool::new(true),
             clients: Mutex::new(Vec::new()),
+            active_stream: ActiveStreamTracker::new(|prev_addr, addr| {
+                log!("closing stale stream from {prev_addr} — new session from {addr}");
+            }),
             pairing: Mutex::new(None),
             shutdown_requested: AtomicBool::new(false),
             shutdown: tokio::sync::Notify::new(),
@@ -109,6 +134,28 @@ impl HostControls {
         paired_path: Option<std::path::PathBuf>,
     ) {
         *self.pairing.lock().unwrap() = Some((store, paired_path));
+    }
+
+    /// Claim the shared encoder for `(addr, conn)` — see `active_stream.rs`
+    /// for the handoff logic (and why it must *wait*, not just close).
+    async fn start_streaming(&self, addr: SocketAddr, conn: &quinn::Connection) {
+        self.active_stream.start_streaming(addr, conn).await;
+    }
+
+    /// Record the `stream_video` task handle for `addr` once it's spawned
+    /// (can't be known at `start_streaming` time, before the task exists).
+    fn set_stream_task(&self, addr: SocketAddr, task: tokio::task::JoinHandle<()>) {
+        self.active_stream.set_stream_task(addr, task);
+    }
+
+    /// Release the shared encoder if `addr` is still the connection holding it.
+    fn clear_active_stream(&self, addr: SocketAddr) {
+        self.active_stream.clear_active_stream(addr);
+    }
+
+    /// True if `addr` is still the connection holding the shared encoder.
+    fn is_active_stream(&self, addr: SocketAddr) -> bool {
+        self.active_stream.is_active_stream(addr)
     }
 
     /// Close a connected client's connection. It stays paired and can
@@ -187,6 +234,7 @@ struct ClientGuard {
 impl Drop for ClientGuard {
     fn drop(&mut self) {
         self.controls.remove_client(self.addr);
+        self.controls.clear_active_stream(self.addr);
     }
 }
 
@@ -263,16 +311,12 @@ fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
         // when we get here. Wait for it before falling back to the mock clip.
         for _ in 0..50 {
             if crate::android_screen::is_ready() {
-                crate::logging::log(
-                    "android screen capture ready — streaming live screen",
-                );
+                crate::logging::log("android screen capture ready — streaming live screen");
                 return Box::new(crate::android_screen::AndroidScreenEncoder);
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        crate::logging::log(
-            "android screen capture didn't become ready — using mock clip",
-        );
+        crate::logging::log("android screen capture didn't become ready — using mock clip");
     }
     let _ = (fps, max_encode_dim);
     Box::new(MockEncoder::bundled())
@@ -310,10 +354,8 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
         );
     }
     let token = store.lock().unwrap().mint_token(config.token_ttl_secs);
-    let expires_unix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_secs()
-        + config.token_ttl_secs;
+    let expires_unix =
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + config.token_ttl_secs;
 
     let endpoint = quinn::Endpoint::server(server_config(&identity)?, config.listen)?;
     let addr = endpoint.local_addr()?;
@@ -391,9 +433,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     if let Some(tx) = &config.pairing_payload_tx {
         let _ = tx.send(link);
     }
-    log!(
-        "streambeam-host listening on {addr} — scan QR or paste sbm1: into the Android app"
-    );
+    log!("streambeam-host listening on {addr} — scan QR or paste sbm1: into the Android app");
     log!("LAN addresses: {:?}", pairing_addrs(addr));
 
     let audio = Arc::new(OpusCatalog::bundled());
@@ -536,7 +576,9 @@ async fn handle_client(
                 // this case would let any LAN device self-enroll (the original
                 // vulnerability this branch closes) — a proof-less Hello may
                 // only be enrolled via an explicit interactive approval.
-                log!("pair rejected for {client_name}: no pairing proof and no interactive approval UI");
+                log!(
+                    "pair rejected for {client_name}: no pairing proof and no interactive approval UI"
+                );
                 write_msg(
                     &mut send,
                     &HostMsg::PairReject {
@@ -546,12 +588,8 @@ async fn handle_client(
                 .await?;
                 return Ok(());
             }
-            let approved = request_approval(
-                approval_tx.as_ref(),
-                &client_name,
-                conn.remote_address(),
-            )
-            .await;
+            let approved =
+                request_approval(approval_tx.as_ref(), &client_name, conn.remote_address()).await;
             if !approved {
                 log!("user declined pairing for {client_name}");
                 write_msg(
@@ -564,7 +602,10 @@ async fn handle_client(
                 return Ok(());
             }
 
-            store.lock().unwrap().commit_new_pair(client_pk, &client_name);
+            store
+                .lock()
+                .unwrap()
+                .commit_new_pair(client_pk, &client_name);
             log!("paired new client: {client_name}");
             write_msg(&mut send, &HostMsg::PairAck).await?;
             if let Some(path) = &paired_store {
@@ -645,16 +686,29 @@ async fn handle_client(
                 // encoder — worse than the bug it was meant to fix.
                 if !streaming {
                     streaming = true;
+                    controls.start_streaming(conn.remote_address(), &conn).await;
                     stream_ctl.request_idr();
                     let media_conn = conn.clone();
                     let ctl = stream_ctl.clone();
                     let enc = encoder.clone();
-                    tokio::spawn(async move {
-                        match stream_video(media_conn, enc, ctl, frame_interval).await {
+                    let media_controls = controls.clone();
+                    let media_addr = conn.remote_address();
+                    let video_task = tokio::spawn(async move {
+                        match stream_video(
+                            media_conn,
+                            enc,
+                            ctl,
+                            frame_interval,
+                            media_controls,
+                            media_addr,
+                        )
+                        .await
+                        {
                             Ok(()) => log!("video stream ended: connection closed"),
                             Err(e) => log!("video stream ended: {e}"),
                         }
                     });
+                    controls.set_stream_task(conn.remote_address(), video_task);
                     let audio_conn = conn.clone();
                     let audio_cat = audio.clone();
                     let audio_interval = Duration::from_millis(10);
@@ -673,15 +727,13 @@ async fn handle_client(
                         fresh_config = encoder.lock().await.codec_config();
                     }
                     if fresh_config.is_none() {
-                        log!("codec_config still unknown after 5s — sending SessionAccept without CodecConfig");
+                        log!(
+                            "codec_config still unknown after 5s — sending SessionAccept without CodecConfig"
+                        );
                     }
                 }
                 if let Some(data) = fresh_config.as_ref().or(codec_config.as_ref()) {
-                    write_msg(
-                        &mut send,
-                        &HostMsg::CodecConfig { data: data.clone() },
-                    )
-                    .await?;
+                    write_msg(&mut send, &HostMsg::CodecConfig { data: data.clone() }).await?;
                 }
                 write_msg(
                     &mut send,
@@ -788,6 +840,8 @@ async fn stream_video(
     encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
     ctl: Arc<StreamControl>,
     frame_interval: Duration,
+    controls: Arc<HostControls>,
+    addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let max_datagram = conn
         .max_datagram_size()
@@ -804,6 +858,14 @@ async fn stream_video(
     loop {
         if let Some(reason) = conn.close_reason() {
             log!("stream_video: connection closed ({reason})");
+            break;
+        }
+        // See `HostControls::is_active_stream` — an immediate, in-memory
+        // check that doesn't wait for the QUIC close handshake above, so a
+        // superseded session can't sneak in even one more `encode_next()`
+        // call and steal a frame meant for whichever connection replaced it.
+        if !controls.is_active_stream(addr) {
+            log!("stream_video: superseded by a newer session, stopping");
             break;
         }
 

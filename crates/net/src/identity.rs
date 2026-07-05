@@ -50,9 +50,7 @@ impl Identity {
     }
 
     pub fn private_key_der(&self) -> PrivateKeyDer<'static> {
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-            self.key_pair.serialize_der(),
-        ))
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.key_pair.serialize_der()))
     }
 }
 

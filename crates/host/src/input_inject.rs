@@ -44,7 +44,9 @@ fn apply_windows(event: InputEvent) {
 
 #[cfg(windows)]
 unsafe fn set_cursor_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CYSCREEN};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN, SetCursorPos,
+    };
 
     let rw = ref_w.max(1) as i32;
     let rh = ref_h.max(1) as i32;
@@ -58,7 +60,7 @@ unsafe fn set_cursor_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
 #[cfg(windows)]
 unsafe fn mouse_move(dx: i16, dy: i16) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT,
+        INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
     };
 
     if dx == 0 && dy == 0 {
@@ -84,8 +86,8 @@ unsafe fn mouse_move(dx: i16, dy: i16) {
 #[cfg(windows)]
 unsafe fn mouse_button(button: u8, down: bool) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
-        MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, mouse_event,
     };
 
     let flags = match (button, down) {
@@ -103,7 +105,7 @@ unsafe fn mouse_button(button: u8, down: bool) {
 #[cfg(windows)]
 unsafe fn scroll_wheel(dx: i16, dy: i16) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        mouse_event, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL,
+        MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, mouse_event,
     };
 
     // Windows wheel delta is in multiples of 120; scale client lines roughly to that.

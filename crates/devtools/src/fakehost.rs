@@ -11,15 +11,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use stream_ctl::StreamControl;
+use streambeam_net::{
+    HelloDecision, Identity, PairingStore, advertise, advertise_ips, export_pairing_secret,
+    peer_pubkey, read_msg, server_config, write_msg,
+};
+use streambeam_proto::PROTO_VERSION;
 use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
 use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::pair::PairInfo;
-use streambeam_proto::PROTO_VERSION;
-use streambeam_net::{
-    advertise, advertise_ips, export_pairing_secret, peer_pubkey, read_msg, server_config,
-    write_msg, HelloDecision, Identity, PairingStore,
-};
-use stream_ctl::StreamControl;
 use tokio::signal;
 
 #[derive(Parser, Debug)]
@@ -56,7 +56,9 @@ fn default_log_filter() -> tracing_subscriber::EnvFilter {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
 }
 
-fn load_catalog(opt: &Opt) -> Result<media::VideoCatalog, Box<dyn std::error::Error + Send + Sync>> {
+fn load_catalog(
+    opt: &Opt,
+) -> Result<media::VideoCatalog, Box<dyn std::error::Error + Send + Sync>> {
     if opt.synthetic {
         Ok(media::VideoCatalog::synthetic(120))
     } else if let Some(path) = &opt.file {
@@ -84,10 +86,7 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let identity = Identity::generate()?;
     let store = Arc::new(Mutex::new(PairingStore::new()));
     let token = store.lock().unwrap().mint_token(300);
-    let expires_unix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_secs()
-        + 300;
+    let expires_unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + 300;
 
     let endpoint = quinn::Endpoint::server(server_config(&identity)?, listen)?;
     let addr = endpoint.local_addr()?;
@@ -95,7 +94,13 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let _mdns = if std::env::var("STREAMBEAM_NO_MDNS").is_err() {
         let ips: Vec<_> = addrs.iter().map(|a| a.ip()).collect();
-        match advertise("fakehost", "fakehost", addr.port(), &ips, Some(identity.public_key())) {
+        match advertise(
+            "fakehost",
+            "fakehost",
+            addr.port(),
+            &ips,
+            Some(identity.public_key()),
+        ) {
             Ok(daemon) => {
                 eprintln!("mDNS: broadcasting on port {} ({ips:?})", addr.port());
                 Some(daemon)
@@ -195,10 +200,11 @@ async fn handle(
 
     let client_pk = peer_pubkey(&conn)?;
     let exporter = export_pairing_secret(&conn)?;
-    let decision = store
-        .lock()
-        .unwrap()
-        .handle_hello(client_pk, &client_name, pair_proof, &exporter);
+    let decision =
+        store
+            .lock()
+            .unwrap()
+            .handle_hello(client_pk, &client_name, pair_proof, &exporter);
 
     match decision {
         HelloDecision::AcceptedNewPair => {
@@ -274,9 +280,7 @@ async fn handle(
                     let audio_cat = audio.clone();
                     let audio_interval = Duration::from_millis(10);
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            stream_audio(audio_conn, audio_cat, audio_interval).await
-                        {
+                        if let Err(e) = stream_audio(audio_conn, audio_cat, audio_interval).await {
                             eprintln!("audio stream ended: {e}");
                         }
                     });

@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use streambeam_core::{
-    clear_saved_host, connect_as_identity, load_saved_host, save_saved_host, FrameReassembler,
-    SavedHost,
+    FrameReassembler, SavedHost, clear_saved_host, connect_as_identity, load_saved_host,
+    save_saved_host,
 };
-use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
+use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
 
 use crate::store::{client_identity_path, saved_host_path};
 
@@ -50,12 +50,7 @@ pub fn send_mouse_scroll(dx: i16, dy: i16) {
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
     #[cfg(target_os = "android")]
-    crate::input::send(streambeam_proto::input::InputEvent::MouseAbs {
-        x,
-        y,
-        ref_w,
-        ref_h,
-    });
+    crate::input::send(streambeam_proto::input::InputEvent::MouseAbs { x, y, ref_w, ref_h });
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -63,10 +58,7 @@ pub fn send_mouse_click(button: u8) {
     #[cfg(target_os = "android")]
     {
         use streambeam_proto::input::InputEvent;
-        crate::input::send(InputEvent::MouseButton {
-            button,
-            down: true,
-        });
+        crate::input::send(InputEvent::MouseButton { button, down: true });
         crate::input::send(InputEvent::MouseButton {
             button,
             down: false,
@@ -161,22 +153,15 @@ pub struct SavedHostInfo {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn load_saved_host_info() -> Option<SavedHostInfo> {
-    load_saved_host(&saved_host_path())
-        .ok()
-        .flatten()
-        .map(|h| {
-            let primary = h.primary_addr();
-            SavedHostInfo {
-                name: h.host_name,
-                port: primary.map(|a| a.port()).unwrap_or(47989),
-                addrs: h
-                    .addrs
-                    .iter()
-                    .map(|a| a.ip().to_string())
-                    .collect(),
-                host_pubkey: h.host_pubkey.to_vec(),
-            }
-        })
+    load_saved_host(&saved_host_path()).ok().flatten().map(|h| {
+        let primary = h.primary_addr();
+        SavedHostInfo {
+            name: h.host_name,
+            port: primary.map(|a| a.port()).unwrap_or(47989),
+            addrs: h.addrs.iter().map(|a| a.ip().to_string()).collect(),
+            host_pubkey: h.host_pubkey.to_vec(),
+        }
+    })
 }
 
 /// Persist host pubkey/addrs from a scanned `sbm1:` payload for later reconnect.
@@ -302,9 +287,7 @@ pub async fn reconnect_play_stream(
         let host = load_saved_host(&saved_host_path())
             .map_err(|e| e.to_string())?
             .ok_or("no saved host — scan QR first")?;
-        let addr = host
-            .primary_addr()
-            .ok_or("saved host has no address")?;
+        let addr = host.primary_addr().ok_or("saved host has no address")?;
         return crate::android::play::run_known(host, addr, native_window, max_video_frames).await;
     }
     #[cfg(not(target_os = "android"))]
@@ -341,7 +324,11 @@ async fn receive_stats(
             stats.audio_packets += 1;
             continue;
         }
-        if asm.push_datagram(&datagram).map_err(|e| e.to_string())?.is_some() {
+        if asm
+            .push_datagram(&datagram)
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
             stats.video_frames = asm.stats().frames_complete;
         }
     }

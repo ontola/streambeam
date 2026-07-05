@@ -5,12 +5,12 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
-    build_pair_proof, client_config, export_pairing_secret, read_msg, write_msg, Identity,
+    Identity, build_pair_proof, client_config, export_pairing_secret, read_msg, write_msg,
 };
+use streambeam_proto::PROTO_VERSION;
 use streambeam_proto::control::{AudioCaps, ClientMsg, HostMsg, VideoCaps};
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
-use streambeam_proto::PROTO_VERSION;
 
 #[derive(Debug)]
 pub struct ClientSession {
@@ -26,7 +26,9 @@ pub struct ClientSession {
     pub input: Option<quinn::SendStream>,
 }
 
-pub async fn connect(payload: &str) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn connect(
+    payload: &str,
+) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     connect_as(payload, "streambeam-client").await
 }
 
@@ -76,13 +78,7 @@ pub async fn connect_as_identity(
         &exporter,
     ));
 
-    finish_session(
-        endpoint,
-        conn,
-        client_name,
-        pair_proof,
-    )
-    .await
+    finish_session(endpoint, conn, client_name, pair_proof).await
 }
 
 /// Reconnect to a previously paired host (no QR token required).
@@ -104,7 +100,9 @@ pub async fn connect_known(
     finish_session(endpoint, conn, client_name, None).await
 }
 
-fn load_client_identity(path: Option<&Path>) -> Result<Identity, Box<dyn std::error::Error + Send + Sync>> {
+fn load_client_identity(
+    path: Option<&Path>,
+) -> Result<Identity, Box<dyn std::error::Error + Send + Sync>> {
     match path {
         Some(p) => Ok(Identity::load_or_generate(p)?),
         None => Ok(Identity::generate()?),
@@ -203,10 +201,7 @@ pub async fn send_input(
     session: &mut ClientSession,
     event: InputEvent,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let input = session
-        .input
-        .as_mut()
-        .ok_or("input stream not open")?;
+    let input = session.input.as_mut().ok_or("input stream not open")?;
     write_msg(input, &event).await?;
     Ok(())
 }

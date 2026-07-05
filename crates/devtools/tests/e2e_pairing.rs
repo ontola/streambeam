@@ -3,8 +3,8 @@
 mod common;
 
 use common::{bin, spawn_fakehost};
-use streambeam_proto::pair::PairInfo;
 use std::process::Command;
+use streambeam_proto::pair::PairInfo;
 
 #[test]
 fn pair_success() {

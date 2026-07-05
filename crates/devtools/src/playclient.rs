@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use streambeam_core::FrameReassembler;
-use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO, MEDIA_HEADER_LEN};
+use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
 
 use client::connect;
 use play::{AudioPlayer, VideoPlayer};
@@ -38,7 +38,10 @@ async fn main() {
     }
 }
 
-async fn run(payload: &str, no_audio: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn run(
+    payload: &str,
+    no_audio: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut session = connect(payload).await?;
     eprintln!(
         "paired — playing {}x{} @ {} fps ({}){}",
@@ -46,7 +49,11 @@ async fn run(payload: &str, no_audio: bool) -> Result<(), Box<dyn std::error::Er
         session.height,
         session.fps,
         session.codec,
-        if no_audio { " (video only)" } else { " + 48 kHz stereo audio" }
+        if no_audio {
+            " (video only)"
+        } else {
+            " + 48 kHz stereo audio"
+        }
     );
     eprintln!("close the video window or press Ctrl+C to stop");
 
@@ -72,8 +79,11 @@ async fn run(payload: &str, no_audio: bool) -> Result<(), Box<dyn std::error::Er
             break;
         }
 
-        let datagram = match tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())
-            .await
+        let datagram = match tokio::time::timeout(
+            Duration::from_secs(5),
+            session.conn.read_datagram(),
+        )
+        .await
         {
             Ok(Ok(d)) => d,
             Ok(Err(_)) => break,

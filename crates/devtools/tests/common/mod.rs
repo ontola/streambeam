@@ -6,12 +6,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 pub fn bin(name: &str) -> String {
-    std::env::var(format!("CARGO_BIN_EXE_{name}")).unwrap_or_else(|_| {
-        format!(
-            "{}/../../target/debug/{name}",
-            env!("CARGO_MANIFEST_DIR")
-        )
-    })
+    std::env::var(format!("CARGO_BIN_EXE_{name}"))
+        .unwrap_or_else(|_| format!("{}/../../target/debug/{name}", env!("CARGO_MANIFEST_DIR")))
 }
 
 fn host_bin() -> String {
@@ -75,7 +71,12 @@ pub fn spawn_host(data_dir: &Path) -> (std::process::Child, String) {
     (child, payload)
 }
 
-pub fn run_devclient(payload: &str, frames: u32, drop_pct: u8, verify: bool) -> std::process::ExitStatus {
+pub fn run_devclient(
+    payload: &str,
+    frames: u32,
+    drop_pct: u8,
+    verify: bool,
+) -> std::process::ExitStatus {
     run_devclient_opts(payload, frames, drop_pct, verify, 0, None)
 }
 

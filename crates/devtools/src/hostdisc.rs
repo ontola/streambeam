@@ -27,9 +27,7 @@ fn main() {
                     h.name,
                     h.port,
                     h.addrs,
-                    h.host_pubkey
-                        .map(|_| "  pk=yes")
-                        .unwrap_or_default()
+                    h.host_pubkey.map(|_| "  pk=yes").unwrap_or_default()
                 );
             }
         }

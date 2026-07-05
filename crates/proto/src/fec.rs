@@ -2,8 +2,8 @@
 
 use reed_solomon_simd::ReedSolomonEncoder;
 
-use crate::media::{self, MediaHeader, DEFAULT_FEC_RATIO, FLAG_KEYFRAME, FLAG_PARITY};
 use crate::ProtoError;
+use crate::media::{self, DEFAULT_FEC_RATIO, FLAG_KEYFRAME, FLAG_PARITY, MediaHeader};
 
 /// Maximum data shards per frame. `k`/`r` are `u16` wire fields (max 65535),
 /// but we cap well below that: reed-solomon-simd's supported recovery ratio
@@ -254,14 +254,10 @@ pub fn decode_frame(shards: &[MediaShard]) -> Result<Vec<u8>, ProtoError> {
         }
         let mut out = Vec::with_capacity(k * shard_len);
         for idx in 0..k {
-            out.extend_from_slice(
-                by_idx[idx]
-                    .as_deref()
-                    .ok_or(ProtoError::NotEnoughShards {
-                        have: shards.len(),
-                        need: k,
-                    })?,
-            );
+            out.extend_from_slice(by_idx[idx].as_deref().ok_or(ProtoError::NotEnoughShards {
+                have: shards.len(),
+                need: k,
+            })?);
         }
         out
     };
@@ -290,11 +286,7 @@ pub fn encode_video_frame(
 }
 
 /// One 10 ms Opus packet on the audio channel (K=1, R=0, no RS framing).
-pub fn encode_audio_packet(
-    packet_id: u16,
-    opus_frame: &[u8],
-    capture_ts_us: u32,
-) -> MediaShard {
+pub fn encode_audio_packet(packet_id: u16, opus_frame: &[u8], capture_ts_us: u32) -> MediaShard {
     MediaShard {
         header: MediaHeader {
             channel: media::CHANNEL_AUDIO,
@@ -366,10 +358,7 @@ mod tests {
                 let j = rng.random_range(i..shards.len());
                 indices.swap(i, j);
             }
-            let kept: Vec<_> = indices[..k]
-                .iter()
-                .map(|&i| shards[i].clone())
-                .collect();
+            let kept: Vec<_> = indices[..k].iter().map(|&i| shards[i].clone()).collect();
             let recovered = decode_frame(&kept).unwrap();
             assert_eq!(recovered, frame);
         }

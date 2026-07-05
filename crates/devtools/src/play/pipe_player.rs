@@ -119,9 +119,7 @@ fn spawn_ffplay(
         .map_err(|e| format!("failed to launch ffplay ({e}); install ffmpeg"))?;
 
     let pid = child.id();
-    eprintln!(
-        "ffplay video pid={pid} — look for \"{title}\" ({width}x{height})"
-    );
+    eprintln!("ffplay video pid={pid} — look for \"{title}\" ({width}x{height})");
 
     let stdin = child.stdin.take().expect("ffplay stdin");
     Ok(VideoPlayer {

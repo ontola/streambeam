@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use streambeam_proto::pair::{compute_pair_proof, verify_pair_proof, PAIR_EXPORTER_LEN};
+use streambeam_proto::pair::{PAIR_EXPORTER_LEN, compute_pair_proof, verify_pair_proof};
 
 use crate::error::{NetError, Result};
 

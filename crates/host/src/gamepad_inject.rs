@@ -11,10 +11,10 @@ mod imp {
     use std::net::ToSocketAddrs;
     use std::sync::{Mutex, OnceLock};
 
+    use super::InputEvent;
     use viiper_client::client::{DeviceStream, ViiperClient};
     use viiper_client::devices::xbox360::input::Xbox360Input;
     use viiper_client::types::{Device, DeviceCreateRequest};
-    use super::InputEvent;
 
     const API_ADDR: &str = "127.0.0.1:3242";
 
@@ -135,7 +135,10 @@ mod imp {
                         return;
                     }
                 };
-                tracing::info!("VIIPER virtual Xbox 360 pad {pad} connected ({})", device.dev_id);
+                tracing::info!(
+                    "VIIPER virtual Xbox 360 pad {pad} connected ({})",
+                    device.dev_id
+                );
                 self.pads[idx] = Some(PadSlot {
                     bus_id,
                     dev_id: device.dev_id,

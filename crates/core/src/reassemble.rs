@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use streambeam_proto::fec::{decode_frame, MediaShard, MAX_DATA_SHARDS};
-use streambeam_proto::media::{MediaHeader, MEDIA_HEADER_LEN};
 use streambeam_proto::ProtoError;
+use streambeam_proto::fec::{MAX_DATA_SHARDS, MediaShard, decode_frame};
+use streambeam_proto::media::{MEDIA_HEADER_LEN, MediaHeader};
 
 #[derive(Debug, Default)]
 pub struct FrameStats {
@@ -226,10 +226,7 @@ impl FrameReassembler {
             .retain(|id| wrap_distance(latest, *id).unsigned_abs() < COMPLETED_WINDOW);
     }
 
-    pub fn push_datagram(
-        &mut self,
-        datagram: &[u8],
-    ) -> Result<Option<(u16, Vec<u8>)>, ProtoError> {
+    pub fn push_datagram(&mut self, datagram: &[u8]) -> Result<Option<(u16, Vec<u8>)>, ProtoError> {
         let header = MediaHeader::decode(datagram)?;
 
         // Reject headers that can't possibly describe a real frame before
@@ -603,8 +600,7 @@ mod tests {
         // A later frame completes and triggers abandon_stale on it.
         let trigger_id = lost_id + STALE_THRESHOLD as u16;
         let frame_trigger = vec![trigger_id as u8; 4000];
-        let shards_trigger =
-            encode_video_frame(trigger_id, &frame_trigger, false, 0, mtu).unwrap();
+        let shards_trigger = encode_video_frame(trigger_id, &frame_trigger, false, 0, mtu).unwrap();
         for shard in &shards_trigger {
             if push(&mut asm, shard).is_some() {
                 break;

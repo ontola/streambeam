@@ -1,5 +1,6 @@
 //! Windows host pipeline traits. Real capture/encode lands in M2; mock works on macOS.
 
+mod active_stream;
 #[cfg(target_os = "android")]
 pub mod android_screen;
 pub mod audio;
@@ -15,6 +16,8 @@ pub mod mock;
 #[cfg(windows)]
 pub mod nvenc;
 pub mod qr;
+#[cfg(windows)]
+pub mod scale;
 pub mod server;
 #[cfg(windows)]
 pub mod viiper_server;

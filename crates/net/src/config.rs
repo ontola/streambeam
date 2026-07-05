@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use rustls::crypto::ring::default_provider;
 use rustls::crypto::WebPkiSupportedAlgorithms;
+use rustls::crypto::ring::default_provider;
 use rustls_pki_types::CertificateDer;
 
 use streambeam_proto::ALPN;
@@ -35,10 +35,7 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
     let algs = supported_algs();
     let rustls = rustls::ServerConfig::builder()
         .with_client_cert_verifier(AcceptClientCertVerifier::new(algs))
-        .with_single_cert(
-            vec![identity.cert_der()],
-            identity.private_key_der(),
-        )?;
+        .with_single_cert(vec![identity.cert_der()], identity.private_key_der())?;
     let mut rustls = rustls;
     rustls.alpn_protocols = vec![ALPN.to_vec()];
 
@@ -59,15 +56,11 @@ pub fn client_config(identity: &Identity, pinned_host: [u8; 32]) -> Result<quinn
     let rustls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier)
-        .with_client_auth_cert(
-            vec![identity.cert_der()],
-            identity.private_key_der(),
-        )?;
+        .with_client_auth_cert(vec![identity.cert_der()], identity.private_key_der())?;
     let mut rustls = rustls;
     rustls.alpn_protocols = vec![ALPN.to_vec()];
 
-    let mut client =
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(rustls)?));
+    let mut client = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(rustls)?));
     let mut transport = quinn::TransportConfig::default();
     transport.datagram_receive_buffer_size(Some(4 * 1024 * 1024));
     tune_keepalive(&mut transport);
@@ -77,9 +70,7 @@ pub fn client_config(identity: &Identity, pinned_host: [u8; 32]) -> Result<quinn
 
 /// Peer certificate chain from a QUIC connection (rustls backend).
 pub fn peer_certs(conn: &quinn::Connection) -> Result<Vec<CertificateDer<'static>>> {
-    let identity = conn
-        .peer_identity()
-        .ok_or(NetError::MissingPeerCert)?;
+    let identity = conn.peer_identity().ok_or(NetError::MissingPeerCert)?;
     identity
         .downcast::<Vec<CertificateDer<'static>>>()
         .map(|c| *c)
@@ -88,8 +79,6 @@ pub fn peer_certs(conn: &quinn::Connection) -> Result<Vec<CertificateDer<'static
 
 pub fn peer_pubkey(conn: &quinn::Connection) -> Result<[u8; 32]> {
     let certs = peer_certs(conn)?;
-    let end_entity = certs
-        .first()
-        .ok_or(NetError::MissingPeerCert)?;
+    let end_entity = certs.first().ok_or(NetError::MissingPeerCert)?;
     crate::verify::extract_ed25519_pubkey(end_entity.as_ref())
 }

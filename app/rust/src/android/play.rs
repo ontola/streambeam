@@ -10,18 +10,27 @@ use ndk::media::media_codec::{
 };
 use ndk::native_window::NativeWindow;
 use streambeam_core::{
-    access_unit_is_keyframe, access_unit_to_avcc_sample, access_unit_without_sei,
-    avcc_from_sps_pps, connect_as_identity, connect_known, extract_avc_decoder_config,
-    idr_sample_avcc, nal_with_start_code, request_idr, request_invalidate_ref_frames,
-    save_saved_host, ClientSession, FrameReassembler, LossReport, SavedHost,
+    ClientSession, FrameReassembler, LossReport, SavedHost, access_unit_is_keyframe,
+    access_unit_to_avcc_sample, access_unit_without_sei, avcc_from_sps_pps, connect_as_identity,
+    connect_known, extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code, request_idr,
+    request_invalidate_ref_frames, save_saved_host,
 };
 use streambeam_proto::input::InputEvent;
-use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
+use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
 
 use crate::api::StreamStats;
 use crate::store::client_identity_path;
 
-const TIMEOUT: Duration = Duration::from_micros(30_000);
+// Used for MediaCodec dequeue_input_buffer/dequeue_output_buffer calls made
+// synchronously on the same thread that also drives the network read loop
+// (`play_session_blocking`). A "no buffer ready yet" dequeue burns the full
+// timeout doing nothing — at 30ms that alone can exceed a real-time frame
+// budget (33ms at 30fps) per call, and there are multiple such calls per
+// loop iteration. Once the client falls even slightly behind, this caps how
+// fast it can ever catch back up, turning a transient stall into a
+// permanent backlog. Keep this near-instant; a real "nothing is ready" case
+// just means we go around the loop again immediately.
+const TIMEOUT: Duration = Duration::from_micros(2_000);
 const BUFFER_FLAG_KEY_FRAME: u32 = 1;
 
 #[derive(Copy, Clone, Debug)]
@@ -148,7 +157,10 @@ fn encode_frame(mode: FeedMode, frame: &[u8]) -> Vec<u8> {
     }
 }
 
-fn coalesce_input_batch(first: InputEvent, rx: &mut tokio::sync::mpsc::UnboundedReceiver<InputEvent>) -> Vec<InputEvent> {
+fn coalesce_input_batch(
+    first: InputEvent,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<InputEvent>,
+) -> Vec<InputEvent> {
     let mut batch = vec![first];
     while let Ok(next) = rx.try_recv() {
         batch.push(next);
@@ -190,7 +202,11 @@ fn coalesce_input_batch(first: InputEvent, rx: &mut tokio::sync::mpsc::Unbounded
     out
 }
 
-pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> Result<StreamStats, String> {
+pub async fn run(
+    payload: String,
+    native_window: i64,
+    max_video_frames: u32,
+) -> Result<StreamStats, String> {
     log::info!("streambeam connecting with pairing payload");
     let session = connect_as_identity(
         &payload,
@@ -226,17 +242,12 @@ pub async fn run_discovered(
         .map_err(|e| format!("invalid host address: {e}"))?;
 
     log::info!("streambeam connecting to LAN host {host_name} at {addr}");
-    let session = connect_known(
-        pubkey,
-        addr,
-        "streambeam-android",
-        &client_identity_path(),
-    )
-    .await
-    .map_err(|e| {
-        log::error!("streambeam LAN connect failed: {e}");
-        format!("Could not reach host: {e}")
-    })?;
+    let session = connect_known(pubkey, addr, "streambeam-android", &client_identity_path())
+        .await
+        .map_err(|e| {
+            log::error!("streambeam LAN connect failed: {e}");
+            format!("Could not reach host: {e}")
+        })?;
 
     let host = SavedHost {
         host_name,
@@ -276,10 +287,7 @@ async fn play_session(
 ) -> Result<StreamStats, String> {
     crate::playback::reset();
     let runtime = tokio::runtime::Handle::current();
-    let input = session
-        .input
-        .take()
-        .ok_or("input stream not open")?;
+    let input = session.input.take().ok_or("input stream not open")?;
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
     crate::input::set_sender(Some(input_tx));
 
@@ -287,7 +295,10 @@ async fn play_session(
         let mut input_send = input;
         while let Some(first) = input_rx.recv().await {
             for ev in coalesce_input_batch(first, &mut input_rx) {
-                if streambeam_net::write_msg(&mut input_send, &ev).await.is_err() {
+                if streambeam_net::write_msg(&mut input_send, &ev)
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -319,8 +330,8 @@ fn play_session_blocking(
         .codec_config
         .as_deref()
         .ok_or("Host did not send video configuration (CodecConfig).")?;
-    let (sps, pps) = extract_avc_decoder_config(config)
-        .ok_or("Host video config is missing H.264 SPS/PPS.")?;
+    let (sps, pps) =
+        extract_avc_decoder_config(config).ok_or("Host video config is missing H.264 SPS/PPS.")?;
     let avcc = avcc_from_sps_pps(&sps, &pps).ok_or("Could not build H.264 decoder config.")?;
 
     let window = unsafe {
@@ -338,7 +349,9 @@ fn play_session_blocking(
         session.codec.clone(),
     );
     let (mut codec, feed_mode) = start_decoder(&window, width, height, &sps, &pps, &avcc)?;
-    codec.start().map_err(|e| codec_err("start", media_err_label(e)))?;
+    codec
+        .start()
+        .map_err(|e| codec_err("start", media_err_label(e)))?;
 
     if let Err(e) = window.set_buffers_geometry(width, height, None) {
         log::warn!("streambeam set_buffers_geometry after configure: {e}");
@@ -375,7 +388,7 @@ fn play_session_blocking(
     // How many decodable (non-keyframe) completions we've skipped in a row
     // because we were catching up on a backlog — see the loop body.
     let mut consecutive_skipped = 0u32;
-    const IDR_RESYNC_THRESHOLD: u32 = 20;
+    const IDR_RESYNC_THRESHOLD: u32 = 8;
     // Don't hammer the host with repeated keyframe requests: a forced
     // keyframe is itself a large burst (150-300 KB even at 1080p) that can
     // cause the very backlog it's meant to fix if requested too often —
@@ -388,32 +401,38 @@ fn play_session_blocking(
     while stats.video_frames < target {
         drain_output(&mut codec)?;
 
-        let first = runtime
-            .block_on(async {
-                tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram()).await
-            })
-            .map_err(|_| "Timed out waiting for video from host.".to_string())?
-            .map_err(|e| format!("Stream read failed: {e}"))?;
+        // One `block_on` call for the whole batch, not one per datagram —
+        // at the tighter poll rate this loop now runs at (see `TIMEOUT`),
+        // calling `block_on` per-datagram (up to 64 times/iteration) added
+        // real, measurable overhead entering the async runtime thousands of
+        // times a second, showing up as sustained high CPU use and starving
+        // other tasks on the same runtime (e.g. the input-forwarding task).
+        let batch = runtime.block_on(async {
+            let first = tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())
+                .await
+                .map_err(|_| "Timed out waiting for video from host.".to_string())?
+                .map_err(|e| format!("Stream read failed: {e}"))?;
 
-        // Greedily grab anything ALREADY sitting in the receive queue too
-        // (a near-zero wait; genuinely new arrivals won't show up in time).
-        // More than one datagram back-to-back means decode/render fell
-        // behind real time since the last iteration — plain FIFO processing
-        // of an ever-growing backlog is exactly how you end up watching
-        // content from a minute ago with no way to ever catch up.
-        let mut batch = vec![first];
-        while let Ok(Ok(next)) = runtime.block_on(async {
-            tokio::time::timeout(Duration::from_millis(2), session.conn.read_datagram()).await
-        }) {
-            batch.push(next);
-            if batch.len() >= 64 {
-                break; // safety valve against an unbounded drain loop
+            // Greedily grab anything ALREADY sitting in the receive queue too
+            // (a near-zero wait; genuinely new arrivals won't show up in time).
+            // More than one datagram back-to-back means decode/render fell
+            // behind real time since the last iteration — plain FIFO processing
+            // of an ever-growing backlog is exactly how you end up watching
+            // content from a minute ago with no way to ever catch up.
+            let mut batch = vec![first];
+            while let Ok(Ok(next)) =
+                tokio::time::timeout(Duration::from_millis(2), session.conn.read_datagram()).await
+            {
+                batch.push(next);
+                if batch.len() >= 64 {
+                    break; // safety valve against an unbounded drain loop
+                }
             }
-        }
+            Ok::<_, String>(batch)
+        })?;
         let behind = batch.len() > 1;
-        let last_index = batch.len() - 1;
 
-        for (i, datagram) in batch.iter().enumerate() {
+        for datagram in batch.iter() {
             crate::playback::note_bytes_received(datagram.len() as u64);
 
             let header = MediaHeader::decode(datagram).map_err(|e| e.to_string())?;
@@ -431,11 +450,17 @@ fn play_session_blocking(
                     let is_keyframe = access_unit_is_keyframe(&frame);
 
                     // Always decode a keyframe (it resets the reference chain and is
-                    // worth showing even a little late). Otherwise, while behind,
-                    // only decode the freshest completion in this batch — the rest
-                    // are already stale by the time we'd finish them, so decoding
-                    // them would just burn time we need to spend catching up.
-                    if behind && !is_keyframe && i != last_index {
+                    // worth showing even a little late). Otherwise, while behind, skip
+                    // every non-keyframe completion in this batch — including the
+                    // last one. Feeding a lone P-frame here previously fed the
+                    // decoder a sample whose reference chain was just broken by all
+                    // the frames we skipped ahead of it (P-frames predict from the
+                    // immediately preceding frame, which we never decoded), which
+                    // MediaCodec still "successfully" decodes into garbage/corrupted
+                    // output rather than erroring — indistinguishable from a black
+                    // screen. Better to show nothing until the next keyframe resyncs
+                    // the reference chain than to render corrupted frames.
+                    if behind && !is_keyframe {
                         consecutive_skipped += 1;
                         stats.video_frames = asm.stats().frames_complete;
                         continue;
@@ -508,16 +533,26 @@ fn play_session_blocking(
     Ok(stats)
 }
 
-fn feed_sample(
-    codec: &mut MediaCodec,
-    data: &[u8],
-    pts_us: u64,
-    flags: u32,
-) -> Result<(), String> {
-    let input = codec
-        .dequeue_input_buffer(TIMEOUT)
-        .map_err(|e| codec_err("dequeue input", e))?;
-    let DequeuedInputBufferResult::Buffer(mut input_buf) = input else {
+fn feed_sample(codec: &mut MediaCodec, data: &[u8], pts_us: u64, flags: u32) -> Result<(), String> {
+    // `TIMEOUT` is intentionally short (see its doc comment) so a single
+    // dequeue attempt no longer stalls the whole loop — but that also means
+    // "no input buffer free yet" is now a routine, momentary condition
+    // instead of the rare case it was at the old 30ms timeout. Retry a
+    // handful of times (a few ms total) before treating it as a real error.
+    let mut input = None;
+    for _ in 0..10 {
+        match codec
+            .dequeue_input_buffer(TIMEOUT)
+            .map_err(|e| codec_err("dequeue input", e))?
+        {
+            DequeuedInputBufferResult::Buffer(buf) => {
+                input = Some(buf);
+                break;
+            }
+            DequeuedInputBufferResult::TryAgainLater => continue,
+        }
+    }
+    let Some(mut input_buf) = input else {
         return Err("Video decoder input buffer unavailable.".into());
     };
     let buf = input_buf.buffer_mut();

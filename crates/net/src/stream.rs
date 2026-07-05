@@ -2,10 +2,7 @@ use streambeam_proto::frame;
 
 use crate::error::{NetError, Result};
 
-pub async fn write_msg<S: serde::Serialize>(
-    send: &mut quinn::SendStream,
-    msg: &S,
-) -> Result<()> {
+pub async fn write_msg<S: serde::Serialize>(send: &mut quinn::SendStream, msg: &S) -> Result<()> {
     let bytes = frame::encode_frame(msg)?;
     send.write_all(&bytes)
         .await

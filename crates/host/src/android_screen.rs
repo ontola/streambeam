@@ -16,8 +16,8 @@
 //! a sync frame in response to a client's `RequestIdr`.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::encode::{EncodeError, EncodedFrame, VideoEncoder};
 

@@ -32,10 +32,10 @@ use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
-use windows::core::{Interface, GUID};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::core::{GUID, Interface};
 
 use crate::encode::EncodedFrame;
 
@@ -281,8 +281,16 @@ struct PicParams {
     rsvd6: [*mut c_void; 57],
 }
 
-// `NV_ENC_PIC_FLAG_FORCEIDR`, bit 0 of `encode_pic_flags`.
-const PIC_FLAG_FORCEIDR: u32 = 0x1;
+// `NV_ENC_PIC_FLAG_FORCEIDR` per the real NVENC SDK header — 0x2, NOT 0x1
+// (0x1 is `NV_ENC_PIC_FLAG_FORCEINTRA`: an all-intra frame that is NOT a
+// real IDR — no SPS/PPS repeat, no NAL type 5, doesn't reset the decoder's
+// reference chain). Using 0x1 here meant every "forced keyframe" after the
+// session's very first frame — which NVENC always makes a real IDR
+// automatically regardless of any flag — was actually just a large
+// all-intra P-slice. Invisible under lossless testing (nothing ever needed
+// resyncing), catastrophic under real packet loss: no genuine recovery
+// point ever existed past frame 0, so any loss became permanent.
+const PIC_FLAG_FORCEIDR: u32 = 0x2;
 
 #[repr(C)]
 struct LockBitstream {
@@ -346,8 +354,7 @@ type RegisterResourceFn = unsafe extern "C" fn(*mut c_void, *mut RegisterResourc
 type UnregisterResourceFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
 type MapInputResourceFn = unsafe extern "C" fn(*mut c_void, *mut MapInputResource) -> i32;
 type UnmapInputResourceFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
-type CreateBitstreamBufferFn =
-    unsafe extern "C" fn(*mut c_void, *mut CreateBitstreamBuffer) -> i32;
+type CreateBitstreamBufferFn = unsafe extern "C" fn(*mut c_void, *mut CreateBitstreamBuffer) -> i32;
 type DestroyBitstreamBufferFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
 type EncodePictureFn = unsafe extern "C" fn(*mut c_void, *mut PicParams) -> i32;
 type LockBitstreamFn = unsafe extern "C" fn(*mut c_void, *mut LockBitstream) -> i32;
@@ -540,8 +547,8 @@ impl NvencEncoder {
             (functions.initialize_encoder)(encoder.as_ptr(), &mut init_params),
         )?;
 
-        let completion_event = CreateEventW(None, false, false, None)
-            .map_err(|e| format!("CreateEventW: {e}"))?;
+        let completion_event =
+            CreateEventW(None, false, false, None).map_err(|e| format!("CreateEventW: {e}"))?;
         let mut event_params: EventParams = std::mem::zeroed();
         event_params.version = NV_ENC_EVENT_PARAMS_VER;
         event_params.completion_event = completion_event.0;
@@ -611,13 +618,15 @@ impl NvencEncoder {
         }
         self.frame_index += 1;
 
-        let encode_result =
-            (self.functions.encode_picture)(self.encoder.as_ptr(), &mut pic_params);
+        let encode_result = (self.functions.encode_picture)(self.encoder.as_ptr(), &mut pic_params);
         // NV_ENC_ERR_NEED_MORE_INPUT (17): normal for the first couple of
         // frames while the encoder's internal pipeline fills — not a real
         // error, just means no bitstream is ready yet.
         if encode_result != 0 && encode_result != 17 {
-            let _ = (self.functions.unmap_input_resource)(self.encoder.as_ptr(), map_params.mapped_resource);
+            let _ = (self.functions.unmap_input_resource)(
+                self.encoder.as_ptr(),
+                map_params.mapped_resource,
+            );
             return Err(err("NvEncEncodePicture", encode_result));
         }
 
@@ -626,7 +635,10 @@ impl NvencEncoder {
         // and move on rather than risk hanging the capture thread forever
         // (exactly the failure mode the Media Foundation path had).
         let wait = WaitForSingleObject(self.completion_event, 100);
-        let _ = (self.functions.unmap_input_resource)(self.encoder.as_ptr(), map_params.mapped_resource);
+        let _ = (self.functions.unmap_input_resource)(
+            self.encoder.as_ptr(),
+            map_params.mapped_resource,
+        );
         if wait != WAIT_OBJECT_0 {
             crate::logging::log("NVENC: completion wait timed out, dropping this frame");
             return Ok(None);
@@ -678,7 +690,8 @@ impl Drop for NvencEncoder {
             let mut event_params: EventParams = std::mem::zeroed();
             event_params.version = NV_ENC_EVENT_PARAMS_VER;
             event_params.completion_event = self.completion_event.0;
-            let _ = (self.functions.unregister_async_event)(self.encoder.as_ptr(), &mut event_params);
+            let _ =
+                (self.functions.unregister_async_event)(self.encoder.as_ptr(), &mut event_params);
             let _ = CloseHandle(self.completion_event);
             let _ = (self.functions.destroy_encoder)(self.encoder.as_ptr());
         }

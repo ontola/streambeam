@@ -1,9 +1,9 @@
 //! JNI helpers: a native window from a Java Surface (for playback), and the
 //! screen-capture ingest path (MediaCodec output → host encoder) for hosting.
 
+use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JObject};
 use jni::sys::{jboolean, jint, jlong, jstring};
-use jni::JNIEnv;
 
 /// Returns a raw `ANativeWindow*` suitable for [`ndk::native_window::NativeWindow::from_ptr`].
 pub fn native_window_from_surface(env: JNIEnv, surface: JObject) -> i64 {

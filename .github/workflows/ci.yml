@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Blocking: both Cargo workspaces (root, and app/rust — its own separate
+  # workspace, see the windows-check job's neighbor comment) are clean as of
+  # 2026-07-05. Formatting is pure whitespace, so this staying green is a
+  # cheap, high-confidence gate — a diff can't silently reintroduce a large
+  # unrelated reformat without this job catching it immediately.
+  fmt:
+    name: cargo fmt --check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+      - working-directory: app/rust
+        run: cargo fmt --check
+
+  # cargo test --workspace on Linux. streambeam-host builds and tests here
+  # too: its Windows-only capture/encode paths sit behind
+  # `[target.'cfg(windows)'.dependencies]` and mock impls of the
+  # capture/encode/inject traits, by design (see crates/host/Cargo.toml) —
+  # see the `windows-check` job below for the parts this can't cover.
+  rust-test:
+    name: cargo test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  # streambeam-host's real Windows FFI (Direct3D/DXGI/Media Foundation/NVENC
+  # in crates/host/src/{capture,nvenc,scale}.rs) can only be type-checked on
+  # an actual Windows target — a native windows-latest runner, not the WSL
+  # bridge used for interactive dev-machine work. `cargo check`, not
+  # `build`/`test`: exercising the real capture/encode path needs a GPU and
+  # a live desktop session, which this runner doesn't have.
+  windows-check:
+    name: cargo check -p streambeam-host (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p streambeam-host
+
+  # Advisory only: the workspace has real pre-existing clippy warnings in
+  # code this job doesn't own the cleanup of, so it doesn't gate merges —
+  # `continue-on-error` surfaces new warnings in the job summary without
+  # turning an unrelated PR red for pre-existing debt.
+  clippy:
+    name: cargo clippy (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+
+  # Static analysis only (per CLAUDE.md's documented verify step) — building
+  # the app needs the Android/Windows/macOS toolchains this runner doesn't
+  # have. Generated FRB bindings (app/rust/src/frb_generated.rs and the Dart
+  # side) are committed, not regenerated here.
+  flutter-analyze:
+    name: flutter analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - working-directory: app
+        run: flutter pub get
+      - working-directory: app
+        run: flutter analyze --no-pub

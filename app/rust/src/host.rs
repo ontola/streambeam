@@ -5,9 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
-use streambeam_host::{
-    build_host_config, default_host_name, server, HostControls, PairApproval,
-};
+use streambeam_host::{HostControls, PairApproval, build_host_config, default_host_name, server};
 use streambeam_proto::pair::PairInfo;
 
 static SERVICE: OnceLock<Mutex<Option<HostService>>> = OnceLock::new();
@@ -235,20 +233,20 @@ pub fn snapshot() -> HostSnapshot {
     HostSnapshot {
         running: true,
         host_name: ui.map(|u| u.host_name.clone()).unwrap_or_default(),
-        listen_addr: ui
-            .map(|u| u.listen.to_string())
-            .unwrap_or_default(),
+        listen_addr: ui.map(|u| u.listen.to_string()).unwrap_or_default(),
         pairing_link: ui.and_then(|u| u.pairing_link.clone()),
         pairing_payload: ui.and_then(|u| u.pairing_payload.clone()),
         error: ui.and_then(|u| u.fatal.clone()),
         discoverable: svc.controls.is_discoverable(),
         accepts_connections: svc.controls.accepts_connections(),
         clients,
-        pending_approval: ui.and_then(|u| u.pending_approval.as_ref()).map(|p| HostPairRequest {
-            id: p.id,
-            client_name: p.client_name.clone(),
-            client_addr: p.client_addr.clone(),
-        }),
+        pending_approval: ui
+            .and_then(|u| u.pending_approval.as_ref())
+            .map(|p| HostPairRequest {
+                id: p.id,
+                client_name: p.client_name.clone(),
+                client_addr: p.client_addr.clone(),
+            }),
     }
 }
 

@@ -1,7 +1,7 @@
 //! Pairing enrollment logic (no QUIC I/O).
 
+use streambeam_net::{HelloDecision, HelloVerdict, PairingStore, build_pair_proof};
 use streambeam_proto::pair::PAIR_EXPORTER_LEN;
-use streambeam_net::{build_pair_proof, HelloDecision, HelloVerdict, PairingStore};
 
 #[test]
 fn enroll_accepts_valid_proof() {
@@ -116,7 +116,10 @@ fn evaluate_defers_enrollment_until_commit() {
     // Simulate the user clicking Allow.
     store.commit_new_pair(client_pk, "phone");
     assert!(store.is_paired(&client_pk));
-    assert!(store.active_token().is_none(), "one-time token must be burned");
+    assert!(
+        store.active_token().is_none(),
+        "one-time token must be burned"
+    );
 
     // A denied device (no commit) is simply never enrolled — nothing to assert
     // beyond the store staying unchanged for other pubkeys.

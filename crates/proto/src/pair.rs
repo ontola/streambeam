@@ -45,10 +45,7 @@ impl PairInfo {
 
     /// Strip whitespace and validate before decode (Windows terminal wraps often truncate copies).
     pub fn normalize_payload(s: &str) -> String {
-        s.trim()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
+        s.trim().chars().filter(|c| !c.is_whitespace()).collect()
     }
 
     /// Accepts both the raw `sbm1:` form and the QR URL form
@@ -146,7 +143,10 @@ mod tests {
         let payload = info.encode_payload().unwrap();
         let truncated = &payload[..payload.len() / 2];
         let err = PairInfo::decode_payload(truncated).unwrap_err().to_string();
-        assert!(err.contains("incomplete") || err.contains("cut off"), "{err}");
+        assert!(
+            err.contains("incomplete") || err.contains("cut off"),
+            "{err}"
+        );
     }
 
     #[test]

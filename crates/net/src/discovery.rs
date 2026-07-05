@@ -34,11 +34,7 @@ fn parse_pubkey(info: &ServiceInfo) -> Option<[u8; 32]> {
 }
 
 fn instance_name_from_fullname(fullname: &str) -> String {
-    fullname
-        .split('.')
-        .next()
-        .unwrap_or(fullname)
-        .to_string()
+    fullname.split('.').next().unwrap_or(fullname).to_string()
 }
 
 /// A registerable mDNS advertisement whose visibility can be toggled at runtime.
@@ -116,9 +112,7 @@ pub fn advertise(
     host_pubkey: Option<[u8; 32]>,
 ) -> Result<ServiceDaemon, NetError> {
     if ips.is_empty() {
-        return Err(NetError::Discovery(
-            "no IP addresses to advertise".into(),
-        ));
+        return Err(NetError::Discovery("no IP addresses to advertise".into()));
     }
 
     let props = host_pubkey.map(pubkey_txt_record);
@@ -193,11 +187,7 @@ pub fn guess_lan_ip() -> Option<IpAddr> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     let ip = socket.local_addr().ok()?.ip();
-    if ip.is_loopback() {
-        None
-    } else {
-        Some(ip)
-    }
+    if ip.is_loopback() { None } else { Some(ip) }
 }
 
 /// IPs to publish via mDNS for a bound listen address.

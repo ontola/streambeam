@@ -1,7 +1,7 @@
 //! Live playback counters polled from Dart while a stream session is active.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone)]
 struct SessionInfo {
@@ -48,12 +48,7 @@ pub fn session_height() -> u16 {
 }
 
 pub fn session_fps() -> u8 {
-    SESSION
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|s| s.fps)
-        .unwrap_or(0)
+    SESSION.lock().unwrap().as_ref().map(|s| s.fps).unwrap_or(0)
 }
 
 pub fn session_codec() -> String {

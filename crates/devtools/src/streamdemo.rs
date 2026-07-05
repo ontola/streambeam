@@ -5,12 +5,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 fn bin(name: &str) -> String {
-    std::env::var(format!("CARGO_BIN_EXE_{name}")).unwrap_or_else(|_| {
-        format!(
-            "{}/../../target/debug/{name}",
-            env!("CARGO_MANIFEST_DIR")
-        )
-    })
+    std::env::var(format!("CARGO_BIN_EXE_{name}"))
+        .unwrap_or_else(|_| format!("{}/../../target/debug/{name}", env!("CARGO_MANIFEST_DIR")))
 }
 
 fn main() {

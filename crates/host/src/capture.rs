@@ -27,28 +27,29 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use windows::core::{Interface, GUID};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_FLAG,
-    D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_BIND_FLAG, D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIAdapter, IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
-    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter,
+    IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
 };
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
 };
 use windows::Win32::System::Variant::VARIANT;
+use windows::core::{GUID, Interface};
 
 use crate::encode::{EncodeError, EncodedFrame, VideoEncoder};
 use crate::nvenc::NvencEncoder;
+use crate::scale::GpuScaler;
 
 // The built-in software H.264 encoder MFT (synchronous — no async event plumbing).
 const CLSID_CMSH264ENCODER: GUID = GUID::from_u128(0x6ca5_0344_051a_4ded_9779_a433_0516_5e35);
@@ -207,11 +208,13 @@ fn run_pipeline(
 enum EncoderBackend {
     /// Direct NVENC (see `nvenc.rs`). `encode_texture` is the D3D11 texture
     /// registered with the encoder; each tick's captured frame is
-    /// `CopyResource`'d (GPU-to-GPU) or, if downscaling, resized on the CPU
-    /// and `UpdateSubresource`'d into it — see `Pipeline::capture_frame`.
+    /// `CopyResource`'d straight in (GPU-to-GPU) when capture and encode
+    /// resolutions match, or run through `scaler` (also GPU-only, a
+    /// pixel-shader blit — see `scale.rs`) when they don't.
     Nvenc {
         encoder: NvencEncoder,
         encode_texture: ID3D11Texture2D,
+        scaler: Option<GpuScaler>,
     },
     /// Fallback for non-NVIDIA machines: the built-in Media Foundation
     /// software H.264 encoder, fed NV12 converted from the captured BGRA.
@@ -225,9 +228,8 @@ struct Pipeline {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
-    /// CPU-readable copy of the captured frame — used directly by the
-    /// software encoder path, and as a scratch texture for the (rare) CPU
-    /// downscale fallback on the NVENC path.
+    /// CPU-readable copy of the captured frame — only used by the software
+    /// encoder fallback path (NVENC never touches the CPU).
     staging: ID3D11Texture2D,
     backend: EncoderBackend,
     /// Native desktop resolution — the size of `staging`.
@@ -240,9 +242,6 @@ struct Pipeline {
     height: u32,
     fps: u32,
     codec_config: Option<Vec<u8>>,
-    /// CPU BGRA scratch buffer, only populated when the NVENC path needs to
-    /// downscale (native resolution exceeds `max_encode_dim`).
-    bgra_scratch: Vec<u8>,
     have_last: bool,
     frame_index: i64,
     // Diagnostics: logged periodically so a black/frozen stream is debuggable
@@ -276,26 +275,31 @@ impl Pipeline {
             let (device, context) = create_d3d_device()?;
             let (duplication, capture_width, capture_height) = create_duplication(&device)?;
             let staging = create_staging(&device, capture_width, capture_height)?;
-            let (width, height) =
-                scaled_dimensions(capture_width, capture_height, max_encode_dim);
+            let (width, height) = scaled_dimensions(capture_width, capture_height, max_encode_dim);
             if (width, height) != (capture_width, capture_height) {
                 crate::logging::log(&format!(
                     "downscaling capture {capture_width}x{capture_height} -> {width}x{height} to stay within FEC shard limits"
                 ));
             }
 
-            let nvenc_attempt: Result<(NvencEncoder, ID3D11Texture2D), String> =
-                match create_encode_texture(&device, width, height) {
-                    Ok(tex) => NvencEncoder::new(&device, &tex, width, height, fps)
-                        .map(|enc| (enc, tex)),
-                    Err(e) => Err(e),
-                };
+            let nvenc_attempt: Result<(NvencEncoder, ID3D11Texture2D, Option<GpuScaler>), String> =
+                (|| {
+                    let tex = create_encode_texture(&device, width, height)?;
+                    let encoder = NvencEncoder::new(&device, &tex, width, height, fps)?;
+                    let scaler = if (capture_width, capture_height) != (width, height) {
+                        Some(GpuScaler::new(&device, &context, width, height, &tex)?)
+                    } else {
+                        None
+                    };
+                    Ok((encoder, tex, scaler))
+                })();
             let backend = match nvenc_attempt {
-                Ok((encoder, encode_texture)) => {
+                Ok((encoder, encode_texture, scaler)) => {
                     crate::logging::log("using direct NVENC hardware encoder");
                     EncoderBackend::Nvenc {
                         encoder,
                         encode_texture,
+                        scaler,
                     }
                 }
                 Err(e) => {
@@ -323,7 +327,6 @@ impl Pipeline {
                 height,
                 fps,
                 codec_config,
-                bgra_scratch: vec![0u8; (width * height * 4) as usize],
                 have_last: false,
                 frame_index: 0,
                 stat_calls: 0,
@@ -417,7 +420,11 @@ impl Pipeline {
                 if !self.have_last {
                     if let EncoderBackend::Software { nv12, .. } = &mut self.backend {
                         nv12.iter_mut().enumerate().for_each(|(i, b)| {
-                            *b = if i < (self.width * self.height) as usize { 16 } else { 128 };
+                            *b = if i < (self.width * self.height) as usize {
+                                16
+                            } else {
+                                128
+                            };
                         });
                     }
                     self.have_last = true;
@@ -439,45 +446,14 @@ impl Pipeline {
             let texture: ID3D11Texture2D = ctx(resource.cast(), "resource.cast texture")?;
 
             match &self.backend {
-                EncoderBackend::Nvenc { encode_texture, .. } => {
-                    if (self.capture_width, self.capture_height) == (self.width, self.height) {
-                        self.context.CopyResource(encode_texture, &texture);
-                    } else {
-                        // Rare: native resolution exceeds max_encode_dim. One CPU
-                        // round trip of a straight BGRA resize (no YUV math) —
-                        // still far cheaper than the old full NV12 conversion.
-                        self.context.CopyResource(&self.staging, &texture);
-                        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                        ctx(
-                            self.context
-                                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)),
-                            "Map staging",
-                        )?;
-                        let stride = mapped.RowPitch as usize;
-                        let src = std::slice::from_raw_parts(
-                            mapped.pData as *const u8,
-                            stride * self.capture_height as usize,
-                        );
-                        resize_bgra(
-                            src,
-                            stride,
-                            self.capture_width,
-                            self.capture_height,
-                            self.width,
-                            self.height,
-                            &mut self.bgra_scratch,
-                        );
-                        self.context.Unmap(&self.staging, 0);
-                        self.context.UpdateSubresource(
-                            encode_texture,
-                            0,
-                            None,
-                            self.bgra_scratch.as_ptr() as *const _,
-                            self.width * 4,
-                            0,
-                        );
-                    }
-                }
+                EncoderBackend::Nvenc {
+                    encode_texture,
+                    scaler,
+                    ..
+                } => match scaler {
+                    Some(scaler) => scaler.scale(&texture)?,
+                    None => self.context.CopyResource(encode_texture, &texture),
+                },
                 EncoderBackend::Software { .. } => {
                     self.context.CopyResource(&self.staging, &texture);
                 }
@@ -517,7 +493,42 @@ impl Pipeline {
 
     unsafe fn encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
         match &mut self.backend {
-            EncoderBackend::Nvenc { encoder, .. } => encoder.encode(force_idr),
+            EncoderBackend::Nvenc {
+                encoder,
+                encode_texture,
+                ..
+            } => {
+                if force_idr {
+                    // NVENC's per-picture NV_ENC_PIC_FLAG_FORCEIDR flag is
+                    // set correctly (see nvenc.rs) but empirically the
+                    // driver still doesn't produce a real IDR NAL from it —
+                    // almost certainly the UltraLowLatency preset's
+                    // codec-specific `idrPeriod` (a field inside the opaque
+                    // per-codec config union we deliberately never touch)
+                    // overriding it to "never auto-insert", and that
+                    // override apparently also swallows explicit force
+                    // requests on this driver. Rather than reach into that
+                    // union (real risk of another layout bug), use the one
+                    // IDR mechanism already proven 100% reliable: a brand
+                    // new NVENC session's first frame is always a real IDR.
+                    crate::logging::log(
+                        "NVENC: recreating encoder session to force a real IDR (per-picture FORCEIDR flag is not honored by this driver)",
+                    );
+                    match NvencEncoder::new(
+                        &self.device,
+                        encode_texture,
+                        self.width,
+                        self.height,
+                        self.fps,
+                    ) {
+                        Ok(fresh) => *encoder = fresh,
+                        Err(e) => crate::logging::log(&format!(
+                            "NVENC: session recreate for forced IDR failed, continuing with existing session: {e}"
+                        )),
+                    }
+                }
+                encoder.encode(false)
+            }
             EncoderBackend::Software { transform, nv12 } => {
                 if force_idr {
                     let _ = set_codec_u32(transform, &CODECAPI_FORCEKEYFRAME, 1);
@@ -533,16 +544,25 @@ impl Pipeline {
 
 unsafe fn build_nv12_sample(nv12: &[u8], fps: u32, frame_index: i64) -> Result<IMFSample, String> {
     let sample = ctx(MFCreateSample(), "MFCreateSample")?;
-    let buffer = ctx(MFCreateMemoryBuffer(nv12.len() as u32), "MFCreateMemoryBuffer")?;
+    let buffer = ctx(
+        MFCreateMemoryBuffer(nv12.len() as u32),
+        "MFCreateMemoryBuffer",
+    )?;
     let mut ptr: *mut u8 = std::ptr::null_mut();
     ctx(buffer.Lock(&mut ptr, None, None), "buffer.Lock")?;
     std::ptr::copy_nonoverlapping(nv12.as_ptr(), ptr, nv12.len());
     ctx(buffer.Unlock(), "buffer.Unlock")?;
-    ctx(buffer.SetCurrentLength(nv12.len() as u32), "SetCurrentLength")?;
+    ctx(
+        buffer.SetCurrentLength(nv12.len() as u32),
+        "SetCurrentLength",
+    )?;
     ctx(sample.AddBuffer(&buffer), "AddBuffer")?;
 
     let hundred_ns = 10_000_000i64 / fps.max(1) as i64;
-    ctx(sample.SetSampleTime(frame_index * hundred_ns), "SetSampleTime")?;
+    ctx(
+        sample.SetSampleTime(frame_index * hundred_ns),
+        "SetSampleTime",
+    )?;
     ctx(sample.SetSampleDuration(hundred_ns), "SetSampleDuration")?;
     Ok(sample)
 }
@@ -575,8 +595,10 @@ unsafe fn drain_output_sync(
         let mut status = 0u32;
         let r = transform.ProcessOutput(0, &mut data, &mut status);
         // Reclaim (and thus release) the sample we handed to the MFT.
-        let produced =
-            std::mem::ManuallyDrop::into_inner(std::mem::replace(&mut data[0].pSample, std::mem::ManuallyDrop::new(None)));
+        let produced = std::mem::ManuallyDrop::into_inner(std::mem::replace(
+            &mut data[0].pSample,
+            std::mem::ManuallyDrop::new(None),
+        ));
 
         match r {
             Ok(()) => {
@@ -594,11 +616,21 @@ unsafe fn drain_output_sync(
     Ok(result)
 }
 
-unsafe fn read_access_unit(sample: &IMFSample, width: u32, height: u32) -> Result<EncodedFrame, String> {
-    let media_buffer = ctx(sample.ConvertToContiguousBuffer(), "ConvertToContiguousBuffer")?;
+unsafe fn read_access_unit(
+    sample: &IMFSample,
+    width: u32,
+    height: u32,
+) -> Result<EncodedFrame, String> {
+    let media_buffer = ctx(
+        sample.ConvertToContiguousBuffer(),
+        "ConvertToContiguousBuffer",
+    )?;
     let mut ptr: *mut u8 = std::ptr::null_mut();
     let mut len = 0u32;
-    ctx(media_buffer.Lock(&mut ptr, None, Some(&mut len)), "out Lock")?;
+    ctx(
+        media_buffer.Lock(&mut ptr, None, Some(&mut len)),
+        "out Lock",
+    )?;
     let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
     let _ = media_buffer.Unlock();
 
@@ -716,14 +748,17 @@ unsafe fn create_encode_texture(
 
 /// Create + configure the built-in Media Foundation software H.264 encoder —
 /// used only when NVENC isn't available (no NVIDIA GPU, or it failed to init).
-unsafe fn create_software_encoder(width: u32, height: u32, fps: u32) -> Result<IMFTransform, String> {
+unsafe fn create_software_encoder(
+    width: u32,
+    height: u32,
+    fps: u32,
+) -> Result<IMFTransform, String> {
     let transform: IMFTransform = ctx(
         CoCreateInstance(&CLSID_CMSH264ENCODER, None, CLSCTX_INPROC_SERVER),
         "CoCreateInstance H264 encoder",
     )?;
 
-    let bitrate = ((width * height) as u64 * fps as u64 / 15)
-        .clamp(2_000_000, 20_000_000) as u32;
+    let bitrate = ((width * height) as u64 * fps as u64 / 15).clamp(2_000_000, 20_000_000) as u32;
 
     // ICodecAPI properties (bitrate/rate-control/GOP/low-latency) must be set
     // before SetOutputType/SetInputType — this encoder bakes them into the
@@ -768,9 +803,18 @@ unsafe fn create_software_encoder(width: u32, height: u32, fps: u32) -> Result<I
 
     // Output first (required by MFTs), then the matching NV12 input.
     let out_type = ctx(MFCreateMediaType(), "MFCreateMediaType out")?;
-    ctx(out_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video), "out major")?;
-    ctx(out_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264), "out subtype")?;
-    ctx(out_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate), "out bitrate")?;
+    ctx(
+        out_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video),
+        "out major",
+    )?;
+    ctx(
+        out_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264),
+        "out subtype",
+    )?;
+    ctx(
+        out_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate),
+        "out bitrate",
+    )?;
     ctx(
         out_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32),
         "out interlace",
@@ -779,21 +823,39 @@ unsafe fn create_software_encoder(width: u32, height: u32, fps: u32) -> Result<I
         out_type.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32),
         "out profile",
     )?;
-    ctx(set_size(&out_type, &MF_MT_FRAME_SIZE, width, height), "out size")?;
+    ctx(
+        set_size(&out_type, &MF_MT_FRAME_SIZE, width, height),
+        "out size",
+    )?;
     ctx(set_ratio(&out_type, &MF_MT_FRAME_RATE, fps, 1), "out rate")?;
-    ctx(set_ratio(&out_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "out par")?;
+    ctx(
+        set_ratio(&out_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1),
+        "out par",
+    )?;
     ctx(transform.SetOutputType(0, &out_type, 0), "SetOutputType")?;
 
     let in_type = ctx(MFCreateMediaType(), "MFCreateMediaType in")?;
-    ctx(in_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video), "in major")?;
-    ctx(in_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12), "in subtype")?;
+    ctx(
+        in_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video),
+        "in major",
+    )?;
+    ctx(
+        in_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12),
+        "in subtype",
+    )?;
     ctx(
         in_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32),
         "in interlace",
     )?;
-    ctx(set_size(&in_type, &MF_MT_FRAME_SIZE, width, height), "in size")?;
+    ctx(
+        set_size(&in_type, &MF_MT_FRAME_SIZE, width, height),
+        "in size",
+    )?;
     ctx(set_ratio(&in_type, &MF_MT_FRAME_RATE, fps, 1), "in rate")?;
-    ctx(set_ratio(&in_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "in par")?;
+    ctx(
+        set_ratio(&in_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1),
+        "in par",
+    )?;
     ctx(transform.SetInputType(0, &in_type, 0), "SetInputType")?;
 
     ctx(
@@ -872,31 +934,6 @@ fn bgra_to_nv12(
             out[uv] = u.clamp(0, 255) as u8;
             out[uv + 1] = v.clamp(0, 255) as u8;
             uv += 2;
-        }
-    }
-}
-
-/// Nearest-neighbor BGRA resize (no color conversion) — used only on the
-/// NVENC path when native resolution exceeds `max_encode_dim`, since NVENC
-/// consumes BGRA directly and needs no YUV conversion at all.
-fn resize_bgra(
-    src: &[u8],
-    stride: usize,
-    src_width: u32,
-    src_height: u32,
-    dst_width: u32,
-    dst_height: u32,
-    out: &mut [u8],
-) {
-    let (sw, sh) = (src_width as usize, src_height as usize);
-    let (w, h) = (dst_width as usize, dst_height as usize);
-    for y in 0..h {
-        let sy = (y * sh / h).min(sh.saturating_sub(1));
-        for x in 0..w {
-            let sx = (x * sw / w).min(sw.saturating_sub(1));
-            let sp = sy * stride + sx * 4;
-            let dp = (y * w + x) * 4;
-            out[dp..dp + 4].copy_from_slice(&src[sp..sp + 4]);
         }
     }
 }

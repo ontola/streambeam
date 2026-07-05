@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use clap::Parser;
 use streambeam_core::{
-    connect_as_identity, connect_known, load_saved_host, save_saved_host, ClientSession,
-    FrameReassembler, LossReport, SavedHost,
+    ClientSession, FrameReassembler, LossReport, SavedHost, connect_as_identity, connect_known,
+    load_saved_host, save_saved_host,
 };
-use streambeam_proto::media::{MediaHeader, CHANNEL_AUDIO};
-use streambeam_proto::control::ClientMsg;
 use streambeam_net::write_msg;
+use streambeam_proto::control::ClientMsg;
+use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
 
 #[derive(Parser, Debug)]
 #[command(name = "devclient")]
@@ -54,6 +54,12 @@ struct Opt {
     /// Reconnect using saved host + persistent client identity (no QR token).
     #[arg(long)]
     reconnect: bool,
+
+    /// Append each reassembled frame's raw Annex-B bytes to this file, for
+    /// feeding to a real decoder (ffmpeg/ffprobe) independent of this
+    /// client's own digest-based verification.
+    #[arg(long)]
+    dump: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -75,7 +81,9 @@ fn default_log_filter() -> tracing_subscriber::EnvFilter {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
 }
 
-fn load_reference(opt: &Opt) -> Result<media::VideoCatalog, Box<dyn std::error::Error + Send + Sync>> {
+fn load_reference(
+    opt: &Opt,
+) -> Result<media::VideoCatalog, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(path) = &opt.reference {
         Ok(media::VideoCatalog::load(path)?)
     } else {
@@ -97,7 +105,10 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
     );
 
     if opt.drop > 0 || opt.reorder > 0 {
-        println!("loss injection: drop {}%, reorder {}%", opt.drop, opt.reorder);
+        println!(
+            "loss injection: drop {}%, reorder {}%",
+            opt.drop, opt.reorder
+        );
     }
     if verify {
         println!(
@@ -105,15 +116,18 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
             reference.as_ref().map(|c| c.len()).unwrap_or(0)
         );
     }
-    println!(
-        "receiving video… (--frames {} to auto-stop)",
-        opt.frames
-    );
+    println!("receiving video… (--frames {} to auto-stop)", opt.frames);
+
+    let mut dump_file = match &opt.dump {
+        Some(path) => Some(std::fs::File::create(path)?),
+        None => None,
+    };
 
     let mut asm = FrameReassembler::default();
     let mut loss = loss::LossInjector::new(opt.drop, opt.reorder);
     let target = opt.frames;
-    let soak_deadline = (opt.soak_secs > 0).then(|| std::time::Instant::now() + Duration::from_secs(opt.soak_secs));
+    let soak_deadline =
+        (opt.soak_secs > 0).then(|| std::time::Instant::now() + Duration::from_secs(opt.soak_secs));
     let mut last_report = std::time::Instant::now();
     let mut hash_failures = 0u64;
     let mut hash_ok = 0u64;
@@ -131,8 +145,11 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
             break;
         }
 
-        let datagram = match tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())
-            .await
+        let datagram = match tokio::time::timeout(
+            Duration::from_secs(5),
+            session.conn.read_datagram(),
+        )
+        .await
         {
             Ok(Ok(d)) => d,
             Ok(Err(e)) => return Err(format!("datagram read failed: {e}").into()),
@@ -149,6 +166,11 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
             if let Some((frame_id, frame)) = asm.push_datagram(&datagram)? {
                 let digest = media::frame_digest(&frame);
                 let n = asm.stats().frames_complete as usize;
+
+                if let Some(f) = dump_file.as_mut() {
+                    use std::io::Write;
+                    f.write_all(&frame)?;
+                }
 
                 if let Some(catalog) = reference.as_ref() {
                     let catalog_idx = usize::from(frame_id) % catalog.len();
@@ -261,15 +283,14 @@ fn client_identity_path(dir: &Path) -> PathBuf {
     dir.join("client_identity.pkcs8")
 }
 
-async fn open_session(opt: &Opt) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
+async fn open_session(
+    opt: &Opt,
+) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     if opt.reconnect {
-        let dir = client_data_dir()
-            .ok_or("set STREAMBEAM_CLIENT_DATA for --reconnect")?;
+        let dir = client_data_dir().ok_or("set STREAMBEAM_CLIENT_DATA for --reconnect")?;
         let host = load_saved_host(&dir.join("saved_host.json"))?
             .ok_or("no saved host — pair once without --reconnect")?;
-        let addr = host
-            .primary_addr()
-            .ok_or("saved host has no address")?;
+        let addr = host.primary_addr().ok_or("saved host has no address")?;
         println!("reconnecting to {} ({addr})…", host.host_name);
         return connect_known(
             host.host_pubkey,
@@ -281,12 +302,7 @@ async fn open_session(opt: &Opt) -> Result<ClientSession, Box<dyn std::error::Er
     }
 
     let id_path = client_data_dir().as_deref().map(client_identity_path);
-    let session = connect_as_identity(
-        &opt.payload,
-        "devclient",
-        id_path.as_deref(),
-    )
-    .await?;
+    let session = connect_as_identity(&opt.payload, "devclient", id_path.as_deref()).await?;
     println!("paired ✓");
 
     if let Some(dir) = client_data_dir() {

@@ -4,7 +4,9 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{run_devclient, run_devclient_opts, run_devclient_reconnect, spawn_fakehost, spawn_host};
+use common::{
+    run_devclient, run_devclient_opts, run_devclient_reconnect, spawn_fakehost, spawn_host,
+};
 
 #[test]
 fn sixty_frames_hash_ok() {
@@ -27,10 +29,7 @@ fn loss_sweep_up_to_fifteen_percent() {
     for drop_pct in [1u8, 2, 3, 5, 8, 10, 12, 15] {
         let (mut child, payload) = spawn_fakehost();
         let status = run_devclient(&payload, 60, drop_pct, true);
-        assert!(
-            status.success(),
-            "FEC should recover at {drop_pct}% drop"
-        );
+        assert!(status.success(), "FEC should recover at {drop_pct}% drop");
         let _ = child.kill();
     }
 }
