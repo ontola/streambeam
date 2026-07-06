@@ -15,6 +15,114 @@ enum PointerMode {
   trackpad,
 }
 
+/// Streaming quality/latency trade-off, sent as part of `SessionRequest.video`
+/// when (re)connecting. Only takes effect on connect — see
+/// `_WatchPageState._changeStreamMode` in `main.dart`, which stops and
+/// reconnects when the mode changes mid-stream.
+///
+/// The host's bitrate ceiling is `width * height * fps / 15` (see
+/// `default_bitrate_bps` in `crates/host/src/encode.rs`), which makes
+/// bits-per-frame proportional to resolution alone — fps cancels out of that
+/// ratio. So resolution is the real quality lever; fps mostly trades latency
+/// and total bandwidth, not per-frame detail.
+enum StreamMode {
+  /// Default. Caps resolution below native to keep encode/decode cost (and
+  /// therefore latency) low, while allowing fps up to the decoder-safe
+  /// ceiling — the responsiveness/frame-rate half of the trade-off matters
+  /// more than resolution for interactive/game use.
+  game,
+  /// Native resolution (maximizes bits-per-frame — see the class doc), fps
+  /// capped lower since a game's fast reaction time isn't the point here.
+  quality,
+  /// Both resolution and fps capped hard, for metered connections or
+  /// battery-constrained sessions.
+  dataSaver,
+  /// User-chosen resolution scale + fps (see `CustomStreamSettings`) instead
+  /// of a fixed preset.
+  custom;
+
+  String get label => switch (this) {
+    StreamMode.game => 'Game',
+    StreamMode.quality => 'Quality',
+    StreamMode.dataSaver => 'Data saver',
+    StreamMode.custom => 'Custom',
+  };
+
+  String get description => switch (this) {
+    StreamMode.game => 'Low latency, high frame rate',
+    StreamMode.quality => 'Maximum detail, lower frame rate',
+    StreamMode.dataSaver => 'Reduced resolution and frame rate',
+    StreamMode.custom => 'Set your own resolution and frame rate',
+  };
+
+  IconData get icon => switch (this) {
+    StreamMode.game => Icons.sports_esports_outlined,
+    StreamMode.quality => Icons.high_quality_outlined,
+    StreamMode.dataSaver => Icons.data_saver_off_outlined,
+    StreamMode.custom => Icons.tune,
+  };
+
+  /// Apply this mode's caps to the device's real (width, height, fps) —
+  /// never exceeds what the device actually reported, only tightens it.
+  /// `custom` ignores the preset logic entirely and uses `customSettings`
+  /// instead (required whenever `this == StreamMode.custom`).
+  (int, int, int) apply(
+    int deviceWidth,
+    int deviceHeight,
+    int deviceFps, {
+    CustomStreamSettings? customSettings,
+  }) {
+    int capLongestSide(int side, int maxLongest) {
+      if (deviceWidth <= 0 || deviceHeight <= 0) return side;
+      final longest = math.max(deviceWidth, deviceHeight);
+      if (longest <= maxLongest) return side;
+      return (side * maxLongest / longest).round();
+    }
+
+    switch (this) {
+      case StreamMode.game:
+        return (
+          capLongestSide(deviceWidth, 1920),
+          capLongestSide(deviceHeight, 1920),
+          deviceFps,
+        );
+      case StreamMode.quality:
+        return (deviceWidth, deviceHeight, deviceFps.clamp(1, 30));
+      case StreamMode.dataSaver:
+        return (
+          capLongestSide(deviceWidth, 1280),
+          capLongestSide(deviceHeight, 1280),
+          deviceFps.clamp(1, 24),
+        );
+      case StreamMode.custom:
+        final settings = customSettings ?? const CustomStreamSettings();
+        return (
+          (deviceWidth * settings.resolutionScale).round(),
+          (deviceHeight * settings.resolutionScale).round(),
+          settings.maxFps.clamp(1, 120),
+        );
+    }
+  }
+}
+
+/// User-chosen values for `StreamMode.custom`. `resolutionScale` is a
+/// fraction of the device's native resolution (not an absolute size) so it
+/// can never produce something the encoder considers invalid, and stays
+/// meaningful across different devices/orientations without extra input
+/// validation.
+class CustomStreamSettings {
+  const CustomStreamSettings({this.resolutionScale = 1.0, this.maxFps = 60});
+
+  final double resolutionScale;
+  final int maxFps;
+
+  CustomStreamSettings copyWith({double? resolutionScale, int? maxFps}) =>
+      CustomStreamSettings(
+        resolutionScale: resolutionScale ?? this.resolutionScale,
+        maxFps: maxFps ?? this.maxFps,
+      );
+}
+
 /// Fullscreen stream viewer: pinch-zoom, two-finger pan, edge-drag menu.
 class StreamPlayerScreen extends StatefulWidget {
   const StreamPlayerScreen({
@@ -25,6 +133,11 @@ class StreamPlayerScreen extends StatefulWidget {
     required this.streamWidth,
     required this.streamHeight,
     required this.onStop,
+    required this.streamMode,
+    required this.onStreamModeChanged,
+    required this.customSettings,
+    required this.onCustomSettingsChanged,
+    required this.onCustomSettingsCommitted,
     super.key,
   });
 
@@ -35,6 +148,11 @@ class StreamPlayerScreen extends StatefulWidget {
   final int streamWidth;
   final int streamHeight;
   final VoidCallback onStop;
+  final StreamMode streamMode;
+  final ValueChanged<StreamMode> onStreamModeChanged;
+  final CustomStreamSettings customSettings;
+  final ValueChanged<CustomStreamSettings> onCustomSettingsChanged;
+  final VoidCallback onCustomSettingsCommitted;
 
   @override
   State<StreamPlayerScreen> createState() => _StreamPlayerScreenState();
@@ -583,6 +701,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             _multiTouchSession = false;
                           });
                         },
+                        streamMode: widget.streamMode,
+                        onStreamModeChanged: widget.onStreamModeChanged,
+                        customSettings: widget.customSettings,
+                        onCustomSettingsChanged: widget.onCustomSettingsChanged,
+                        onCustomSettingsCommitted:
+                            widget.onCustomSettingsCommitted,
                         onStop: _handleStop,
                         onKeyboard: _openKeyboard,
                       ),
@@ -1061,6 +1185,11 @@ class _StreamMenu extends StatelessWidget {
     required this.showDiagnostics,
     required this.pointerMode,
     required this.onPointerModeChanged,
+    required this.streamMode,
+    required this.onStreamModeChanged,
+    required this.customSettings,
+    required this.onCustomSettingsChanged,
+    required this.onCustomSettingsCommitted,
     required this.onStop,
     required this.onKeyboard,
   });
@@ -1069,6 +1198,15 @@ class _StreamMenu extends StatelessWidget {
   final bool showDiagnostics;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
+  final StreamMode streamMode;
+  final ValueChanged<StreamMode> onStreamModeChanged;
+  final CustomStreamSettings customSettings;
+  // Fires continuously while dragging a slider — updates the displayed
+  // value only, no reconnect (that would fire dozens of times per drag).
+  final ValueChanged<CustomStreamSettings> onCustomSettingsChanged;
+  // Fires once when the user releases a slider — this is what actually
+  // reconnects with the new settings, mirroring `onStreamModeChanged`.
+  final VoidCallback onCustomSettingsCommitted;
   final VoidCallback onStop;
   final VoidCallback onKeyboard;
 
@@ -1144,6 +1282,141 @@ class _StreamMenu extends StatelessWidget {
                     ),
                     const Divider(height: 1),
                   ],
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.horizontal + 4,
+                      compact ? 4 : 8,
+                      metrics.horizontal + 4,
+                      compact ? 2 : 4,
+                    ),
+                    child: Text('Streaming mode', style: theme.textTheme.titleSmall),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                    child: DropdownButtonFormField<StreamMode>(
+                      initialValue: streamMode,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      items: [
+                        for (final mode in StreamMode.values)
+                          DropdownMenuItem(
+                            value: mode,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(mode.icon, size: compact ? 18 : 20),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    mode.label,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                      onChanged: (mode) {
+                        if (mode != null) onStreamModeChanged(mode);
+                      },
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.horizontal + 4,
+                      compact ? 2 : 6,
+                      metrics.horizontal + 4,
+                      compact ? 4 : 8,
+                    ),
+                    child: Text(
+                      streamMode.description,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  if (streamMode == StreamMode.custom) ...[
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: metrics.horizontal + 4,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Resolution',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                          Text(
+                            '${(customSettings.resolutionScale * 100).round()}%',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: math.max(0.0, metrics.horizontal - 8),
+                      ),
+                      child: Slider(
+                        value: customSettings.resolutionScale,
+                        min: 0.25,
+                        max: 1.0,
+                        divisions: 15,
+                        label: '${(customSettings.resolutionScale * 100).round()}%',
+                        onChanged: (value) => onCustomSettingsChanged(
+                          customSettings.copyWith(resolutionScale: value),
+                        ),
+                        onChangeEnd: (_) => onCustomSettingsCommitted(),
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: metrics.horizontal + 4,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Max frame rate',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                          Text(
+                            '${customSettings.maxFps} fps',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: math.max(0.0, metrics.horizontal - 8),
+                      ),
+                      child: Slider(
+                        value: customSettings.maxFps.toDouble(),
+                        min: 15,
+                        max: 120,
+                        divisions: 21,
+                        label: '${customSettings.maxFps} fps',
+                        onChanged: (value) => onCustomSettingsChanged(
+                          customSettings.copyWith(maxFps: value.round()),
+                        ),
+                        onChangeEnd: (_) => onCustomSettingsCommitted(),
+                      ),
+                    ),
+                  ],
+                  const Divider(height: 1),
                   Padding(
                     padding: EdgeInsets.fromLTRB(
                       metrics.horizontal + 4,

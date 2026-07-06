@@ -22,6 +22,15 @@ final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/relea
 final _ontolaUrl = Uri.parse('https://ontola.io');
 const _logoAsset = 'assets/streambeam-logo.svg';
 
+/// Computed the same way as `MaterialApp`'s theme below (same seed color),
+/// but standalone — no `BuildContext` needed — so `main()` can also use it
+/// to color the system nav bar before the first frame. Explicitly set as
+/// `streamBeamAppBar`'s own background too, rather than trusting Material's
+/// default elevation-tinted app bar color to land on the exact same value.
+final _appBarColor = ColorScheme.fromSeed(
+  seedColor: Colors.indigo,
+).surfaceContainer;
+
 Future<void> openGithubRepo() async {
   await launchUrl(_githubRepoUrl, mode: LaunchMode.externalApplication);
 }
@@ -38,6 +47,7 @@ Future<void> openOntola() async {
 /// tab so the header doesn't change as you switch between Watch and Beam.
 AppBar streamBeamAppBar() {
   return AppBar(
+    backgroundColor: _appBarColor,
     title: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -109,6 +119,20 @@ Future<void> main() async {
   await StreambeamFfi.init();
   final dir = await streambeamDataDir();
   setAppDataDir(dir: dir);
+  if (Platform.isAndroid) {
+    // Without this, the system nav bar (back/home buttons) defaults to a
+    // plain white background — indistinguishable from this app's white
+    // body behind it, so the (also white-ish) nav icons effectively
+    // disappear. Match it to the same surface tone the app bar uses (see
+    // `streamBeamAppBar`'s `backgroundColor`) so the two bars read as one
+    // continuous grey strip, with dark icons for contrast against it.
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        systemNavigationBarColor: _appBarColor,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+    );
+  }
   runApp(const StreamBeamApp());
 }
 
@@ -166,6 +190,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   Timer? _surfaceTimeout;
   int _sessionId = 0;
   bool _playInFlight = false;
+  StreamMode _streamMode = StreamMode.game;
+  CustomStreamSettings _customSettings = const CustomStreamSettings();
   int _streamWidth = 640;
   int _streamHeight = 360;
 
@@ -664,14 +690,72 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     // is comfortably within real-world hardware decoder throughput at
     // desktop-capture resolutions; this is a ceiling; the actual encode
     // rate still adapts to network conditions in the same way bitrate
-    // does (or will, once fps is exposed as a mode/setting — see the
-    // in-progress streaming-mode UI).
+    // does. `StreamMode` (see stream_player.dart) applies its own tighter
+    // caps on top of this ceiling below.
     const maxSustainableDecodeFps = 60;
-    return (
+    final (rawWidth, rawHeight, rawFps) = (
       display.size.width.round(),
       display.size.height.round(),
       display.refreshRate.round().clamp(1, maxSustainableDecodeFps),
     );
+    return _streamMode.apply(
+      rawWidth,
+      rawHeight,
+      rawFps,
+      customSettings: _customSettings,
+    );
+  }
+
+  /// Changing mode only takes effect at connect time (it's sent once, as
+  /// part of `SessionRequest.video`) — if a stream is already running,
+  /// reconnect through the same saved-host path `_connectHostEntry` already
+  /// uses so the new caps actually apply, rather than silently doing
+  /// nothing until the user manually reconnects.
+  ///
+  /// Switching *to* Custom is the one exception: it has nothing to apply
+  /// yet (just the current slider defaults) and reconnecting immediately
+  /// tears down and remounts the whole stream screen — including the side
+  /// menu the user just used to pick it — before they ever get to see or
+  /// touch the sliders that selection was supposed to reveal. Reconnect
+  /// happens once they actually commit a slider value instead (see
+  /// `_commitCustomSettings`).
+  void _changeStreamMode(StreamMode mode) {
+    if (mode == _streamMode) return;
+    setState(() => _streamMode = mode);
+    if (mode != StreamMode.custom) _reconnectForNewCaps();
+  }
+
+  /// Live slider drag — update the displayed value only. Reconnecting on
+  /// every `onChanged` tick would fire the whole stop/reconnect dance dozens
+  /// of times per drag; `_commitCustomSettings` (called on slider release)
+  /// is what actually applies it.
+  void _updateCustomSettings(CustomStreamSettings settings) {
+    setState(() => _customSettings = settings);
+  }
+
+  void _commitCustomSettings() {
+    if (_streamMode == StreamMode.custom) _reconnectForNewCaps();
+  }
+
+  void _reconnectForNewCaps() {
+    if (_showVideo) {
+      _stopStreaming();
+      // `_stopStreaming` only mutates state (`_showVideo = false` etc.) —
+      // Flutter batches that with whatever runs next in the same tick, so
+      // calling `_beginSession` immediately here never actually renders a
+      // frame with the video surface torn down first. The native platform
+      // view backing it is then never disposed and recreated, and
+      // `_beginSession` waits forever for a surface-ready callback that has
+      // no reason to ever fire (this is what "stuck on Reconnecting…" was).
+      // A real post-frame callback, plus a short buffer for the platform
+      // view's own async teardown, gives the old surface time to actually
+      // go away before asking for a new one.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) unawaited(_beginSession(reconnect: true));
+        });
+      });
+    }
   }
 
   Future<void> _startPlayback(int nativeWindow) async {
@@ -895,6 +979,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         streamWidth: _streamWidth,
         streamHeight: _streamHeight,
         onStop: _stopStreaming,
+        streamMode: _streamMode,
+        onStreamModeChanged: _changeStreamMode,
+        customSettings: _customSettings,
+        onCustomSettingsChanged: _updateCustomSettings,
+        onCustomSettingsCommitted: _commitCustomSettings,
       );
     }
 
