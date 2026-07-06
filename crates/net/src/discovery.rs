@@ -35,6 +35,19 @@ fn parse_pubkey(info: &ServiceInfo) -> Option<[u8; 32]> {
     bytes.try_into().ok()
 }
 
+/// Non-loopback IPv4 first, then any non-loopback address, loopback last.
+/// mDNS advertises both A and AAAA records, and callers generally pick
+/// `addrs[0]` to actually connect to — an IPv6 link-local address
+/// (`fe80::...`, common on LANs) picked first is both syntactically fiddlier
+/// for naive `format!("{addr}:{port}")` call sites (needs `[addr]:port`
+/// bracketing) and typically needs a zone/scope id mDNS doesn't carry to
+/// actually route, so it's more likely to be unreachable even when
+/// correctly formatted. See the equivalent preference in the Android app's
+/// `_bestLanAddr` (`app/lib/main.dart`).
+fn sort_addrs_by_preference(addrs: &mut [IpAddr]) {
+    addrs.sort_by_key(|ip| (ip.is_loopback(), !ip.is_ipv4()));
+}
+
 fn instance_name_from_fullname(fullname: &str) -> String {
     fullname.split('.').next().unwrap_or(fullname).to_string()
 }
@@ -163,7 +176,7 @@ pub fn browse(timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
                 let name = instance_name_from_fullname(&fullname);
                 let port = info.get_port();
                 let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
-                addrs.sort_by_key(|ip| ip.is_loopback());
+                sort_addrs_by_preference(&mut addrs);
                 let host_pubkey = parse_pubkey(&info);
                 seen.insert(
                     fullname.clone(),
@@ -229,7 +242,7 @@ impl Browser {
                     let name = instance_name_from_fullname(&fullname);
                     let port = info.get_port();
                     let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
-                    addrs.sort_by_key(|ip| ip.is_loopback());
+                    sort_addrs_by_preference(&mut addrs);
                     let host_pubkey = parse_pubkey(&info);
                     cache.insert(
                         fullname,

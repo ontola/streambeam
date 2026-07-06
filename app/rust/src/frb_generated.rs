@@ -26,7 +26,7 @@
 // Section: imports
 
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -451,6 +451,9 @@ fn wire__crate__api__play_discovered_host_impl(
             let api_addr = <String>::sse_decode(&mut deserializer);
             let api_native_window = <i64>::sse_decode(&mut deserializer);
             let api_max_video_frames = <u32>::sse_decode(&mut deserializer);
+            let api_max_width = <u16>::sse_decode(&mut deserializer);
+            let api_max_height = <u16>::sse_decode(&mut deserializer);
+            let api_max_fps = <u8>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -461,6 +464,9 @@ fn wire__crate__api__play_discovered_host_impl(
                             api_addr,
                             api_native_window,
                             api_max_video_frames,
+                            api_max_width,
+                            api_max_height,
+                            api_max_fps,
                         )
                         .await?;
                         Ok(output_ok)
@@ -496,6 +502,9 @@ fn wire__crate__api__play_stream_impl(
             let api_payload = <String>::sse_decode(&mut deserializer);
             let api_native_window = <i64>::sse_decode(&mut deserializer);
             let api_max_video_frames = <u32>::sse_decode(&mut deserializer);
+            let api_max_width = <u16>::sse_decode(&mut deserializer);
+            let api_max_height = <u16>::sse_decode(&mut deserializer);
+            let api_max_fps = <u8>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -504,6 +513,9 @@ fn wire__crate__api__play_stream_impl(
                             api_payload,
                             api_native_window,
                             api_max_video_frames,
+                            api_max_width,
+                            api_max_height,
+                            api_max_fps,
                         )
                         .await?;
                         Ok(output_ok)
@@ -596,6 +608,9 @@ fn wire__crate__api__reconnect_play_stream_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_native_window = <i64>::sse_decode(&mut deserializer);
             let api_max_video_frames = <u32>::sse_decode(&mut deserializer);
+            let api_max_width = <u16>::sse_decode(&mut deserializer);
+            let api_max_height = <u16>::sse_decode(&mut deserializer);
+            let api_max_fps = <u8>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -603,6 +618,9 @@ fn wire__crate__api__reconnect_play_stream_impl(
                         let output_ok = crate::api::reconnect_play_stream(
                             api_native_window,
                             api_max_video_frames,
+                            api_max_width,
+                            api_max_height,
+                            api_max_fps,
                         )
                         .await?;
                         Ok(output_ok)
@@ -1725,7 +1743,7 @@ mod io {
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -1749,7 +1767,7 @@ mod web {
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

@@ -15,6 +15,6 @@ pub use saved_host::{
     SavedHost, clear as clear_saved_host, load as load_saved_host, save as save_saved_host,
 };
 pub use session::{
-    ClientSession, connect, connect_as, connect_as_identity, connect_known, request_idr,
-    request_invalidate_ref_frames, send_input,
+    ClientSession, connect, connect_as, connect_as_identity, connect_known, fallback_video_caps,
+    request_idr, request_invalidate_ref_frames, send_input,
 };

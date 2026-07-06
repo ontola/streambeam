@@ -15,6 +15,7 @@ use streambeam_core::{
     connect_known, extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code, request_idr,
     request_invalidate_ref_frames, save_saved_host,
 };
+use streambeam_proto::control::VideoCaps;
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
 
@@ -202,21 +203,50 @@ fn coalesce_input_batch(
     out
 }
 
+/// `max_width`/`max_height`/`max_fps` come from Dart's `dart:ui` `Display`
+/// query (this device's real screen, not a guess) — see `stream_player.dart`.
+/// `0` in any field falls back to a safe default rather than an invalid
+/// `SessionRequest` (e.g. a `View`/`Display` that hasn't reported real values
+/// yet at call time).
+fn video_caps(max_width: u16, max_height: u16, max_fps: u8) -> VideoCaps {
+    let fallback = streambeam_core::fallback_video_caps();
+    VideoCaps {
+        h264: true,
+        hevc: false,
+        av1: false,
+        max_width: if max_width > 0 {
+            max_width
+        } else {
+            fallback.max_width
+        },
+        max_height: if max_height > 0 {
+            max_height
+        } else {
+            fallback.max_height
+        },
+        max_fps: if max_fps > 0 { max_fps } else { fallback.max_fps },
+    }
+}
+
 pub async fn run(
     payload: String,
     native_window: i64,
     max_video_frames: u32,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
 ) -> Result<StreamStats, String> {
     log::info!("streambeam connecting with pairing payload");
     let session = connect_as_identity(
         &payload,
         "streambeam-android",
         Some(&client_identity_path()),
+        video_caps(max_width, max_height, max_fps),
     )
     .await
     .map_err(|e| {
         log::error!("streambeam connect failed: {e}");
-        format!("Could not reach host: {e}")
+        e.to_string()
     })?;
 
     if let Ok(host) = SavedHost::from_pair_payload(&payload) {
@@ -233,6 +263,9 @@ pub async fn run_discovered(
     addr: String,
     native_window: i64,
     max_video_frames: u32,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
 ) -> Result<StreamStats, String> {
     let pubkey: [u8; 32] = host_pubkey
         .try_into()
@@ -242,12 +275,18 @@ pub async fn run_discovered(
         .map_err(|e| format!("invalid host address: {e}"))?;
 
     log::info!("streambeam connecting to LAN host {host_name} at {addr}");
-    let session = connect_known(pubkey, addr, "streambeam-android", &client_identity_path())
-        .await
-        .map_err(|e| {
-            log::error!("streambeam LAN connect failed: {e}");
-            format!("Could not reach host: {e}")
-        })?;
+    let session = connect_known(
+        pubkey,
+        addr,
+        "streambeam-android",
+        &client_identity_path(),
+        video_caps(max_width, max_height, max_fps),
+    )
+    .await
+    .map_err(|e| {
+        log::error!("streambeam LAN connect failed: {e}");
+        e.to_string()
+    })?;
 
     let host = SavedHost {
         host_name,
@@ -264,6 +303,9 @@ pub async fn run_known(
     addr: SocketAddr,
     native_window: i64,
     max_video_frames: u32,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
 ) -> Result<StreamStats, String> {
     log::info!("streambeam reconnecting to saved host at {addr}");
     let session = connect_known(
@@ -271,11 +313,12 @@ pub async fn run_known(
         addr,
         "streambeam-android",
         &client_identity_path(),
+        video_caps(max_width, max_height, max_fps),
     )
     .await
     .map_err(|e| {
         log::error!("streambeam reconnect failed: {e}");
-        format!("Could not reach host: {e}")
+        e.to_string()
     })?;
     play_session(session, native_window, max_video_frames).await
 }
@@ -384,7 +427,20 @@ fn play_session_blocking(
     } else {
         u64::from(max_video_frames.max(1))
     };
-    let mut pts_us: u64 = 33_000;
+    // Once-per-second pipeline funnel, logged to logcat (tag StreamBeam) so a
+    // stall can be localized without guessing: wire (datagrams/bytes in) →
+    // reassembly (frames completed/abandoned) → feed (fed vs skipped-behind)
+    // → render (buffers actually released to the surface). Each stage's
+    // number should roughly explain the next; the first big drop-off between
+    // adjacent stages is where the bitrate/fps problem lives.
+    let mut diag = FunnelDiag::new(asm.stats());
+    // Was hardcoded to a flat 33ms (30fps) regardless of the actually
+    // negotiated `session.fps` — harmless at 30fps, but wrong (and
+    // increasingly so) at any higher rate the host might now be sending,
+    // since MediaCodec times output relative to these presentation
+    // timestamps.
+    let pts_step_us = 1_000_000 / u64::from(session.fps.max(1));
+    let mut pts_us: u64 = pts_step_us;
     // How many decodable (non-keyframe) completions we've skipped in a row
     // because we were catching up on a backlog — see the loop body.
     let mut consecutive_skipped = 0u32;
@@ -399,7 +455,7 @@ fn play_session_blocking(
     let mut last_idr_request: Option<std::time::Instant> = None;
 
     while stats.video_frames < target {
-        drain_output(&mut codec)?;
+        diag.rendered += drain_output(&mut codec)?;
 
         // One `block_on` call for the whole batch, not one per datagram —
         // at the tighter poll rate this loop now runs at (see `TIMEOUT`),
@@ -438,8 +494,11 @@ fn play_session_blocking(
         // frames* this batch reassembled. More than one completed frame in
         // a single poll iteration means decode/render didn't keep up with
         // the last real-time tick — that's genuine backlog.
+        diag.datagrams += batch.len() as u64;
+        diag.max_batch = diag.max_batch.max(batch.len() as u32);
         let mut completions: Vec<(bool, Vec<u8>)> = Vec::new();
         for datagram in batch.iter() {
+            diag.bytes += datagram.len() as u64;
             crate::playback::note_bytes_received(datagram.len() as u64);
 
             let header = MediaHeader::decode(datagram).map_err(|e| e.to_string())?;
@@ -480,6 +539,7 @@ fn play_session_blocking(
             // the reference chain than to render corrupted frames.
             if behind && !is_keyframe {
                 consecutive_skipped += 1;
+                diag.skipped_behind += 1;
                 stats.video_frames = asm.stats().frames_complete;
                 continue;
             }
@@ -488,13 +548,21 @@ fn play_session_blocking(
             if sample.is_empty() {
                 continue;
             }
-            let flags = if is_keyframe { BUFFER_FLAG_KEY_FRAME } else { 0 };
+            let flags = if is_keyframe {
+                BUFFER_FLAG_KEY_FRAME
+            } else {
+                0
+            };
+            let t_feed = std::time::Instant::now();
             feed_sample(&mut codec, &sample, pts_us, flags)?;
-            pts_us += 33_000;
+            diag.feed_us += t_feed.elapsed().as_micros() as u64;
+            diag.fed += 1;
+            pts_us += pts_step_us;
             stats.video_frames = asm.stats().frames_complete;
-            drain_output(&mut codec)?;
+            diag.rendered += drain_output(&mut codec)?;
             consecutive_skipped = 0;
         }
+        diag.maybe_log(asm.stats(), &session.conn);
 
         // We've been skipping non-keyframes for a while (they depend on a
         // reference chain we're no longer decoding) — ask the host to
@@ -580,7 +648,9 @@ fn feed_sample(codec: &mut MediaCodec, data: &[u8], pts_us: u64, flags: u32) -> 
     Ok(())
 }
 
-fn drain_output(codec: &mut MediaCodec) -> Result<(), String> {
+/// Returns how many output buffers were released to the surface (rendered).
+fn drain_output(codec: &mut MediaCodec) -> Result<u32, String> {
+    let mut rendered = 0u32;
     loop {
         match codec
             .dequeue_output_buffer(TIMEOUT)
@@ -593,6 +663,7 @@ fn drain_output(codec: &mut MediaCodec) -> Result<(), String> {
                     .release_output_buffer(out, render)
                     .map_err(|e| codec_err("release output", e))?;
                 if render {
+                    rendered += 1;
                     crate::playback::note_frame_rendered();
                 }
                 if flags & 0x4 != 0 {
@@ -607,5 +678,91 @@ fn drain_output(codec: &mut MediaCodec) -> Result<(), String> {
             DequeuedOutputBufferInfoResult::OutputBuffersChanged => {}
         }
     }
-    Ok(())
+    Ok(rendered)
+}
+
+/// Per-second pipeline funnel for logcat — see the doc where it's constructed.
+struct FunnelDiag {
+    window_start: std::time::Instant,
+    datagrams: u64,
+    bytes: u64,
+    max_batch: u32,
+    skipped_behind: u32,
+    fed: u32,
+    feed_us: u64,
+    rendered: u32,
+    last_complete: u64,
+    last_abandoned: u64,
+    last_udp_rx: u64,
+    last_frame_rx: u64,
+    last_lost: u64,
+}
+
+impl FunnelDiag {
+    fn new(stats: &streambeam_core::FrameStats) -> Self {
+        Self {
+            window_start: std::time::Instant::now(),
+            datagrams: 0,
+            bytes: 0,
+            max_batch: 0,
+            skipped_behind: 0,
+            fed: 0,
+            feed_us: 0,
+            rendered: 0,
+            last_complete: stats.frames_complete,
+            last_abandoned: stats.frames_abandoned,
+            last_udp_rx: 0,
+            last_frame_rx: 0,
+            last_lost: 0,
+        }
+    }
+
+    /// `conn` is queried for QUIC-layer receive counters, to bisect where
+    /// datagrams disappear: `udp_rx` counts raw UDP packets reaching this
+    /// endpoint, `frame_rx.datagram` counts DATAGRAM frames the QUIC layer
+    /// accepted, and `self.datagrams` counts what the app actually read.
+    /// udp high / frame low → arriving but not parsing (MTU/coalescing);
+    /// frame high / app low → dropped in quinn's receive buffer; all low →
+    /// genuinely not arriving over the air.
+    fn maybe_log(&mut self, stats: &streambeam_core::FrameStats, conn: &quinn::Connection) {
+        let secs = self.window_start.elapsed().as_secs_f64();
+        if secs < 1.0 {
+            return;
+        }
+        let complete = stats.frames_complete - self.last_complete;
+        let abandoned = stats.frames_abandoned - self.last_abandoned;
+        let qs = conn.stats();
+        log::info!(
+            "streambeam funnel: wire {} dgrams {:.0} kbps | quic +{} udp pkts +{} dgram frames, rtt {} ms, +{} lost | asm {complete} complete {abandoned} abandoned | feed {} fed ({} ms avg) {} skipped-behind | render {} ({:.1} fps) | max batch {}",
+            self.datagrams,
+            (self.bytes as f64 * 8.0 / 1000.0) / secs,
+            qs.udp_rx.datagrams.saturating_sub(self.last_udp_rx),
+            qs.frame_rx.datagram.saturating_sub(self.last_frame_rx),
+            qs.path.rtt.as_millis(),
+            qs.path.lost_packets.saturating_sub(self.last_lost),
+            self.fed,
+            if self.fed > 0 {
+                self.feed_us / u64::from(self.fed) / 1000
+            } else {
+                0
+            },
+            self.skipped_behind,
+            self.rendered,
+            f64::from(self.rendered) / secs,
+            self.max_batch,
+        );
+        self.last_udp_rx = qs.udp_rx.datagrams;
+        self.last_frame_rx = qs.frame_rx.datagram;
+        self.last_lost = qs.path.lost_packets;
+        self.last_complete = stats.frames_complete;
+        self.last_abandoned = stats.frames_abandoned;
+        self.datagrams = 0;
+        self.bytes = 0;
+        self.max_batch = 0;
+        self.skipped_behind = 0;
+        self.fed = 0;
+        self.feed_us = 0;
+        self.rendered = 0;
+        self.window_start = std::time::Instant::now();
+    }
 }

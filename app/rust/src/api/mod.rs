@@ -231,6 +231,10 @@ pub async fn discover_hosts(timeout_ms: u32) -> Result<Vec<DiscoveredHost>, Stri
 }
 
 /// Connect to a host found on the LAN (QR not required; approve on PC if new).
+/// `max_width`/`max_height`/`max_fps` should be this device's real display
+/// capability (Dart reads it via `dart:ui`'s `Display` API — see
+/// `stream_player.dart`) so the host can encode at a resolution/frame rate
+/// that's actually worth sending, not a fixed guess.
 #[flutter_rust_bridge::frb]
 pub async fn play_discovered_host(
     host_name: String,
@@ -238,6 +242,9 @@ pub async fn play_discovered_host(
     addr: String,
     native_window: i64,
     max_video_frames: u32,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
 ) -> Result<StreamStats, String> {
     #[cfg(target_os = "android")]
     {
@@ -247,6 +254,9 @@ pub async fn play_discovered_host(
             addr,
             native_window,
             max_video_frames,
+            max_width,
+            max_height,
+            max_fps,
         )
         .await;
     }
@@ -258,6 +268,9 @@ pub async fn play_discovered_host(
             addr,
             native_window,
             max_video_frames,
+            max_width,
+            max_height,
+            max_fps,
         );
         Err("play_discovered_host is Android-only".into())
     }
@@ -273,6 +286,7 @@ pub async fn connect_and_receive(
         &payload,
         "streambeam-android",
         Some(&client_identity_path()),
+        streambeam_core::fallback_video_caps(),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -283,28 +297,51 @@ pub async fn connect_and_receive(
 }
 
 /// Decode and render video to an Android Surface (`native_window` = `ANativeWindow*`).
+/// See `play_discovered_host`'s doc for `max_width`/`max_height`/`max_fps`.
 #[flutter_rust_bridge::frb]
 pub async fn play_stream(
     payload: String,
     native_window: i64,
     max_video_frames: u32,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
 ) -> Result<StreamStats, String> {
     #[cfg(target_os = "android")]
     {
-        return crate::android::play::run(payload, native_window, max_video_frames).await;
+        return crate::android::play::run(
+            payload,
+            native_window,
+            max_video_frames,
+            max_width,
+            max_height,
+            max_fps,
+        )
+        .await;
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (payload, native_window, max_video_frames);
+        let _ = (
+            payload,
+            native_window,
+            max_video_frames,
+            max_width,
+            max_height,
+            max_fps,
+        );
         Err("play_stream is Android-only — on macOS run: ./scripts/visual-test.sh".into())
     }
 }
 
 /// Reconnect to the last paired host without rescanning QR (host must still trust this client).
+/// See `play_discovered_host`'s doc for `max_width`/`max_height`/`max_fps`.
 #[flutter_rust_bridge::frb]
 pub async fn reconnect_play_stream(
     native_window: i64,
     max_video_frames: u32,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
 ) -> Result<StreamStats, String> {
     #[cfg(target_os = "android")]
     {
@@ -312,11 +349,20 @@ pub async fn reconnect_play_stream(
             .map_err(|e| e.to_string())?
             .ok_or("no saved host — scan QR first")?;
         let addr = host.primary_addr().ok_or("saved host has no address")?;
-        return crate::android::play::run_known(host, addr, native_window, max_video_frames).await;
+        return crate::android::play::run_known(
+            host,
+            addr,
+            native_window,
+            max_video_frames,
+            max_width,
+            max_height,
+            max_fps,
+        )
+        .await;
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (native_window, max_video_frames);
+        let _ = (native_window, max_video_frames, max_width, max_height, max_fps);
         Err("reconnect_play_stream is Android-only".into())
     }
 }

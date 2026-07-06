@@ -1,7 +1,7 @@
 //! QUIC host server — pairs clients and streams video + audio.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 
 use crate::active_stream::{ActiveStreamTracker, CloseableConn};
 use crate::audio::OpusCatalog;
-use crate::encode::VideoEncoder;
+use crate::encode::{VideoEncoder, default_bitrate_bps};
 use crate::mock::MockEncoder;
 
 impl CloseableConn for quinn::Connection {
@@ -42,6 +42,54 @@ fn capture_ts_us() -> u32 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros() as u32
+}
+
+/// Keeps the display (and system) awake for as long as it's held, released
+/// on drop. Remote streaming is exactly the scenario Windows' idle timer
+/// isn't designed for: the only "activity" is a viewer on another device,
+/// invisible to the local input timer that decides when to turn the display
+/// off. Once that happens, DXGI Desktop Duplication starts failing
+/// `AcquireNextFrame` with `ACCESS_LOST` — not a capture bug, just Desktop
+/// Duplication categorically not working without an active display (see
+/// `Pipeline::capture_frame`'s backoff/diagnostic for that failure mode).
+/// Sunshine holds the equivalent of this for the same reason. Held for
+/// `stream_video`'s lifetime — from first frame to disconnect, not from
+/// host launch, so an idle host with no viewers still respects normal power
+/// settings.
+#[cfg(windows)]
+struct KeepDisplayAwake;
+
+#[cfg(windows)]
+impl KeepDisplayAwake {
+    fn new() -> Self {
+        use windows::Win32::System::Power::{
+            ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+        };
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+        }
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl Drop for KeepDisplayAwake {
+    fn drop(&mut self) {
+        use windows::Win32::System::Power::{ES_CONTINUOUS, SetThreadExecutionState};
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct KeepDisplayAwake;
+
+#[cfg(not(windows))]
+impl KeepDisplayAwake {
+    fn new() -> Self {
+        Self
+    }
 }
 
 pub struct HostConfig {
@@ -260,6 +308,12 @@ struct StreamControl {
     /// coalescing to "newest wins" is simpler than merging ranges and no less
     /// correct here.
     invalidate: Mutex<Option<(u16, u16)>>,
+    /// Client-requested bitrate floor (kbps), if any — see
+    /// `ClientMsg::SetBitrate`'s handler. `stream_video`'s adaptive
+    /// controller starts from this instead of the encoder's computed
+    /// default when set, but still adapts up/down from there based on
+    /// measured network conditions rather than pinning to it exactly.
+    manual_bitrate_kbps: AtomicU32,
 }
 
 impl StreamControl {
@@ -267,7 +321,17 @@ impl StreamControl {
         Self {
             force_idr: AtomicBool::new(false),
             invalidate: Mutex::new(None),
+            manual_bitrate_kbps: AtomicU32::new(0),
         }
+    }
+
+    fn set_manual_bitrate(&self, kbps: u32) {
+        self.manual_bitrate_kbps.store(kbps, Ordering::Relaxed);
+    }
+
+    /// `0` means "no manual override yet".
+    fn manual_bitrate(&self) -> u32 {
+        self.manual_bitrate_kbps.load(Ordering::Relaxed)
     }
 
     fn request_idr(&self) {
@@ -327,17 +391,32 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     #[cfg(windows)]
     let _viiper = crate::viiper_server::ViiperGuard::ensure();
 
+    // Windows quantizes timer waits — including every tokio sleep — to the
+    // system timer resolution, 15.625ms by default. `stream_video`'s ~30ms
+    // inter-frame sleep therefore rounds up to 3 ticks = 46.9ms, capping a
+    // 30fps stream at a measured, rock-steady 21.3fps no matter how fast
+    // capture/encode/send are (loopback baseline: 3ms of real work per
+    // frame, 21.4fps anyway). 1ms resolution is what every game/streaming
+    // app requests (Sunshine does exactly this); per-process since Win10
+    // 2004, released automatically at process exit.
+    #[cfg(windows)]
+    unsafe {
+        windows::Win32::Media::timeBeginPeriod(1);
+    }
+
     // One shared encoder feeds every connection (Desktop Duplication is
     // single-instance, so multiple simultaneous viewers aren't supported yet).
-    // Built lazily on the first real connection, not here: DXGI Desktop
-    // Duplication + the NVENC session are expensive, persistent GPU
-    // resources, and used to be created unconditionally at host startup —
-    // held open for the whole process lifetime even with zero viewers ever
-    // connecting. That's wasteful and was a suspected contributor to
-    // GPU/audio hiccups observed with no active stream at all.
-    let encoder_cell: Arc<
-        OnceCell<(Arc<AsyncMutex<Box<dyn VideoEncoder>>>, u16, u16, Option<Vec<u8>>)>,
-    > = Arc::new(OnceCell::new());
+    // Built lazily on the first real `SessionRequest` (see `handle_client`),
+    // not here: DXGI Desktop Duplication + the NVENC session are expensive,
+    // persistent GPU resources, and used to be created unconditionally at
+    // host startup — held open for the whole process lifetime even with zero
+    // viewers ever connecting (wasteful, and a suspected contributor to
+    // GPU/audio hiccups observed with no active stream at all). Deferring all
+    // the way to the first `SessionRequest`, rather than just the first
+    // connection, also means that client's requested resolution/fps is what
+    // actually builds the encoder, instead of always falling back to the
+    // CLI/env defaults.
+    let encoder_cell: Arc<SharedEncoderCell> = Arc::new(OnceCell::new());
 
     let identity = Identity::load_or_generate(&config.identity_path)?;
     let paired_path = config.paired_store.clone();
@@ -439,7 +518,6 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     log!("LAN addresses: {:?}", pairing_addrs(addr));
 
     let audio = Arc::new(OpusCatalog::bundled());
-    let frame_interval = Duration::from_micros(1_000_000 / u64::from(config.fps.max(1)));
 
     loop {
         if controls.is_shutdown_requested() {
@@ -461,43 +539,27 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
             incoming.refuse();
             continue;
         }
-        let (encoder, width, height, codec_config) = encoder_cell
-            .get_or_init(|| async {
-                let encoder = build_encoder(config.fps, config.max_encode_dim);
-                let (width, height) = encoder.dimensions();
-                let codec_config = encoder.codec_config();
-                log!(
-                    "encoder ready — {width}x{height}, {} opus packets",
-                    OpusCatalog::bundled().len()
-                );
-                (
-                    Arc::new(AsyncMutex::new(encoder)),
-                    width as u16,
-                    height as u16,
-                    codec_config,
-                )
-            })
-            .await
-            .clone();
-
         let store = store.clone();
         let audio = audio.clone();
         let paired_path = paired_path.clone();
         let approval_tx = config.pairing_request_tx.clone();
         let controls = controls.clone();
-        let fps = config.fps;
+        let encoder_cell = encoder_cell.clone();
+        // Fallback/ceiling only now — the encoder build itself is deferred
+        // further, to the first `SessionRequest` (see `handle_client`), so a
+        // client's real requested resolution/fps can actually be honored
+        // instead of always falling back to these CLI/env defaults.
+        let default_fps = config.fps;
+        let default_max_dim = config.max_encode_dim;
 
         tokio::spawn(async move {
             if let Err(e) = handle_client(
                 incoming,
                 store,
-                encoder,
+                encoder_cell,
                 audio,
-                codec_config,
-                width,
-                height,
-                fps,
-                frame_interval,
+                default_fps,
+                default_max_dim,
                 paired_path,
                 approval_tx,
                 controls,
@@ -528,16 +590,30 @@ fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
     }
 }
 
+type SharedEncoderCell = OnceCell<(
+    Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
+    u16,
+    u16,
+    Option<Vec<u8>>,
+)>;
+
+/// Longest side a client's `SessionRequest.video.{max_width,max_height}` can
+/// push the encoder to, and the fastest `max_fps` it can request — independent
+/// of `default_max_dim`/`default_fps` (the CLI/env admin defaults, now only a
+/// fallback for a client that sends degenerate/zero caps). FEC's own shard-
+/// count ceiling is nowhere near this (`MAX_DATA_SHARDS` supports ~19.6MB per
+/// frame), so this exists purely to keep a broken or hostile client from
+/// requesting something absurd, not to protect FEC.
+const MAX_CLIENT_ENCODE_DIM: u32 = 3840;
+const MAX_CLIENT_FPS: u32 = 120;
+
 async fn handle_client(
     incoming: quinn::Incoming,
     store: Arc<Mutex<PairingStore>>,
-    encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
+    encoder_cell: Arc<SharedEncoderCell>,
     audio: Arc<OpusCatalog>,
-    codec_config: Option<Vec<u8>>,
-    width: u16,
-    height: u16,
-    fps: u32,
-    frame_interval: Duration,
+    default_fps: u32,
+    default_max_dim: u32,
     paired_store: Option<std::path::PathBuf>,
     approval_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
     controls: Arc<HostControls>,
@@ -664,6 +740,11 @@ async fn handle_client(
 
     let stream_ctl = Arc::new(StreamControl::new());
     let mut streaming = false;
+    // Set once `SessionRequest` resolves the (possibly first-ever) encoder
+    // build — `SetBitrate` and anything else needing the encoder later reads
+    // it from here rather than a value resolved before we knew what the
+    // client actually wanted.
+    let mut resolved: Option<(Arc<AsyncMutex<Box<dyn VideoEncoder>>>, u16, u16)> = None;
     let mut last_idr = std::time::Instant::now();
     // RFI's invalidate is cheaper to service than a full IDR (no keyframe
     // burst), so it gets a looser gate than RequestIdr's 250ms — still capped
@@ -680,27 +761,65 @@ async fn handle_client(
         };
 
         match msg {
-            // `video.{max_width,max_height,max_fps}` is where a client could
-            // request its own resolution/fps cap, but the shared encoder is
-            // built once at host startup (`build_encoder`, before any session
-            // exists) — honoring a per-client request means deferring that
-            // build to the first SessionRequest instead. Not wired up yet.
-            ClientMsg::SessionRequest { .. } => {
-                // Don't rely solely on the value captured at host startup
-                // (`codec_config`, passed in) — some encoders don't have it
-                // available immediately: hardware MFTs need a real keyframe
-                // produced first (see capture.rs), and on Android the
-                // MediaCodec CSD (SPS/PPS) can arrive shortly after the host
-                // starts. Start streaming *first* (below) so `stream_video`'s
-                // own naturally-paced, timeout-protected `encode_next()` loop
-                // is what actually drives the encoder — then just wait
-                // (asynchronously, not blocking a worker thread) for
-                // `codec_config` to show up as a side effect. Driving
-                // `encode_next()` synchronously here ourselves was tried and
-                // reverted: it can't tell "screen hasn't changed yet" from
-                // "encoder stalled", and blocked the whole connection for
-                // 50+ seconds in practice on this machine's hardware
-                // encoder — worse than the bug it was meant to fix.
+            ClientMsg::SessionRequest { video, .. } => {
+                // First `SessionRequest` ever (across the host's whole
+                // lifetime, not just this connection) is what actually
+                // builds the shared encoder — see `encoder_cell`'s doc.
+                // Honor this client's real display caps, clamped to a sanity
+                // ceiling independent of the CLI/env admin defaults (which
+                // now only apply when a client sends degenerate/zero caps —
+                // shouldn't happen with a real device, but devtools/older
+                // clients might).
+                let want_dim = u32::from(video.max_width.max(video.max_height));
+                let want_fps = u32::from(video.max_fps);
+                let build_dim = if want_dim > 0 {
+                    want_dim.min(MAX_CLIENT_ENCODE_DIM)
+                } else {
+                    default_max_dim
+                };
+                let build_fps = if want_fps > 0 {
+                    want_fps.min(MAX_CLIENT_FPS)
+                } else {
+                    default_fps
+                };
+                let (encoder, width, height, codec_config) = encoder_cell
+                    .get_or_init(|| async {
+                        let encoder = build_encoder(build_fps, build_dim);
+                        let (width, height) = encoder.dimensions();
+                        let codec_config = encoder.codec_config();
+                        log!(
+                            "encoder ready — {width}x{height} @ {build_fps}fps (requested by {client_name}: {}x{} @ {}fps), {} opus packets",
+                            video.max_width,
+                            video.max_height,
+                            video.max_fps,
+                            OpusCatalog::bundled().len()
+                        );
+                        (
+                            Arc::new(AsyncMutex::new(encoder)),
+                            width as u16,
+                            height as u16,
+                            codec_config,
+                        )
+                    })
+                    .await
+                    .clone();
+                resolved = Some((encoder.clone(), width, height));
+
+                // Don't rely solely on the value captured when the encoder
+                // was built (`codec_config`, above) — some encoders don't
+                // have it available immediately: hardware MFTs need a real
+                // keyframe produced first (see capture.rs), and on Android
+                // the MediaCodec CSD (SPS/PPS) can arrive shortly after the
+                // host starts. Start streaming *first* (below) so
+                // `stream_video`'s own naturally-paced, timeout-protected
+                // `encode_next()` loop is what actually drives the encoder —
+                // then just wait (asynchronously, not blocking a worker
+                // thread) for `codec_config` to show up as a side effect.
+                // Driving `encode_next()` synchronously here ourselves was
+                // tried and reverted: it can't tell "screen hasn't changed
+                // yet" from "encoder stalled", and blocked the whole
+                // connection for 50+ seconds in practice on this machine's
+                // hardware encoder — worse than the bug it was meant to fix.
                 if !streaming {
                     streaming = true;
                     controls.start_streaming(conn.remote_address(), &conn).await;
@@ -715,9 +834,11 @@ async fn handle_client(
                             media_conn,
                             enc,
                             ctl,
-                            frame_interval,
                             media_controls,
                             media_addr,
+                            width.into(),
+                            height.into(),
+                            build_fps,
                         )
                         .await
                         {
@@ -759,7 +880,7 @@ async fn handle_client(
                         codec: "h264".into(),
                         width,
                         height,
-                        fps: fps.min(255) as u8,
+                        fps: build_fps.min(255) as u8,
                         audio: AudioParams {
                             sample_rate: 48_000,
                             channels: 2,
@@ -776,9 +897,8 @@ async fn handle_client(
             ClientMsg::RequestIdr => {
                 if last_idr.elapsed() >= Duration::from_millis(250) {
                     stream_ctl.request_idr();
-                    {
-                        let mut enc = encoder.lock().await;
-                        enc.force_idr();
+                    if let Some((encoder, ..)) = &resolved {
+                        encoder.lock().await.force_idr();
                     }
                     last_idr = std::time::Instant::now();
                     log!("IDR scheduled");
@@ -793,6 +913,17 @@ async fn handle_client(
                     last_invalidate = std::time::Instant::now();
                     log!("invalidate ref frames scheduled: [{first_frame}, {last_frame}]");
                 }
+            }
+            ClientMsg::SetBitrate { kbps } => {
+                // A manual override from the client, layered under the
+                // adaptive controller in `stream_video`: it becomes that
+                // controller's new floor/starting point rather than fighting
+                // it — see `StreamControl::manual_bitrate_kbps`.
+                stream_ctl.set_manual_bitrate(kbps);
+                if let Some((encoder, ..)) = &resolved {
+                    encoder.lock().await.set_bitrate(kbps);
+                }
+                log!("client requested bitrate {kbps} kbps");
             }
             ClientMsg::Bye => {
                 write_msg(&mut send, &HostMsg::Bye).await?;
@@ -856,10 +987,23 @@ async fn stream_video(
     conn: quinn::Connection,
     encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
     ctl: Arc<StreamControl>,
-    frame_interval: Duration,
     controls: Arc<HostControls>,
     addr: SocketAddr,
+    width: u32,
+    height: u32,
+    fps: u32,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Dropped at every `return`/`break` below via normal Rust scope rules —
+    // released the moment this session ends, one way or another.
+    let _keep_awake = KeepDisplayAwake::new();
+    // Paced from the actual negotiated `fps` for *this* connection (the
+    // client's real requested rate, clamped in the `SessionRequest` handler
+    // above — see `MAX_CLIENT_FPS`), not a host-wide default computed once
+    // at startup. That used to be the whole reason a client could ask for
+    // 120fps, have the encoder actually built at 120fps, and still only
+    // ever see 30 — this loop's own pacing interval never moved off the
+    // CLI/env default in the first place, silently overriding request.
+    let frame_interval = Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
     let max_datagram = conn
         .max_datagram_size()
         .unwrap_or(1200 + streambeam_proto::media::MEDIA_HEADER_LEN);
@@ -871,8 +1015,81 @@ async fn stream_video(
     let mut shard_us: u128 = 0;
     let mut send_us: u128 = 0;
     let mut window_start = std::time::Instant::now();
+    // Wire-level accounting for the same window, so host-sent bytes/datagrams
+    // can be compared 1:1 against what the client reports receiving — the
+    // difference IS the network loss rate, with no guesswork in between.
+    let mut window_datagrams: u64 = 0;
+    let mut window_bytes: u64 = 0;
+    // Iterations where the encoder had nothing (static screen / capture
+    // timeout). Distinguishes "host idled because nothing changed on screen"
+    // from "host was slow" when the fps number alone looks bad.
+    let mut window_empty_ticks: u32 = 0;
+    // Frames actually sent in the current wall-clock window (see the
+    // reporting block below) — no longer always 30, now that a window is a
+    // fixed ~1s of real time rather than a fixed frame count.
+    let mut window_frame_count: u32 = 0;
+    // quinn path counters are cumulative for the connection; keep the last
+    // reading so the log line can show per-window deltas.
+    let mut last_lost_packets: u64 = 0;
+    let mut last_congestion_events: u64 = 0;
+    // Adaptive bitrate: back off hard and fast on real loss/congestion (a
+    // burst of dropped packets means we're already overshooting what the
+    // path can carry right now), ease back up slowly on sustained clean
+    // windows (headroom should be earned back gradually, not assumed). A
+    // manual `ClientMsg::SetBitrate` becomes the new floor this still
+    // adapts around, not a value that pins the encoder and fights the
+    // controller every window.
+    let manual_floor = ctl.manual_bitrate();
+    let max_bitrate_kbps = default_bitrate_bps(width, height, fps) / 1000;
+    // Start well under the ceiling instead of *at* it: jumping straight to
+    // the theoretical max on connect — before anything has actually proven
+    // the link can sustain that — routinely blew straight through real WiFi
+    // capacity (hundreds of lost packets within the first couple of
+    // seconds), then kept recreating the NVENC session (see below) on the
+    // resulting cascade of backoffs. Climbing from a conservative floor
+    // via the existing "5 clean windows -> +10%" mechanism finds the real
+    // ceiling without ever overshooting it violently at connect time.
+    let mut current_bitrate_kbps = if manual_floor > 0 {
+        manual_floor
+    } else {
+        (max_bitrate_kbps / 4).max(4_000)
+    };
+    // Last value actually pushed to the encoder — see `MIN_RECREATE_INTERVAL`.
+    let mut applied_bitrate_kbps = current_bitrate_kbps;
+    let min_bitrate_kbps = 1_000;
+    let mut clean_windows = 0u32;
+    // A session recreate is expensive (fresh NVENC session + a forced IDR —
+    // itself a large burst right when backing off from congestion is trying
+    // to send *less*), so only actually apply a backoff-triggered bitrate
+    // change this often — a cascade of consecutive bad windows still backs
+    // off its *target* every window (so it doesn't lag reality), it just
+    // doesn't tear down/rebuild the encoder for every single one of them.
+    const MIN_RECREATE_INTERVAL: Duration = Duration::from_millis(800);
+    {
+        let mut enc = encoder.lock().await;
+        enc.set_bitrate(current_bitrate_kbps);
+    }
+    let mut last_bitrate_recreate = std::time::Instant::now();
+
+    // Pace against an absolute per-frame schedule (`next_frame`), not a
+    // relative sleep per iteration: with relative sleeps every bit of
+    // overshoot — timer quantization, a slow encode, scheduler jitter —
+    // compounds into the next frame's start time and permanently lowers fps.
+    // An absolute deadline absorbs jitter instead: a frame that ran late is
+    // followed by a shorter wait, not another full interval. (This only
+    // works on Windows together with the `timeBeginPeriod(1)` call in
+    // `run()` — at the default 15.625ms timer resolution even sleep_until
+    // overshoots by up to a whole tick per frame.)
+    let mut next_frame = tokio::time::Instant::now();
 
     loop {
+        tokio::time::sleep_until(next_frame).await;
+        let now = tokio::time::Instant::now();
+        // Next slot is one interval after this one — unless we've already
+        // fallen more than an interval behind (slow encode, long stall), in
+        // which case re-anchor to now rather than bursting to catch up.
+        next_frame = (next_frame + frame_interval).max(now);
+
         if let Some(reason) = conn.close_reason() {
             log!("stream_video: connection closed ({reason})");
             break;
@@ -885,13 +1102,6 @@ async fn stream_video(
             log!("stream_video: superseded by a newer session, stopping");
             break;
         }
-
-        // Pace to frame_interval from the START of this iteration, not on top
-        // of however long encode/shard/send already took — sleeping a full
-        // frame_interval unconditionally after a slow (e.g. 90ms) encoder wait
-        // was adding another 33ms on top of that every single frame, capping
-        // throughput well under what the encoder could otherwise sustain.
-        let iter_start = std::time::Instant::now();
 
         // Drain both signals every iteration so neither goes stale, but only
         // act on one: a pending IDR is the stronger recovery and makes any
@@ -913,9 +1123,9 @@ async fn stream_video(
             enc.encode_next().map_err(|e| e.to_string())?
         };
         encode_wait_us += t_encode.elapsed().as_micros();
-        // No frame this tick (e.g. screen unchanged) — wait and retry.
+        // No frame this tick (e.g. screen unchanged) — next slot will retry.
         let Some(frame) = frame else {
-            tokio::time::sleep(frame_interval.saturating_sub(iter_start.elapsed())).await;
+            window_empty_ticks += 1;
             continue;
         };
 
@@ -934,7 +1144,6 @@ async fn stream_video(
                     frame.data.len()
                 );
                 frame_id = frame_id.wrapping_add(1);
-                tokio::time::sleep(frame_interval.saturating_sub(iter_start.elapsed())).await;
                 continue;
             }
         };
@@ -944,31 +1153,101 @@ async fn stream_video(
         for shard in shards {
             let mut dg = shard.header.encode().to_vec();
             dg.extend_from_slice(&shard.payload);
+            window_datagrams += 1;
+            window_bytes += dg.len() as u64;
             if conn.send_datagram_wait(dg.into()).await.is_err() {
                 return Ok(());
             }
         }
         send_us += t_send.elapsed().as_micros();
+        window_frame_count += 1;
 
-        if frame_id % 30 == 0 {
+        // Wall-clock cadence, not frame count: at 30fps, 30 frames and 1
+        // second were the same thing, but once fps became genuinely
+        // client-negotiated (client can now ask for 60-120fps) a
+        // frame-count trigger fires proportionally more often — every
+        // ~0.25-0.5s at 60-120fps instead of ~1s. The adaptive controller
+        // below reacts to a single bad window immediately (by design — see
+        // its comment), so quadrupling how often it evaluates quadruples
+        // how often ordinary jitter looks like "real" congestion, which
+        // was collapsing the bitrate (and the NVENC session recreate that
+        // comes with every change) far more often than intended.
+        if window_start.elapsed() >= Duration::from_secs(1) {
             let window_secs = window_start.elapsed().as_secs_f64().max(0.001);
+            let qs = conn.stats();
+            let new_lost = qs.path.lost_packets.saturating_sub(last_lost_packets);
+            let new_congestion = qs
+                .path
+                .congestion_events
+                .saturating_sub(last_congestion_events);
+
+            // Adaptive bitrate: any loss/congestion this window means the
+            // path is already carrying more than it can — back off hard
+            // (25%) and reset the clean-window streak immediately, so a
+            // single bad window can't get diluted by good ones around it.
+            // Otherwise, after several consecutive clean windows, ease up
+            // (10%) — slow enough that a marginal path oscillates gently
+            // around its real ceiling instead of sawtoothing.
+            let manual_floor = ctl.manual_bitrate();
+            let floor = if manual_floor > 0 {
+                manual_floor
+            } else {
+                min_bitrate_kbps
+            };
+            if new_lost > 0 || new_congestion > 0 {
+                clean_windows = 0;
+                current_bitrate_kbps = (current_bitrate_kbps * 3 / 4).max(floor);
+            } else {
+                clean_windows += 1;
+                if clean_windows >= 5 {
+                    clean_windows = 0;
+                    current_bitrate_kbps = (current_bitrate_kbps * 11 / 10).min(max_bitrate_kbps);
+                }
+            }
+            // The *target* above always tracks reality every window (so a
+            // cascade of bad windows doesn't lag behind real congestion) —
+            // but actually applying it means a session recreate (fresh
+            // NVENC session + a forced IDR, itself a large burst), so that
+            // part is rate-limited: no more than one per
+            // `MIN_RECREATE_INTERVAL`, applying whatever the target has
+            // drifted to by the time the cooldown clears rather than
+            // recreating on every single intermediate step.
+            if current_bitrate_kbps != applied_bitrate_kbps
+                && last_bitrate_recreate.elapsed() >= MIN_RECREATE_INTERVAL
+            {
+                applied_bitrate_kbps = current_bitrate_kbps;
+                encoder.lock().await.set_bitrate(applied_bitrate_kbps);
+                last_bitrate_recreate = std::time::Instant::now();
+            }
+
+            let frames_this_window = u128::from(window_frame_count.max(1));
             log!(
-                "sent frame {frame_id} ({} bytes, keyframe={}) — last 30 frames: {:.1} fps, avg encoder wait {} ms, FEC shard {} ms, send {} ms",
+                "sent frame {frame_id} ({} bytes, keyframe={}) — last {window_frame_count} frames: {:.1} fps, avg encoder wait {} ms, FEC shard {} ms, send {} ms | wire: {} dgrams, {:.0} kbps, {} empty ticks | path: rtt {} ms, cwnd {}, +{new_lost} lost pkts, +{new_congestion} congestion | bitrate target {current_bitrate_kbps} kbps (applied {applied_bitrate_kbps} kbps)",
                 frame.data.len(),
                 frame.keyframe,
-                30.0 / window_secs,
-                encode_wait_us / 30 / 1000,
-                shard_us / 30 / 1000,
-                send_us / 30 / 1000,
+                f64::from(window_frame_count) / window_secs,
+                encode_wait_us / frames_this_window / 1000,
+                shard_us / frames_this_window / 1000,
+                send_us / frames_this_window / 1000,
+                window_datagrams,
+                (window_bytes as f64 * 8.0 / 1000.0) / window_secs,
+                window_empty_ticks,
+                qs.path.rtt.as_millis(),
+                qs.path.cwnd,
             );
+            last_lost_packets = qs.path.lost_packets;
+            last_congestion_events = qs.path.congestion_events;
             encode_wait_us = 0;
             shard_us = 0;
             send_us = 0;
+            window_datagrams = 0;
+            window_bytes = 0;
+            window_empty_ticks = 0;
+            window_frame_count = 0;
             window_start = std::time::Instant::now();
         }
 
         frame_id = frame_id.wrapping_add(1);
-        tokio::time::sleep(frame_interval.saturating_sub(iter_start.elapsed())).await;
     }
     Ok(())
 }

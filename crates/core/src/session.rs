@@ -26,6 +26,55 @@ pub struct ClientSession {
     pub input: Option<quinn::SendStream>,
 }
 
+/// Turn a QUIC handshake failure into something a user can actually act on,
+/// instead of one generic "connect failed (is host running?)" bucket that
+/// looked identical whether the host was genuinely off, a firewall silently
+/// dropped every packet, or the two sides just disagreed on something. Each
+/// of these has a different fix, so they should say different things.
+fn describe_connect_failure(e: &quinn::ConnectionError) -> String {
+    use quinn::ConnectionError;
+    match e {
+        // No response at all within the idle timeout — the single most
+        // common real-world cause isn't "host is off", it's a firewall (or a
+        // network profile change re-scoping an existing firewall rule —
+        // see docs/PROGRESS.md's 2026-07-06 entry) silently dropping every
+        // packet with no rejection, which looks identical to the host not
+        // running from the client's point of view.
+        ConnectionError::TimedOut => {
+            "No response from the host after several seconds. Check that streambeam-host is \
+             running, both devices are on the same network, and — if this worked before but \
+             stopped after a network change — that Windows Firewall still allows it on the \
+             current network profile (Private/Public)."
+                .to_string()
+        }
+        ConnectionError::VersionMismatch => {
+            "Host and client QUIC versions don't match — update the app.".to_string()
+        }
+        ConnectionError::Reset => {
+            "Host reset the connection (it may have just restarted). Try again.".to_string()
+        }
+        ConnectionError::ApplicationClosed(reason) => {
+            format!("Host closed the connection: {reason}")
+        }
+        other => format!("Connection failed: {other}"),
+    }
+}
+
+/// A generous, technically-safe fallback for callers (devtools, tests) that
+/// don't have a real device to ask — actual clients should pass their own
+/// display's real capability instead (see `VideoCaps`'s doc in
+/// `streambeam_proto::control`).
+pub fn fallback_video_caps() -> VideoCaps {
+    VideoCaps {
+        h264: true,
+        hevc: false,
+        av1: false,
+        max_width: 1920,
+        max_height: 1080,
+        max_fps: 60,
+    }
+}
+
 pub async fn connect(
     payload: &str,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
@@ -36,14 +85,17 @@ pub async fn connect_as(
     payload: &str,
     client_name: &str,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
-    connect_as_identity(payload, client_name, None).await
+    connect_as_identity(payload, client_name, None, fallback_video_caps()).await
 }
 
 /// Like [`connect_as`] but persists the client Ed25519 identity at `identity_path` when set.
+/// `video_caps` should reflect the connecting device's real display — see
+/// [`fallback_video_caps`] for callers with no real device to ask.
 pub async fn connect_as_identity(
     payload: &str,
     client_name: &str,
     identity_path: Option<&Path>,
+    video_caps: VideoCaps,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     let info = PairInfo::decode_payload(payload)?;
     if info.version != PROTO_VERSION {
@@ -69,7 +121,7 @@ pub async fn connect_as_identity(
     let conn = endpoint
         .connect(addr, "localhost")?
         .await
-        .map_err(|e| format!("connect failed (is host running?): {e}"))?;
+        .map_err(|e| describe_connect_failure(&e))?;
 
     let exporter = export_pairing_secret(&conn)?;
     let pair_proof = Some(build_pair_proof(
@@ -78,15 +130,18 @@ pub async fn connect_as_identity(
         &exporter,
     ));
 
-    finish_session(endpoint, conn, client_name, pair_proof).await
+    finish_session(endpoint, conn, client_name, pair_proof, video_caps).await
 }
 
-/// Reconnect to a previously paired host (no QR token required).
+/// Reconnect to a previously paired host (no QR token required). `video_caps`
+/// should reflect the connecting device's real display — see
+/// [`fallback_video_caps`] for callers with no real device to ask.
 pub async fn connect_known(
     host_pubkey: [u8; 32],
     addr: SocketAddr,
     client_name: &str,
     identity_path: &Path,
+    video_caps: VideoCaps,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     let identity = load_client_identity(Some(identity_path))?;
     let mut endpoint = quinn::Endpoint::client("[::]:0".parse()?)?;
@@ -95,9 +150,9 @@ pub async fn connect_known(
     let conn = endpoint
         .connect(addr, "localhost")?
         .await
-        .map_err(|e| format!("connect failed (is host running?): {e}"))?;
+        .map_err(|e| describe_connect_failure(&e))?;
 
-    finish_session(endpoint, conn, client_name, None).await
+    finish_session(endpoint, conn, client_name, None, video_caps).await
 }
 
 fn load_client_identity(
@@ -114,6 +169,7 @@ async fn finish_session(
     conn: quinn::Connection,
     client_name: &str,
     pair_proof: Option<[u8; 32]>,
+    video_caps: VideoCaps,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     let (mut send, mut recv) = conn.open_bi().await?;
     write_msg(
@@ -138,14 +194,7 @@ async fn finish_session(
     write_msg(
         &mut send,
         &ClientMsg::SessionRequest {
-            video: VideoCaps {
-                h264: true,
-                hevc: false,
-                av1: false,
-                max_width: 1920,
-                max_height: 1080,
-                max_fps: 60,
-            },
+            video: video_caps,
             audio: AudioCaps {
                 opus: true,
                 max_channels: 2,

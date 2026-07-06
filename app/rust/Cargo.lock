@@ -1634,6 +1634,7 @@ dependencies = [
  "log",
  "ndk",
  "ndk-sys",
+ "quinn",
  "streambeam-core",
  "streambeam-host",
  "streambeam-net",

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -225,9 +226,21 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (lower.contains('errorunknown') || lower.contains('video decoder')) {
       return m;
     }
-    if (lower.contains('could not reach host') || lower.contains('connect failed')) {
-      return 'Could not reach your PC. Check that streambeam-host is running and both devices are on the same Wi‑Fi.';
+    if (lower.contains('pair rejected')) {
+      // Already specific (the host's own stated reason) — don't flatten it.
+      return m;
     }
+    if (lower.contains('timed out waiting for video')) {
+      return 'Connected, but no video arrived. The PC\'s screen may be locked or '
+          'asleep — StreamBeam needs it awake to capture — or streaming failed '
+          'to start on that end. Check the host\'s logs.';
+    }
+    // Rust's describe_connect_failure (core/src/session.rs) already produces
+    // a specific, actionable message per failure kind (timeout vs reset vs
+    // version mismatch vs application-closed) — pass it through rather than
+    // flattening every connect failure into one generic sentence like this
+    // used to. Only degenerate/unrecognized text falls through to the
+    // fallback `return m` below.
     return m;
   }
 
@@ -484,12 +497,29 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   void _teardownVideo() {
+    unawaited(_setStreamingWifiLock(false));
     _showVideo = false;
     appImmersive.value = false;
     _reconnectPending = false;
     _surfaceReady = false;
     _pendingWindow = null;
     _playInFlight = false;
+  }
+
+  /// Hold Android's low-latency WifiLock while a stream is active. Without
+  /// it the phone's WiFi power-save adds tens of ms of latency (measured
+  /// ping RTT swinging 5-131ms) and drops bursts of large video datagrams
+  /// while small audio packets survive — the "audio flows, video stuck on
+  /// first frame" signature. Same lock Moonlight holds while streaming.
+  Future<void> _setStreamingWifiLock(bool active) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _discoveryChannel.invokeMethod<void>(
+        active ? 'acquireStreamingWifiLock' : 'releaseStreamingWifiLock',
+      );
+    } catch (_) {
+      // Best-effort: streaming still works without it, just worse.
+    }
   }
 
   Future<void> _ensureMdnsLock() async {
@@ -597,6 +627,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _statusIsError = false;
     });
     unawaited(_syncScanner());
+    unawaited(_setStreamingWifiLock(true));
     _armSurfaceTimeout();
     if (_surfaceReady && _pendingWindow != null && !_playInFlight) {
       _cancelSurfaceTimeout();
@@ -607,6 +638,40 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         unawaited(_startPlayback(_pendingWindow!));
       }
     }
+  }
+
+  /// This device's real display capability — sent as `SessionRequest.video`
+  /// so the host encodes at a resolution/frame rate actually worth sending
+  /// instead of a fixed 1080p/60fps guess. `Display.size` is already in
+  /// physical pixels (not logical/DP), matching what the host's encoder
+  /// resolution means. Falls back to 0s (the Rust side substitutes its own
+  /// sane default) if no display info is available yet, which shouldn't
+  /// normally happen once the app's UI is actually visible and calling this.
+  (int, int, int) _deviceVideoCaps() {
+    final views = ui.PlatformDispatcher.instance.views;
+    if (views.isEmpty) return (0, 0, 0);
+    final display = views.first.display;
+    // The display's raw refresh rate is the wrong signal for encode fps:
+    // a 120Hz screen says nothing about whether this device's *video
+    // decoder* can actually sustain 120 full decoded frames/sec at this
+    // resolution — that's a much lower, separate hardware limit, and
+    // asking for more than the decoder can do doesn't get skipped
+    // gracefully. It makes the client permanently "behind" (every batch
+    // completes multiple frames before the decoder drains one), so it
+    // skips nearly all of them forever — measured on a real 120Hz device
+    // at ~2670px wide: 95-99% of frames skipped, render stuck at 0-2fps,
+    // despite the host delivering cleanly with zero network loss. 60fps
+    // is comfortably within real-world hardware decoder throughput at
+    // desktop-capture resolutions; this is a ceiling; the actual encode
+    // rate still adapts to network conditions in the same way bitrate
+    // does (or will, once fps is exposed as a mode/setting — see the
+    // in-progress streaming-mode UI).
+    const maxSustainableDecodeFps = 60;
+    return (
+      display.size.width.round(),
+      display.size.height.round(),
+      display.refreshRate.round().clamp(1, maxSustainableDecodeFps),
+    );
   }
 
   Future<void> _startPlayback(int nativeWindow) async {
@@ -621,6 +686,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         _status = 'Streaming…';
         _statusIsError = false;
       });
+      final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
       final StreamStats stats;
       if (lanHost != null && lanAddr != null) {
         stats = await playDiscoveredHost(
@@ -629,6 +695,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           addr: lanAddr,
           nativeWindow: nativeWindow,
           maxVideoFrames: 0,
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          maxFps: maxFps,
         );
       } else {
         final payload = _normalizePayload(_payloadCtrl.text);
@@ -639,6 +708,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           payload: payload,
           nativeWindow: nativeWindow,
           maxVideoFrames: 0,
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          maxFps: maxFps,
         );
       }
       if (!_sessionAlive(sessionId)) return;
@@ -677,9 +749,13 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         _status = 'Streaming…';
         _statusIsError = false;
       });
+      final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
       final stats = await reconnectPlayStream(
         nativeWindow: nativeWindow,
         maxVideoFrames: 0,
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
+        maxFps: maxFps,
       );
       if (!_sessionAlive(sessionId)) return;
       _rememberStreamSize(stats);
@@ -760,14 +836,36 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     await _beginSession(reconnect: false);
   }
 
+  // Bracket an IPv6 literal for `ip:port` syntax (`fe80::1` -> `[fe80::1]`);
+  // IPv4 and hostnames pass through untouched. Rust's SocketAddr parser
+  // requires the brackets — "$addr:$port" with a bare IPv6 address produces
+  // a string with too many colons and fails with "invalid socket address
+  // syntax" (e.g. `fe80::64d5:4ff:fe62:9fa2:47989` instead of
+  // `[fe80::64d5:4ff:fe62:9fa2]:47989`).
+  String _hostPort(String addr, int port) {
+    final isIpv6 = addr.contains(':');
+    return isIpv6 ? '[$addr]:$port' : '$addr:$port';
+  }
+
   String? _bestLanAddr(DiscoveredHost host) {
     if (host.addrs.isEmpty) return null;
+    // mDNS advertises both A (IPv4) and AAAA (IPv6) records; prefer IPv4 —
+    // link-local IPv6 addresses (`fe80::...`) are common on LANs and need a
+    // zone/scope id to actually route that mDNS doesn't carry, so an IPv6
+    // pick here is more likely to be unreachable even once correctly
+    // formatted. Any non-loopback IPv4 first, then any non-loopback address,
+    // then whatever's there.
     for (final addr in host.addrs) {
-      if (!addr.startsWith('127.') && addr != '::1') {
-        return '$addr:${host.port}';
+      if (!addr.contains(':') && !addr.startsWith('127.')) {
+        return _hostPort(addr, host.port);
       }
     }
-    return '${host.addrs.first}:${host.port}';
+    for (final addr in host.addrs) {
+      if (!addr.startsWith('127.') && addr != '::1') {
+        return _hostPort(addr, host.port);
+      }
+    }
+    return _hostPort(host.addrs.first, host.port);
   }
 
   void _stopStreaming() {

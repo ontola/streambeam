@@ -11,7 +11,7 @@ use std::time::Duration;
 use clap::Parser;
 use streambeam_core::{
     ClientSession, FrameReassembler, LossReport, SavedHost, connect_as_identity, connect_known,
-    load_saved_host, save_saved_host,
+    fallback_video_caps, load_saved_host, save_saved_host,
 };
 use streambeam_net::write_msg;
 use streambeam_proto::control::ClientMsg;
@@ -129,6 +129,8 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
     let soak_deadline =
         (opt.soak_secs > 0).then(|| std::time::Instant::now() + Duration::from_secs(opt.soak_secs));
     let mut last_report = std::time::Instant::now();
+    let mut window_frames = 0u64;
+    let mut window_bytes = 0u64;
     let mut hash_failures = 0u64;
     let mut hash_ok = 0u64;
     // Shared rate gate for both recovery messages this client can send
@@ -229,14 +231,23 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
 
         if last_report.elapsed() >= Duration::from_secs(2) {
             let s = asm.stats();
+            let secs = last_report.elapsed().as_secs_f64();
+            // Per-window rates, not just cumulative totals — this client is
+            // the reference receiver for throughput measurements (no decoder,
+            // no render, no WiFi when run on the host machine itself), so
+            // its fps/kbps IS what the host+network can actually deliver.
             eprintln!(
-                "stats: {} ok / {} complete / {} abandoned, {} shards received, dropped {} datagrams",
+                "stats: {} ok / {} complete / {} abandoned, {} shards received, dropped {} datagrams | window: {:.1} fps, {:.0} kbps",
                 hash_ok,
                 s.frames_complete,
                 s.frames_abandoned,
                 s.shards_received,
-                loss.datagrams_dropped
+                loss.datagrams_dropped,
+                (s.frames_complete - window_frames) as f64 / secs,
+                ((s.bytes_received - window_bytes) as f64 * 8.0 / 1000.0) / secs,
             );
+            window_frames = s.frames_complete;
+            window_bytes = s.bytes_received;
             last_report = std::time::Instant::now();
         }
     }
@@ -297,12 +308,19 @@ async fn open_session(
             addr,
             "devclient",
             &client_identity_path(&dir),
+            fallback_video_caps(),
         )
         .await;
     }
 
     let id_path = client_data_dir().as_deref().map(client_identity_path);
-    let session = connect_as_identity(&opt.payload, "devclient", id_path.as_deref()).await?;
+    let session = connect_as_identity(
+        &opt.payload,
+        "devclient",
+        id_path.as_deref(),
+        fallback_video_caps(),
+    )
+    .await?;
     println!("paired ✓");
 
     if let Some(dir) = client_data_dir() {

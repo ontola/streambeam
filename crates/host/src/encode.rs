@@ -18,6 +18,17 @@ pub enum EncodeError {
     Other(String),
 }
 
+/// Starting bitrate before any adaptive adjustment (`server.rs`'s controller
+/// pulls this down fast on real loss/congestion and eases it back up on
+/// sustained clean windows — see `stream_video`). Ceiling raised from an
+/// earlier flat 20 Mbps cap, which was low enough to visibly soften detail
+/// on a LAN connection that can trivially sustain far more (RTT ~5ms, zero
+/// loss in practice); the ceiling only matters when the network genuinely
+/// has that headroom.
+pub fn default_bitrate_bps(width: u32, height: u32, fps: u32) -> u32 {
+    ((width * height) as u64 * fps as u64 / 15).clamp(2_000_000, 60_000_000) as u32
+}
+
 /// Host-side video encoder (desktop/WGC texture in → Annex-B access units out).
 pub trait VideoEncoder: Send {
     /// Produce the next access unit. `Ok(None)` means "no frame this tick, try
@@ -42,4 +53,10 @@ pub trait VideoEncoder: Send {
     fn codec_config(&self) -> Option<Vec<u8>> {
         None
     }
+
+    /// Change the target bitrate. Default no-op — encoders that can't
+    /// reconfigure live (or don't have a meaningful bitrate concept, like
+    /// `MockEncoder`'s bundled clip) simply ignore it; `server.rs`'s
+    /// adaptive controller calls this unconditionally regardless of backend.
+    fn set_bitrate(&mut self, _kbps: u32) {}
 }

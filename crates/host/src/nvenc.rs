@@ -72,11 +72,14 @@ const NV_ENC_PRESET_P4_GUID: GUID = GUID::from_values(
     0x4862,
     [0xb9, 0xd2, 0xcd, 0x6d, 0x73, 0xa0, 0x86, 0x81],
 );
-const NV_ENC_H264_PROFILE_BASELINE_GUID: GUID = GUID::from_values(
-    0x0727bcaa,
-    0x78c4,
-    0x4c83,
-    [0x8c, 0x2f, 0xef, 0x3d, 0xff, 0x26, 0x7c, 0x6a],
+// Byte values cross-checked against the authoritative FFmpeg nv-codec-headers
+// nvEncodeAPI.h (not a secondhand reference crate — see this file's other
+// GUIDs' history of exactly this class of bug).
+const NV_ENC_H264_PROFILE_HIGH_GUID: GUID = GUID::from_values(
+    0xe7cbc309,
+    0x4f7a,
+    0x4b89,
+    [0xaf, 0x2a, 0xd5, 0x37, 0xc9, 0x2b, 0xe3, 0x10],
 );
 
 // --- enums (only the values we actually use) ---
@@ -459,6 +462,7 @@ impl NvencEncoder {
         width: u32,
         height: u32,
         fps: u32,
+        bitrate_bps: u32,
     ) -> Result<Self, String> {
         let lib = libloading::Library::new(NVENC_DLL)
             .map_err(|e| format!("LoadLibrary {NVENC_DLL}: {e}"))?;
@@ -510,20 +514,39 @@ impl NvencEncoder {
         // ultra-low-latency preset already set, which already enables
         // SPS/PPS repetition on every IDR — required since our client parses
         // SPS/PPS straight out of each keyframe's Annex-B bytes.
-        let bitrate = ((width * height) as u64 * fps as u64 / 15).clamp(2_000_000, 20_000_000);
         config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
         config.frame_interval_p = 1; // no B-frames — lowest latency
-        // Force Baseline (no CABAC, no B-frames) to match the software
-        // encoder's known-good `eAVEncH264VProfile_Base` — the preset would
-        // otherwise leave this at whatever P4/UltraLowLatency defaults to
-        // (typically High/CABAC), which is a needless extra variable while
-        // debugging decode issues on real Android hardware decoders.
-        config.profile_guid = NV_ENC_H264_PROFILE_BASELINE_GUID;
+        // Was forced to Baseline (no CABAC) to match the software encoder's
+        // known-good `eAVEncH264VProfile_Base` while debugging decode issues
+        // on real Android hardware decoders — that debugging need has passed
+        // and NVENC is now the primary path, so pay CABAC's real
+        // quality-per-bit cost back: at the same CBR bitrate, Baseline's
+        // CAVLC-only entropy coding visibly softens detail and produces more
+        // motion/text artifacts than High profile, which effectively every
+        // Android device since H.264 was relevant decodes fine. `frame_interval_p
+        // = 1` above already keeps it B-frame-free regardless of profile, so
+        // this doesn't reintroduce the extra reference-frame latency High
+        // profile can otherwise imply.
+        config.profile_guid = NV_ENC_H264_PROFILE_HIGH_GUID;
         config.rc_params.rate_control_mode = NVENC_PARAMS_RC_MODE_CBR;
-        config.rc_params.average_bit_rate = bitrate as u32;
-        config.rc_params.max_bit_rate = bitrate as u32;
-        config.rc_params.vbv_buffer_size = bitrate as u32;
-        config.rc_params.vbv_initial_delay = bitrate as u32;
+        config.rc_params.average_bit_rate = bitrate_bps;
+        config.rc_params.max_bit_rate = bitrate_bps;
+        config.rc_params.vbv_buffer_size = bitrate_bps;
+        config.rc_params.vbv_initial_delay = bitrate_bps;
+        // Spatial AQ (`enableAQ`, bit 3 of `NV_ENC_RC_PARAMS`'s packed
+        // bitfield — layout cross-checked against the authoritative FFmpeg
+        // nv-codec-headers nvEncodeAPI.h, LSB-first matching declared field
+        // order: enableMinQP=0, enableMaxQP=1, enableInitialRCQP=2,
+        // enableAQ=3). Without it, single-pass CBR picks one QP for the
+        // *whole* frame from its aggregate complexity estimate — a small
+        // localized change (a button's hover-highlight) shifts that
+        // estimate enough to visibly shift the entire frame's quantization,
+        // seen as the whole screen flashing/breathing in brightness on
+        // every such change. Spatial AQ lets QP vary per macroblock instead,
+        // so the small complex region gets the extra bits it needs without
+        // forcing every other macroblock to re-quantize that frame. Aka why
+        // every screen-capture NVENC tool (Sunshine included) enables this.
+        config.rc_params.bit_fields |= 1 << 3;
 
         let mut init_params: InitializeParams = std::mem::zeroed();
         init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;

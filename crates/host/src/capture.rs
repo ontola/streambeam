@@ -47,7 +47,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
-use crate::encode::{EncodeError, EncodedFrame, VideoEncoder};
+use crate::encode::{EncodeError, EncodedFrame, VideoEncoder, default_bitrate_bps};
 use crate::nvenc::NvencEncoder;
 use crate::scale::GpuScaler;
 
@@ -63,6 +63,11 @@ const CODECAPI_MEANBITRATE: GUID = GUID::from_u128(0xf722_2374_2144_4815_b550_a3
 enum Request {
     Next,
     ForceIdr,
+    /// Nudge only — the actual target bitrate lives in `pending_bitrate`
+    /// (mirrors `ForceIdr`'s `force_idr: Arc<AtomicBool>` pattern), so a
+    /// request already queued behind others in the channel doesn't carry a
+    /// stale value by the time it's handled.
+    SetBitrate,
 }
 
 /// Video encoder backed by a background capture+encode thread.
@@ -78,6 +83,7 @@ pub struct DesktopEncoder {
     req_tx: Sender<Request>,
     frame_rx: Receiver<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
+    pending_bitrate: Arc<Mutex<Option<u32>>>,
     _thread: JoinHandle<()>,
 }
 
@@ -90,6 +96,8 @@ impl DesktopEncoder {
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Option<EncodedFrame>>(4);
         let force_idr = Arc::new(AtomicBool::new(false));
         let thread_force = force_idr.clone();
+        let pending_bitrate = Arc::new(Mutex::new(None));
+        let thread_bitrate = pending_bitrate.clone();
         let codec_config = Arc::new(Mutex::new(None));
         let thread_codec_config = codec_config.clone();
 
@@ -103,6 +111,7 @@ impl DesktopEncoder {
                     req_rx,
                     frame_tx,
                     thread_force,
+                    thread_bitrate,
                     thread_codec_config,
                 )
             })
@@ -116,6 +125,7 @@ impl DesktopEncoder {
                 req_tx,
                 frame_rx,
                 force_idr,
+                pending_bitrate,
                 _thread: thread,
             }),
             Ok(Err(e)) => Err(e),
@@ -148,6 +158,11 @@ impl VideoEncoder for DesktopEncoder {
         let _ = self.req_tx.send(Request::ForceIdr);
     }
 
+    fn set_bitrate(&mut self, kbps: u32) {
+        *self.pending_bitrate.lock().unwrap() = Some(kbps.saturating_mul(1000));
+        let _ = self.req_tx.send(Request::SetBitrate);
+    }
+
     fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -165,6 +180,7 @@ fn run_pipeline(
     req_rx: Receiver<Request>,
     frame_tx: SyncSender<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
+    pending_bitrate: Arc<Mutex<Option<u32>>>,
     codec_config: Arc<Mutex<Option<Vec<u8>>>>,
 ) {
     let mut pipe = match Pipeline::new(fps, max_encode_dim) {
@@ -180,11 +196,16 @@ fn run_pipeline(
 
     while let Ok(req) = req_rx.recv() {
         match req {
-            Request::ForceIdr => {
-                // The flag is also read in encode(); nothing else to do here.
+            Request::ForceIdr | Request::SetBitrate => {
+                // Both flags/values are also read in the Next arm below;
+                // nothing to do here beyond having woken up a thread that
+                // might otherwise be parked waiting on the next real tick.
             }
             Request::Next => {
                 let want_idr = force_idr.swap(false, Ordering::Relaxed);
+                if let Some(bps) = pending_bitrate.lock().unwrap().take() {
+                    pipe.set_bitrate(bps);
+                }
                 let frame = pipe.capture_and_encode(want_idr).unwrap_or_else(|e| {
                     crate::logging::log(&format!("capture/encode error: {e}"));
                     None
@@ -241,6 +262,15 @@ struct Pipeline {
     width: u32,
     height: u32,
     fps: u32,
+    /// Current NVENC target bitrate. Mutable at runtime (see
+    /// `Pipeline::set_bitrate`/`server.rs`'s adaptive controller) — applied
+    /// by recreating the NVENC session, the same mechanism already used to
+    /// force a real IDR (see the long comment in `encode()`), since NVENC
+    /// has no cheaper live-reconfigure path wired up here yet.
+    bitrate_bps: u32,
+    /// Set by `set_bitrate` when `bitrate_bps` changed since the last NVENC
+    /// session recreate; cleared once a recreate has actually applied it.
+    bitrate_dirty: bool,
     codec_config: Option<Vec<u8>>,
     have_last: bool,
     frame_index: i64,
@@ -251,6 +281,16 @@ struct Pipeline {
     stat_timeout: u32,
     stat_access_lost: u32,
     stat_produced: u32,
+    /// Consecutive `ACCESS_LOST` recreate attempts with no successful frame
+    /// in between. Recreating the duplication interface is the right move
+    /// for a real transient loss (display mode change, GPU driver reset),
+    /// but it can't do anything about the two conditions that cause a *long*
+    /// run of them: the display is powered off (idle timeout) or the
+    /// session is locked — Desktop Duplication categorically doesn't work
+    /// in either state, no matter how many times it's recreated. Past a
+    /// threshold, back off and say so once instead of retrying every ~33ms
+    /// forever and filling host.log with near-identical lines.
+    consecutive_access_lost: u32,
     /// Rolling per-report-window totals (reset every 90 calls alongside the
     /// counters above) for pinpointing where per-frame time actually goes.
     stat_capture_us: u64,
@@ -282,10 +322,12 @@ impl Pipeline {
                 ));
             }
 
+            let bitrate_bps = default_bitrate_bps(width, height, fps);
             let nvenc_attempt: Result<(NvencEncoder, ID3D11Texture2D, Option<GpuScaler>), String> =
                 (|| {
                     let tex = create_encode_texture(&device, width, height)?;
-                    let encoder = NvencEncoder::new(&device, &tex, width, height, fps)?;
+                    let encoder =
+                        NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps)?;
                     let scaler = if (capture_width, capture_height) != (width, height) {
                         Some(GpuScaler::new(&device, &context, width, height, &tex)?)
                     } else {
@@ -326,6 +368,8 @@ impl Pipeline {
                 width,
                 height,
                 fps,
+                bitrate_bps,
+                bitrate_dirty: false,
                 codec_config,
                 have_last: false,
                 frame_index: 0,
@@ -333,6 +377,7 @@ impl Pipeline {
                 stat_acquired: 0,
                 stat_timeout: 0,
                 stat_access_lost: 0,
+                consecutive_access_lost: 0,
                 stat_produced: 0,
                 stat_capture_us: 0,
                 stat_encode_us: 0,
@@ -410,9 +455,11 @@ impl Pipeline {
         {
             Ok(()) => {
                 self.stat_acquired += 1;
+                self.consecutive_access_lost = 0;
             }
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 self.stat_timeout += 1;
+                self.consecutive_access_lost = 0;
                 // No change since last frame; reuse whatever the backend already
                 // holds (or, the very first time, a black software frame — the
                 // NVENC texture's undefined initial content is one frame's worth
@@ -433,9 +480,44 @@ impl Pipeline {
             }
             Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
                 self.stat_access_lost += 1;
-                crate::logging::log(&format!("duplication access lost, recreating: {e}"));
-                let (dup, _, _) = create_duplication(&self.device)?;
-                self.duplication = dup;
+                self.consecutive_access_lost += 1;
+                // First few: log and retry immediately, matching the pacing
+                // of a real transient loss (display mode change) which
+                // typically clears within one or two frames.
+                if self.consecutive_access_lost <= 3 {
+                    crate::logging::log(&format!("duplication access lost, recreating: {e}"));
+                } else if self.consecutive_access_lost == 4 {
+                    // Recreating hasn't helped 3 times in a row — this isn't
+                    // a transient loss anymore. The two conditions that look
+                    // exactly like this and that recreating can't fix: the
+                    // display is powered off (idle timeout) or the session
+                    // is locked. Say so once, then back off instead of
+                    // spamming host.log every ~33ms indefinitely.
+                    crate::logging::log(&format!(
+                        "duplication access lost, {} consecutive failures — Desktop \
+                         Duplication doesn't work while the display is off or the \
+                         session is locked; will keep retrying quietly every 2s \
+                         until it recovers ({e})",
+                        self.consecutive_access_lost
+                    ));
+                } else if self.consecutive_access_lost % 60 == 0 {
+                    crate::logging::log(&format!(
+                        "duplication access lost, still failing after {} attempts — \
+                         check the display is on and the session unlocked",
+                        self.consecutive_access_lost
+                    ));
+                }
+                match create_duplication(&self.device) {
+                    Ok((dup, _, _)) => self.duplication = dup,
+                    // Recreation itself can fail outright while the display
+                    // is off (no output to enumerate) — that's the same
+                    // condition, not a new error; keep backing off instead
+                    // of propagating it as a hard stream error.
+                    Err(_) => {}
+                }
+                if self.consecutive_access_lost > 3 {
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                }
                 return Ok(());
             }
             Err(e) => return Err(format!("AcquireNextFrame: {e}")),
@@ -491,6 +573,17 @@ impl Pipeline {
         result
     }
 
+    /// Queue a new target bitrate — applied on the next `encode()` call via
+    /// the same session-recreate mechanism `force_idr` uses (see its comment
+    /// in `encode()`). Called from `server.rs`'s adaptive bitrate controller
+    /// and/or a client's explicit `SetBitrate` request.
+    fn set_bitrate(&mut self, bps: u32) {
+        if bps != self.bitrate_bps {
+            self.bitrate_bps = bps;
+            self.bitrate_dirty = true;
+        }
+    }
+
     unsafe fn encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
         match &mut self.backend {
             EncoderBackend::Nvenc {
@@ -498,7 +591,7 @@ impl Pipeline {
                 encode_texture,
                 ..
             } => {
-                if force_idr {
+                if force_idr || self.bitrate_dirty {
                     // NVENC's per-picture NV_ENC_PIC_FLAG_FORCEIDR flag is
                     // set correctly (see nvenc.rs) but empirically the
                     // driver still doesn't produce a real IDR NAL from it —
@@ -511,19 +604,34 @@ impl Pipeline {
                     // union (real risk of another layout bug), use the one
                     // IDR mechanism already proven 100% reliable: a brand
                     // new NVENC session's first frame is always a real IDR.
-                    crate::logging::log(
-                        "NVENC: recreating encoder session to force a real IDR (per-picture FORCEIDR flag is not honored by this driver)",
-                    );
+                    // Also the only bitrate-reconfigure path implemented so
+                    // far — no live `NvEncReconfigureEncoder` call, just a
+                    // fresh session built with the new target.
+                    let mut reasons = Vec::new();
+                    if force_idr {
+                        reasons.push("forced IDR".to_string());
+                    }
+                    if self.bitrate_dirty {
+                        reasons.push(format!("bitrate -> {} kbps", self.bitrate_bps / 1000));
+                    }
+                    crate::logging::log(&format!(
+                        "NVENC: recreating encoder session ({})",
+                        reasons.join(", ")
+                    ));
                     match NvencEncoder::new(
                         &self.device,
                         encode_texture,
                         self.width,
                         self.height,
                         self.fps,
+                        self.bitrate_bps,
                     ) {
-                        Ok(fresh) => *encoder = fresh,
+                        Ok(fresh) => {
+                            *encoder = fresh;
+                            self.bitrate_dirty = false;
+                        }
                         Err(e) => crate::logging::log(&format!(
-                            "NVENC: session recreate for forced IDR failed, continuing with existing session: {e}"
+                            "NVENC: session recreate failed, continuing with existing session: {e}"
                         )),
                     }
                 }

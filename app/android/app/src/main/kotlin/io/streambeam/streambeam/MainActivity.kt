@@ -17,6 +17,7 @@ class MainActivity : FlutterActivity() {
     private var deepLinkChannel: MethodChannel? = null
     private var pendingLink: String? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var streamingWifiLock: WifiManager.WifiLock? = null
     private var gamepadBridge: GamepadBridge? = null
     private var pendingCaptureResult: MethodChannel.Result? = null
 
@@ -59,6 +60,18 @@ class MainActivity : FlutterActivity() {
                 }
                 "releaseMulticastLock" -> {
                     releaseMulticastLock()
+                    result.success(null)
+                }
+                "acquireStreamingWifiLock" -> {
+                    try {
+                        acquireStreamingWifiLock()
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("wifilock", e.message, null)
+                    }
+                }
+                "releaseStreamingWifiLock" -> {
+                    releaseStreamingWifiLock()
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -136,6 +149,7 @@ class MainActivity : FlutterActivity() {
         gamepadBridge?.dispose()
         gamepadBridge = null
         releaseMulticastLock()
+        releaseStreamingWifiLock()
         super.onDestroy()
     }
 
@@ -151,6 +165,33 @@ class MainActivity : FlutterActivity() {
     private fun releaseMulticastLock() {
         multicastLock?.let { if (it.isHeld) it.release() }
         multicastLock = null
+    }
+
+    // WiFi power-save is brutal for real-time UDP: measured ping RTT to this
+    // device swings 5-131ms while the radio naps between beacons, and bursts
+    // of ~1.2KB video datagrams get dropped wholesale while small audio
+    // packets survive. WIFI_MODE_FULL_LOW_LATENCY (API 29+) disables
+    // power-save while held *and* the app is foreground — the same lock
+    // Moonlight holds during streaming. Held only while a stream is active;
+    // falls back to WIFI_MODE_FULL_HIGH_PERF on older devices.
+    private fun acquireStreamingWifiLock() {
+        if (streamingWifiLock?.isHeld == true) return
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        streamingWifiLock = wifi.createWifiLock(mode, "streambeam-stream").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseStreamingWifiLock() {
+        streamingWifiLock?.let { if (it.isHeld) it.release() }
+        streamingWifiLock = null
     }
 
     override fun onNewIntent(intent: Intent) {

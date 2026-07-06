@@ -11,6 +11,9 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
 log = "0.4"
+# Same quinn the core crates use — only for reading Connection::stats() in
+# the playback diagnostics (ClientSession::conn is a quinn::Connection).
+quinn = "0.11"
 streambeam-core = { path = "../../crates/core" }
 streambeam-proto = { path = "../../crates/proto" }
 streambeam-net = { path = "../../crates/net" }
