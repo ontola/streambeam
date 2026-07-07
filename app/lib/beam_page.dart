@@ -43,11 +43,7 @@ AppCapabilities appCapabilities() {
   // Desktop decode/watch is not wired yet on any desktop OS.
   const watch = false;
   if (Platform.isWindows) {
-    return AppCapabilities(
-      host: host,
-      watch: watch,
-      platformLabel: 'Windows',
-    );
+    return AppCapabilities(host: host, watch: watch, platformLabel: 'Windows');
   }
   if (Platform.isMacOS) {
     // Browsing/discovery works; live playback + hosting are gated per-tab as
@@ -163,12 +159,7 @@ class _BeamPageState extends State<BeamPage> {
     if (_starting || _snap.running) return;
     setState(() => _starting = true);
     try {
-      startHost(
-        hostName: null,
-        listen: null,
-        fps: 30,
-        maxEncodeDim: 1920,
-      );
+      startHost(hostName: null, listen: null, fps: 30, maxEncodeDim: 1920);
       _refresh();
     } catch (e) {
       _setStatus(e.toString(), error: true);
@@ -239,9 +230,9 @@ class _BeamPageState extends State<BeamPage> {
     if (link == null || link.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: link));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pairing link copied')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Pairing link copied')));
     }
   }
 
@@ -291,7 +282,9 @@ class _BeamPageState extends State<BeamPage> {
                   ),
                   const SizedBox(height: 24),
                   FilledButton.icon(
-                    onPressed: _starting ? null : () => unawaited(_startBeaming()),
+                    onPressed: _starting
+                        ? null
+                        : () => unawaited(_startBeaming()),
                     icon: _starting
                         ? const SizedBox(
                             width: 18,
@@ -324,181 +317,188 @@ class _BeamPageState extends State<BeamPage> {
 
     final connectedDevicesSection = [
       const SectionHeader('Connected devices'),
-      ..._snap.clients.map((c) => DeviceTile(
-            icon: Icons.smartphone,
-            title: c.name,
-            subtitle: c.addr,
-            active: true,
-            trailing: Wrap(
-              spacing: 4,
-              children: [
-                TextButton(
-                  onPressed: () {
-                    try {
-                      hostDisconnectClient(addr: c.addr);
-                      _refresh();
-                    } catch (e) {
-                      _setStatus(e.toString(), error: true);
-                    }
-                  },
-                  child: const Text('Stop'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    try {
-                      hostForgetClient(addr: c.addr);
-                      _refresh();
-                    } catch (e) {
-                      _setStatus(e.toString(), error: true);
-                    }
-                  },
-                  child: const Text('Remove'),
-                ),
-              ],
-            ),
-          )),
+      ..._snap.clients.map(
+        (c) => DeviceTile(
+          icon: Icons.smartphone,
+          title: c.name,
+          subtitle: c.addr,
+          active: true,
+          trailing: Wrap(
+            spacing: 4,
+            children: [
+              TextButton(
+                onPressed: () {
+                  try {
+                    hostDisconnectClient(addr: c.addr);
+                    _refresh();
+                  } catch (e) {
+                    _setStatus(e.toString(), error: true);
+                  }
+                },
+                child: const Text('Stop'),
+              ),
+              TextButton(
+                onPressed: () {
+                  try {
+                    hostForgetClient(addr: c.addr);
+                    _refresh();
+                  } catch (e) {
+                    _setStatus(e.toString(), error: true);
+                  }
+                },
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        ),
+      ),
     ];
 
     return Scaffold(
       body: SafeArea(
         child: busy
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: () async => _refresh(),
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  if (_snap.clients.isNotEmpty) ...[
-                    ...connectedDevicesSection,
-                    const SizedBox(height: 12),
-                  ],
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            _snap.hostName.isNotEmpty
-                                ? _snap.hostName
-                                : 'StreamBeam host',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: () async => _refresh(),
+                child: CenteredContent(
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      if (_snap.clients.isNotEmpty) ...[
+                        ...connectedDevicesSection,
+                        const SizedBox(height: 12),
+                      ],
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                _snap.hostName.isNotEmpty
+                                    ? _snap.hostName
+                                    : 'StreamBeam host',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _snap.running
+                                    ? 'Listening on ${_snap.listenAddr}'
+                                    : 'Starting host…',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Center(
+                                child: link != null && link.isNotEmpty
+                                    ? Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: QrImageView(
+                                          data: link,
+                                          size: 220,
+                                          backgroundColor: Colors.white,
+                                        ),
+                                      )
+                                    : const SizedBox(
+                                        height: 220,
+                                        child: Center(
+                                          child: CircularProgressIndicator(),
+                                        ),
+                                      ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Scan this QR with StreamBeam on another device, '
+                                'or copy the link below.',
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              FilledButton.icon(
+                                onPressed: link == null
+                                    ? null
+                                    : () => _copyLink(),
+                                icon: const Icon(Icons.link),
+                                label: const Text('Copy link'),
+                              ),
+                              if (Platform.isAndroid) ...[
+                                const SizedBox(height: 8),
+                                OutlinedButton.icon(
+                                  onPressed: () => unawaited(_stopBeaming()),
+                                  icon: const Icon(Icons.stop),
+                                  label: const Text('Stop beaming'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const SectionHeader('Settings'),
+                      Card(
+                        child: Column(
+                          children: [
+                            SwitchListTile(
+                              title: const Text('Discoverable on LAN'),
+                              subtitle: const Text(
+                                'Other devices can find this one on the local network',
+                              ),
+                              value: _snap.discoverable,
+                              onChanged: _snap.running
+                                  ? (on) {
+                                      try {
+                                        hostSetDiscoverable(on_: on);
+                                        _refresh();
+                                      } catch (e) {
+                                        _setStatus(e.toString(), error: true);
+                                      }
+                                    }
+                                  : null,
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _snap.running
-                                ? 'Listening on ${_snap.listenAddr}'
-                                : 'Starting host…',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Center(
-                            child: link != null && link.isNotEmpty
-                                ? Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: QrImageView(
-                                      data: link,
-                                      size: 220,
-                                      backgroundColor: Colors.white,
-                                    ),
-                                  )
-                                : const SizedBox(
-                                    height: 220,
-                                    child: Center(
-                                      child: CircularProgressIndicator(),
-                                    ),
-                                  ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Scan this QR with StreamBeam on another device, '
-                            'or copy the link below.',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          FilledButton.icon(
-                            onPressed:
-                                link == null ? null : () => _copyLink(),
-                            icon: const Icon(Icons.link),
-                            label: const Text('Copy link'),
-                          ),
-                          if (Platform.isAndroid) ...[
-                            const SizedBox(height: 8),
-                            OutlinedButton.icon(
-                              onPressed: () => unawaited(_stopBeaming()),
-                              icon: const Icon(Icons.stop),
-                              label: const Text('Stop beaming'),
+                            const Divider(height: 1),
+                            SwitchListTile(
+                              title: const Text('Accept new connections'),
+                              subtitle: const Text(
+                                'Turn off to pause pairing and streaming',
+                              ),
+                              value: _snap.acceptsConnections,
+                              onChanged: _snap.running
+                                  ? (on) {
+                                      try {
+                                        hostSetAcceptsConnections(on_: on);
+                                        _refresh();
+                                      } catch (e) {
+                                        _setStatus(e.toString(), error: true);
+                                      }
+                                    }
+                                  : null,
                             ),
                           ],
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const SectionHeader('Settings'),
-                  Card(
-                    child: Column(
-                      children: [
-                        SwitchListTile(
-                          title: const Text('Discoverable on LAN'),
-                          subtitle: const Text(
-                            'Other devices can find this one on the local network',
-                          ),
-                          value: _snap.discoverable,
-                          onChanged: _snap.running
-                              ? (on) {
-                                  try {
-                                    hostSetDiscoverable(on_: on);
-                                    _refresh();
-                                  } catch (e) {
-                                    _setStatus(e.toString(), error: true);
-                                  }
-                                }
-                              : null,
                         ),
-                        const Divider(height: 1),
-                        SwitchListTile(
-                          title: const Text('Accept new connections'),
-                          subtitle: const Text(
-                            'Turn off to pause pairing and streaming',
-                          ),
-                          value: _snap.acceptsConnections,
-                          onChanged: _snap.running
-                              ? (on) {
-                                  try {
-                                    hostSetAcceptsConnections(on_: on);
-                                    _refresh();
-                                  } catch (e) {
-                                    _setStatus(e.toString(), error: true);
-                                  }
-                                }
-                              : null,
+                      ),
+                      if (_status != null) ...[
+                        const SizedBox(height: 12),
+                        StatusNotice(
+                          message: _status!,
+                          isError: _statusError,
+                          onDismiss: () => setState(() => _status = null),
                         ),
                       ],
-                    ),
+                    ],
                   ),
-                  if (_status != null) ...[
-                    const SizedBox(height: 12),
-                    StatusNotice(
-                      message: _status!,
-                      isError: _statusError,
-                      onDismiss: () => setState(() => _status = null),
-                    ),
-                  ],
-                ],
+                ),
               ),
-            ),
       ),
     );
   }

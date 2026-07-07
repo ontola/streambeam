@@ -94,8 +94,14 @@ class StatusChip extends StatelessWidget {
         : theme.colorScheme.onSurfaceVariant;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-      child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: fg)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(color: fg),
+      ),
     );
   }
 }
@@ -158,6 +164,28 @@ class StatusNotice extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Keeps page content readable on large windows: full width on phones,
+/// centered at a comfortable single-column width on desktop-sized screens
+/// (an unconstrained device list stretching across a 5K display is absurd).
+class CenteredContent extends StatelessWidget {
+  const CenteredContent({required this.child, super.key});
+
+  /// Comfortable single-column width for the device-list / settings cards.
+  static const maxWidth = 640.0;
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: maxWidth),
+        child: child,
       ),
     );
   }
