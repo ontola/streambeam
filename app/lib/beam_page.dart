@@ -575,24 +575,30 @@ class _AppShellState extends State<AppShell> {
 
         if (isPhoneLandscape) {
           return Scaffold(
-            body: Row(
-              children: [
-                Expanded(child: content),
-                const VerticalDivider(width: 1),
-                NavigationRail(
-                  selectedIndex: _index.clamp(0, destinations.length - 1),
-                  onDestinationSelected: (i) => setState(() => _index = i),
-                  labelType: NavigationRailLabelType.all,
-                  destinations: [
-                    for (final d in destinations)
-                      NavigationRailDestination(
-                        icon: d.icon,
-                        selectedIcon: d.selectedIcon,
-                        label: Text(d.label),
-                      ),
-                  ],
-                ),
-              ],
+            // The on-screen system nav bar (back/home/recents) sits along
+            // whichever edge is physically "down" in landscape — often the
+            // same right edge the rail lives on — so without a SafeArea the
+            // rail's destinations render right underneath/behind it.
+            body: SafeArea(
+              child: Row(
+                children: [
+                  Expanded(child: content),
+                  const VerticalDivider(width: 1),
+                  NavigationRail(
+                    selectedIndex: _index.clamp(0, destinations.length - 1),
+                    onDestinationSelected: (i) => setState(() => _index = i),
+                    labelType: NavigationRailLabelType.all,
+                    destinations: [
+                      for (final d in destinations)
+                        NavigationRailDestination(
+                          icon: d.icon,
+                          selectedIcon: d.selectedIcon,
+                          label: Text(d.label),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           );
         }

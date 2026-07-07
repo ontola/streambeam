@@ -753,9 +753,18 @@ async fn handle_client(
     // client actually wanted.
     let mut resolved: Option<(Arc<AsyncMutex<Box<dyn VideoEncoder>>>, u16, u16)> = None;
     let mut last_idr = std::time::Instant::now();
-    // RFI's invalidate is cheaper to service than a full IDR (no keyframe
-    // burst), so it gets a looser gate than RequestIdr's 250ms — still capped
-    // so a misbehaving/hostile client can't spam the control stream.
+    // RFI's invalidate is *meant* to be cheaper to service than a full IDR
+    // (no keyframe burst) — true once an encoder implements real reference-
+    // frame invalidation, but `VideoEncoder::invalidate_ref_frames`'s default
+    // (which is what NVENC uses today, see `capture.rs`) just calls
+    // `force_idr()`, which here means a full NVENC session recreate — every
+    // bit as expensive as `RequestIdr`, not cheaper. A 60ms gate on
+    // something that costly let a client stuck in a request-recover-request
+    // loop (e.g. reacting to the recreate's own brief stall as if it were
+    // more loss) tear down and rebuild the encoder up to ~16x/sec, which
+    // showed up as the "fps very inconsistent" / "data rate collapses"
+    // reports. Gated the same as `RequestIdr` until NVENC gets a real cheap
+    // invalidation path (`crates/host/src/capture.rs`'s own TODO).
     let mut last_invalidate = std::time::Instant::now();
 
     loop {
@@ -943,7 +952,7 @@ async fn handle_client(
                 first_frame,
                 last_frame,
             } => {
-                if last_invalidate.elapsed() >= Duration::from_millis(60) {
+                if last_invalidate.elapsed() >= Duration::from_millis(250) {
                     stream_ctl.request_invalidate(first_frame, last_frame);
                     last_invalidate = std::time::Instant::now();
                     log!("invalidate ref frames scheduled: [{first_frame}, {last_frame}]");
@@ -1099,7 +1108,15 @@ async fn stream_video(
     // change this often — a cascade of consecutive bad windows still backs
     // off its *target* every window (so it doesn't lag reality), it just
     // doesn't tear down/rebuild the encoder for every single one of them.
-    const MIN_RECREATE_INTERVAL: Duration = Duration::from_millis(800);
+    // 800ms was still short enough that the adaptive controller's own
+    // "ease up 10% every 5 clean windows" ratchet — combined with
+    // `InvalidateRefFrames`/`RequestIdr` (both *also* full recreates, see
+    // above) — kept the encoder almost perpetually mid-recreate rather than
+    // actually settling: recreate → brief stall/burst → looks like fresh
+    // loss/congestion next window → another backoff → another recreate.
+    // Widened so the path gets a real window to prove in before the next
+    // expensive rebuild.
+    const MIN_RECREATE_INTERVAL: Duration = Duration::from_secs(4);
     {
         let mut enc = encoder.lock().await;
         enc.set_bitrate(current_bitrate_kbps);

@@ -38,7 +38,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter,
-    IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
+    IDXGIDevice, IDXGIOutput1, IDXGIOutput5, IDXGIOutput6, IDXGIOutputDuplication, IDXGIResource,
 };
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{
@@ -789,8 +789,34 @@ unsafe fn create_duplication(
     let adapter: IDXGIAdapter = ctx(dxgi_device.GetAdapter(), "GetAdapter")?;
     let output = ctx(adapter.EnumOutputs(0), "EnumOutputs(0)")?;
     let output1: IDXGIOutput1 = ctx(output.cast(), "output.cast IDXGIOutput1")?;
-    let duplication = ctx(output1.DuplicateOutput(device), "DuplicateOutput")?;
+
+    if let Ok(output6) = output1.cast::<IDXGIOutput6>()
+        && let Ok(desc1) = output6.GetDesc1()
+    {
+        crate::logging::log(&format!(
+            "display color space: {:?}, {}-bit, max luminance {:.0} nits (HDR if ColorSpace is G2084_*)",
+            desc1.ColorSpace, desc1.BitsPerColor, desc1.MaxLuminance
+        ));
+    }
+
+    // Plain `IDXGIOutput1::DuplicateOutput` hands back frames in whatever
+    // format the desktop is actually composited in — on an HDR/WCG desktop
+    // (`DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`, logged above) that's a
+    // 16-bit-per-channel float buffer (scRGB/PQ), not the 8-bit BGRA
+    // `create_staging`'s `CopyResource` target assumes. Reading that as if
+    // it were 8-bit produces exactly the garbled, motion-heavy artifacts
+    // reported (each row misaligned by the format's real, larger stride).
+    // `IDXGIOutput5::DuplicateOutput1` lets us explicitly request an 8-bit
+    // SDR format instead — Windows itself does the HDR→SDR tone-mapping
+    // before handing us the frame, the same as it always did for the (until
+    // now, accidentally-only-correct-in-SDR) plain `DuplicateOutput` path.
+    let output5: IDXGIOutput5 = ctx(output1.cast(), "output1.cast IDXGIOutput5")?;
+    let duplication = ctx(
+        output5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]),
+        "DuplicateOutput1",
+    )?;
     let desc = duplication.GetDesc();
+
     Ok((duplication, desc.ModeDesc.Width, desc.ModeDesc.Height))
 }
 

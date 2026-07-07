@@ -15,6 +15,9 @@ enum PointerMode {
   trackpad,
 }
 
+/// Which screen edge the stream menu opens from.
+enum MenuSide { left, right }
+
 /// Streaming quality/latency trade-off, sent as part of `SessionRequest.video`
 /// when (re)connecting. Only takes effect on connect — see
 /// `_WatchPageState._changeStreamMode` in `main.dart`, which stops and
@@ -178,10 +181,18 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   late final AnimationController _hintController;
   late final Animation<double> _hintPeekAnim;
 
+  /// Which edge the menu last opened from, in this app session — carried
+  /// across reconnects (a new `StreamPlayerScreen` instance each time) via a
+  /// `static` rather than persisted to disk, so the hint peek on the next
+  /// connect knows where the user actually swiped from last, without
+  /// needing to plumb it through `main.dart`'s state.
+  static MenuSide _lastMenuSide = MenuSide.right;
+
   double _menuDrag = 0;
   bool _menuOpen = false;
   bool _edgeDragActive = false;
   bool _hintPlayed = false;
+  MenuSide _panelSide = _lastMenuSide;
   bool _keyboardOpen = false;
   bool _hasVideo = false;
   bool _videoTimedOut = false;
@@ -249,6 +260,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     super.didUpdateWidget(oldWidget);
     if (widget.isStreaming && !oldWidget.isStreaming && !_hintPlayed) {
       _hintPlayed = true;
+      _panelSide = _lastMenuSide;
       _hintController.forward(from: 0);
     }
     if (widget.isStreaming && !oldWidget.isStreaming) {
@@ -418,7 +430,16 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     final screenW = MediaQuery.sizeOf(context).width;
     final grab = _edgeGrabFor(screenW);
     final fromRightEdge = details.globalPosition.dx >= screenW - grab;
-    if (fromRightEdge || _menuOpen || _menuDrag > 0) {
+    final fromLeftEdge = details.globalPosition.dx <= grab;
+    final continuing = _menuOpen || _menuDrag > 0;
+    if (fromRightEdge || fromLeftEdge || continuing) {
+      // Only re-decide which side this drag belongs to when it's a fresh
+      // open gesture starting right at an edge — a drag continuing an
+      // already-open (or already-dragging) menu can touch down anywhere on
+      // the scrim, which says nothing about which side the panel is on.
+      if (!continuing) {
+        _panelSide = fromLeftEdge ? MenuSide.left : MenuSide.right;
+      }
       _hintController.stop();
       _edgeDragActive = true;
     }
@@ -428,7 +449,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (!_edgeDragActive) return;
     setState(() {
       final base = _menuOpen ? _menuWidth : _menuDrag;
-      _menuDrag = (base - details.delta.dx).clamp(0.0, _menuWidth);
+      // A right-side panel opens by dragging left (negative dx); a
+      // left-side panel is the mirror image — dragging right (positive dx).
+      final opening =
+          _panelSide == MenuSide.right ? -details.delta.dx : details.delta.dx;
+      _menuDrag = (base + opening).clamp(0.0, _menuWidth);
       if (_menuOpen && _menuDrag < _menuWidth) {
         _menuOpen = false;
       }
@@ -439,20 +464,26 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (!_edgeDragActive) return;
     _edgeDragActive = false;
     final velocity = details.primaryVelocity ?? 0;
-    final flingOpen = velocity < -250;
-    final flingClose = velocity > 250;
+    final flingOpen =
+        _panelSide == MenuSide.right ? velocity < -250 : velocity > 250;
+    final flingClose =
+        _panelSide == MenuSide.right ? velocity > 250 : velocity < -250;
     final shouldOpen =
         !flingClose && (_menuDrag > _openThreshold || flingOpen);
     setState(() {
       _menuOpen = shouldOpen;
       _menuDrag = 0;
     });
+    if (shouldOpen) {
+      _lastMenuSide = _panelSide;
+    }
     _syncDiagnosticsPoll();
   }
 
   double get _menuVisibleWidth => _menuOpen ? _menuWidth : _menuDrag;
 
-  /// Positive X pushes the panel off the right edge of the screen.
+  /// Distance the panel sits off *its own* edge (left or right, per
+  /// `_panelSide` — applied with the correct sign where this is used).
   double get _menuSlideOff {
     if (_menuOpen) return 0;
     final visible = _menuDrag;
@@ -468,6 +499,38 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool get _showMenuScrim =>
       (_menuVisibleWidth > 20 || _edgeDragActive) &&
       !_hintController.isAnimating;
+
+  // Drag handle only — don't wrap the whole menu or taps won't reach it.
+  Widget _menuDragHandle() => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onHorizontalDragStart: _onEdgeDragStart,
+    onHorizontalDragUpdate: _onEdgeDragUpdate,
+    onHorizontalDragEnd: _onEdgeDragEnd,
+    child: const SizedBox(width: 20),
+  );
+
+  Widget _menuContent() => ValueListenableBuilder<_LiveDiagnostics>(
+    valueListenable: _liveDiagListenable,
+    builder: (context, liveDiag, _) => _StreamMenu(
+      diagnostics: liveDiag,
+      showDiagnostics: widget.isStreaming,
+      pointerMode: _pointerMode,
+      onPointerModeChanged: (mode) {
+        setState(() {
+          _pointerMode = mode;
+          _blockViewerGestures = false;
+          _multiTouchSession = false;
+        });
+      },
+      streamMode: widget.streamMode,
+      onStreamModeChanged: widget.onStreamModeChanged,
+      customSettings: widget.customSettings,
+      onCustomSettingsChanged: widget.onCustomSettingsChanged,
+      onCustomSettingsCommitted: widget.onCustomSettingsCommitted,
+      onStop: _handleStop,
+      onKeyboard: _openKeyboard,
+    ),
+  );
 
   Size _fitVideoSize(Size viewport) {
     final ratio = widget.aspectRatio;
@@ -673,51 +736,38 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           Positioned(
             top: 0,
             bottom: 0,
-            right: 0,
+            left: _panelSide == MenuSide.left ? 0 : null,
+            right: _panelSide == MenuSide.right ? 0 : null,
             width: _menuWidth,
             child: Transform.translate(
-              offset: Offset(menuSlide, 0),
+              // Right-side panel slides off to the right (positive X);
+              // left-side is the mirror image, off to the left (negative X).
+              offset: Offset(
+                _panelSide == MenuSide.right ? menuSlide : -menuSlide,
+                0,
+              ),
               child: Row(
-                children: [
-                  // Drag handle only — don't wrap the whole menu or taps won't reach it.
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onHorizontalDragStart: _onEdgeDragStart,
-                    onHorizontalDragUpdate: _onEdgeDragUpdate,
-                    onHorizontalDragEnd: _onEdgeDragEnd,
-                    child: const SizedBox(width: 20),
-                  ),
-                  Expanded(
-                    child: ValueListenableBuilder<_LiveDiagnostics>(
-                      valueListenable: _liveDiagListenable,
-                      builder: (context, liveDiag, _) => _StreamMenu(
-                        diagnostics: liveDiag,
-                        showDiagnostics: widget.isStreaming,
-                        pointerMode: _pointerMode,
-                        onPointerModeChanged: (mode) {
-                          setState(() {
-                            _pointerMode = mode;
-                            _blockViewerGestures = false;
-                            _multiTouchSession = false;
-                          });
-                        },
-                        streamMode: widget.streamMode,
-                        onStreamModeChanged: widget.onStreamModeChanged,
-                        customSettings: widget.customSettings,
-                        onCustomSettingsChanged: widget.onCustomSettingsChanged,
-                        onCustomSettingsCommitted:
-                            widget.onCustomSettingsCommitted,
-                        onStop: _handleStop,
-                        onKeyboard: _openKeyboard,
-                      ),
-                    ),
-                  ),
-                ],
+                children: _panelSide == MenuSide.right
+                    ? [_menuDragHandle(), Expanded(child: _menuContent())]
+                    : [Expanded(child: _menuContent()), _menuDragHandle()],
               ),
             ),
           ),
           Positioned(
             right: 0,
+            top: 0,
+            bottom: 0,
+            width: edgeGrab,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: _onEdgeDragStart,
+              onHorizontalDragUpdate: _onEdgeDragUpdate,
+              onHorizontalDragEnd: _onEdgeDragEnd,
+              child: const SizedBox.expand(),
+            ),
+          ),
+          Positioned(
+            left: 0,
             top: 0,
             bottom: 0,
             width: edgeGrab,
