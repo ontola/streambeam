@@ -901,34 +901,37 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   /// This device's real display capability — sent as `SessionRequest.video`
   /// so the host encodes at a resolution/frame rate actually worth sending
-  /// instead of a fixed 1080p/60fps guess. `Display.size` is already in
-  /// physical pixels (not logical/DP), matching what the host's encoder
-  /// resolution means. Falls back to 0s (the Rust side substitutes its own
-  /// sane default) if no display info is available yet, which shouldn't
-  /// normally happen once the app's UI is actually visible and calling this.
+  /// instead of a fixed 1080p/60fps guess. `Display.size` should be physical
+  /// pixels, matching what the host's encoder resolution means — true on
+  /// Windows/Android, but not on macOS (see the `dpr` correction below).
+  /// Falls back to 0s (the Rust side substitutes its own sane default) if no
+  /// display info is available yet, which shouldn't normally happen once the
+  /// app's UI is actually visible and calling this.
   (int, int, int) _deviceVideoCaps() {
     final views = ui.PlatformDispatcher.instance.views;
     if (views.isEmpty) return (0, 0, 0);
     final display = views.first.display;
-    // The display's raw refresh rate is the wrong signal for encode fps:
-    // a 120Hz screen says nothing about whether this device's *video
-    // decoder* can actually sustain 120 full decoded frames/sec at this
-    // resolution — that's a much lower, separate hardware limit, and
-    // asking for more than the decoder can do doesn't get skipped
-    // gracefully. It makes the client permanently "behind" (every batch
-    // completes multiple frames before the decoder drains one), so it
-    // skips nearly all of them forever — measured on a real 120Hz device
-    // at ~2670px wide: 95-99% of frames skipped, render stuck at 0-2fps,
-    // despite the host delivering cleanly with zero network loss. 60fps
-    // is comfortably within real-world hardware decoder throughput at
-    // desktop-capture resolutions; this is a ceiling; the actual encode
-    // rate still adapts to network conditions in the same way bitrate
-    // does. `StreamMode` (see stream_player.dart) applies its own tighter
-    // caps on top of this ceiling below.
-    const maxSustainableDecodeFps = 60;
+    // `Display.size` is documented as physical pixels, but on macOS it
+    // actually reports logical points instead (a confirmed Flutter platform
+    // bug: https://github.com/flutter/flutter/issues/142629) — a Retina
+    // display then looks like roughly half its real resolution, silently
+    // capping the encode far below what the client can actually show.
+    // Windows/Android aren't affected (their `Display.size` really is
+    // physical), so only correct for it on macOS specifically.
+    final dpr = Platform.isMacOS ? display.devicePixelRatio : 1.0;
+    // Previously hardcapped at 60: a 120Hz device was observed skipping
+    // 95-99% of frames (stuck at 0-2fps) at 120fps, which looked like a
+    // hard decoder-throughput ceiling. Root-caused since to a separate bug
+    // (self-inflicted packet loss from unpaced FEC shard bursts, fixed in
+    // the host's send loop — see docs/PROGRESS.md 2026-07-07) rather than a
+    // real decode limit, so raised to match the host's own ceiling
+    // (`MAX_CLIENT_FPS` in crates/host/src/server.rs) — unverified above
+    // 60fps on real hardware post-fix; watch for the same symptom
+    // reappearing on any given device/decoder.
+    const maxSustainableDecodeFps = 120;
     final (rawWidth, rawHeight, rawFps) = (
-      display.size.width.round(),
-      display.size.height.round(),
+      (display.size.width * dpr).round(),
+      (display.size.height * dpr).round(),
       display.refreshRate.round().clamp(1, maxSustainableDecodeFps),
     );
     return _streamMode.apply(
