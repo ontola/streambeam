@@ -1536,22 +1536,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
         onPointerHover: _onPointerHover,
         onPointerSignal: _onPointerSignal,
         onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
-        child: Stack(
-          children: [
-            // The remote cursor is the source of truth while controlling —
-            // hide the local one over the video (menus/buttons above this
-            // layer still show theirs).
-            Positioned.fromRect(
-              rect: widget.videoRect,
-              child: MouseRegion(
-                cursor: widget.mouseControlEnabled
-                    ? SystemMouseCursors.none
-                    : MouseCursor.defer,
-                child: const SizedBox.expand(),
-              ),
-            ),
-          ],
-        ),
+        // Client-side cursor: the host's DXGI capture never composites the
+        // pointer into the stream, and we send absolute positions — so the
+        // local OS cursor *is* the remote cursor (native-res, zero-latency).
+        // Don't hide it.
+        child: const SizedBox.expand(),
       ),
     );
   }
