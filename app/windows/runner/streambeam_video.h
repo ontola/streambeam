@@ -40,7 +40,7 @@ class StreamBeamVideo {
   const FlutterDesktopPixelBuffer* CopyBuffer(size_t width, size_t height);
   bool NegotiateOutputType();
   void DrainOutput();
-  void ConvertNv12ToBgra(const uint8_t* nv12, uint32_t width, uint32_t height,
+  void ConvertNv12ToRgba(const uint8_t* nv12, uint32_t width, uint32_t height,
                          uint32_t y_stride);
 
   flutter::TextureRegistrar* registrar_;
@@ -53,11 +53,11 @@ class StreamBeamVideo {
   int64_t sample_index_ = 0;
 
   std::mutex lock_;
-  // Decoded, converted BGRA pixels ready for Flutter — `pixel_buffer_` is
+  // Decoded, converted RGBA pixels ready for Flutter — `pixel_buffer_` is
   // the stable copy handed out via CopyBuffer (must stay valid until the
   // next callback invocation, per the PixelBufferTexture contract), refreshed
-  // from `latest_bgra_` under `lock_` each time the engine asks for a frame.
-  std::vector<uint8_t> latest_bgra_;
+  // from `latest_rgba_` under `lock_` each time the engine asks for a frame.
+  std::vector<uint8_t> latest_rgba_;
   std::vector<uint8_t> pixel_buffer_;
   uint32_t latest_width_ = 0;
   uint32_t latest_height_ = 0;

@@ -2,8 +2,10 @@
 
 #include <mfapi.h>
 #include <mferror.h>
+#include <mfobjects.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
 
 using Microsoft::WRL::ComPtr;
@@ -84,7 +86,7 @@ bool StreamBeamVideo::Configure(const std::vector<uint8_t>& codec_config) {
 bool StreamBeamVideo::NegotiateOutputType() {
   // NV12 is the decoder's native output — always supported, unlike RGB32
   // (which is only sometimes offered and whose padding byte isn't a real
-  // alpha channel). We convert to BGRA ourselves in ConvertNv12ToBgra.
+  // alpha channel). We convert to RGBA ourselves in ConvertNv12ToRgba.
   for (DWORD i = 0;; i++) {
     ComPtr<IMFMediaType> out_type;
     HRESULT hr = decoder_->GetOutputAvailableType(0, i, &out_type);
@@ -159,28 +161,51 @@ void StreamBeamVideo::DrainOutput() {
 
     ComPtr<IMFMediaBuffer> contiguous;
     if (FAILED(out_sample->ConvertToContiguousBuffer(&contiguous))) continue;
-    BYTE* ptr = nullptr;
-    DWORD len = 0;
-    if (FAILED(contiguous->Lock(&ptr, nullptr, &len))) continue;
-    // NV12 stride matches width for this decoder's default allocation (no
-    // extended padding requested); width_/height_ come straight from the
-    // negotiated output type.
-    ConvertNv12ToBgra(ptr, width_, height_, width_);
-    contiguous->Unlock();
+
+    // MF decoder output buffers are frequently row-padded/aligned wider than
+    // the frame (hardware alignment) — assuming stride == width silently
+    // misaligns every row after the first as soon as the two diverge,
+    // producing a garbled/shifting-color picture that gets worse with
+    // motion. IMF2DBuffer::Lock2D reports the *real* stride; only fall back
+    // to the flat Lock()+width_ assumption if the buffer doesn't support it.
+    ComPtr<IMF2DBuffer> buffer2d;
+    if (SUCCEEDED(contiguous.As(&buffer2d))) {
+      BYTE* scanline0 = nullptr;
+      LONG pitch = 0;
+      if (SUCCEEDED(buffer2d->Lock2D(&scanline0, &pitch)) && pitch != 0) {
+        // A negative pitch means the buffer is bottom-up; not something this
+        // decoder's NV12 output produces in practice, so just take the
+        // magnitude rather than implementing a row-flip for a case that
+        // shouldn't occur.
+        ConvertNv12ToRgba(scanline0, width_, height_, static_cast<uint32_t>(std::abs(pitch)));
+        buffer2d->Unlock2D();
+      }
+    } else {
+      BYTE* ptr = nullptr;
+      DWORD len = 0;
+      if (SUCCEEDED(contiguous->Lock(&ptr, nullptr, &len))) {
+        ConvertNv12ToRgba(ptr, width_, height_, width_);
+        contiguous->Unlock();
+      }
+    }
   }
 }
 
-void StreamBeamVideo::ConvertNv12ToBgra(const uint8_t* nv12, uint32_t width,
+void StreamBeamVideo::ConvertNv12ToRgba(const uint8_t* nv12, uint32_t width,
                                         uint32_t height, uint32_t y_stride) {
   if (width == 0 || height == 0) return;
   const uint8_t* y_plane = nv12;
   const uint8_t* uv_plane = nv12 + static_cast<size_t>(y_stride) * height;
 
-  std::vector<uint8_t> bgra(static_cast<size_t>(width) * height * 4);
+  // Flutter's PixelBufferTexture (FlutterDesktopPixelBuffer) has no format
+  // field at all — unlike the GPU-surface texture variant, it's hardcoded to
+  // RGBA8888, not BGRA. Despite the function/variable names inherited from
+  // the initial (wrong) assumption, the byte order written below is R,G,B,A.
+  std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
   for (uint32_t row = 0; row < height; row++) {
     const uint8_t* y_row = y_plane + static_cast<size_t>(row) * y_stride;
     const uint8_t* uv_row = uv_plane + static_cast<size_t>(row / 2) * y_stride;
-    uint8_t* out_row = bgra.data() + static_cast<size_t>(row) * width * 4;
+    uint8_t* out_row = rgba.data() + static_cast<size_t>(row) * width * 4;
     for (uint32_t col = 0; col < width; col++) {
       int y = y_row[col];
       int u = uv_row[(col / 2) * 2] - 128;
@@ -196,15 +221,15 @@ void StreamBeamVideo::ConvertNv12ToBgra(const uint8_t* nv12, uint32_t width,
       int b = y + ((116130 * u) >> 16);
 
       uint8_t* px = out_row + col * 4;
-      px[0] = static_cast<uint8_t>(std::clamp(b, 0, 255));
+      px[0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
       px[1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
-      px[2] = static_cast<uint8_t>(std::clamp(r, 0, 255));
+      px[2] = static_cast<uint8_t>(std::clamp(b, 0, 255));
       px[3] = 0xFF;
     }
   }
 
   std::lock_guard<std::mutex> guard(lock_);
-  latest_bgra_ = std::move(bgra);
+  latest_rgba_ = std::move(rgba);
   latest_width_ = width;
   latest_height_ = height;
   registrar_->MarkTextureFrameAvailable(texture_id_);
@@ -213,13 +238,13 @@ void StreamBeamVideo::ConvertNv12ToBgra(const uint8_t* nv12, uint32_t width,
 const FlutterDesktopPixelBuffer* StreamBeamVideo::CopyBuffer(size_t /*width*/,
                                                               size_t /*height*/) {
   std::lock_guard<std::mutex> guard(lock_);
-  if (latest_bgra_.empty()) return nullptr;
+  if (latest_rgba_.empty()) return nullptr;
   // `desc_`/`pixel_buffer_` are the stable copies the engine reads from
   // after we return — the PixelBufferTexture contract requires the pointer
   // to stay valid until the next callback, so we can't hand out
-  // `latest_bgra_` (which the decode thread — really, the same UI thread
+  // `latest_rgba_` (which the decode thread — really, the same UI thread
   // here, but the contract doesn't assume that) may overwrite next frame.
-  pixel_buffer_ = latest_bgra_;
+  pixel_buffer_ = latest_rgba_;
   desc_ = FlutterDesktopPixelBuffer{};
   desc_.buffer = pixel_buffer_.data();
   desc_.width = latest_width_;
@@ -234,7 +259,7 @@ void StreamBeamVideo::Dispose() {
   }
   {
     std::lock_guard<std::mutex> guard(lock_);
-    latest_bgra_.clear();
+    latest_rgba_.clear();
     pixel_buffer_.clear();
   }
   if (texture_id_ >= 0) {

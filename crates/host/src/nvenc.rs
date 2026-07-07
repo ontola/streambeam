@@ -583,9 +583,23 @@ impl NvencEncoder {
         config.profile_guid = codec.profile_guid();
         config.rc_params.rate_control_mode = NVENC_PARAMS_RC_MODE_CBR;
         config.rc_params.average_bit_rate = bitrate_bps;
-        config.rc_params.max_bit_rate = bitrate_bps;
-        config.rc_params.vbv_buffer_size = bitrate_bps;
-        config.rc_params.vbv_initial_delay = bitrate_bps;
+        // `max_bit_rate`/`vbv_buffer_size` equal to the average left zero
+        // burst headroom: a sudden complexity spike (e.g. a UI hover
+        // highlight) had nowhere to borrow extra bits from and got
+        // hard-quantized instead, visible as a brief contrast crush even
+        // with spatial AQ on (AQ only reallocates bits *within* a frame's
+        // budget — it can't manufacture bits a zero-headroom VBV forbids).
+        // Giving 50% headroom on the ceiling and ~2x the buffer lets a
+        // one-off spike produce a bigger frame instead of getting crushed.
+        // This does NOT add glass-to-glass latency in this pipeline: there
+        // are no B-frames (frame_interval_p = 1) and no segment/jitter
+        // buffering downstream — every frame is still sent the instant
+        // it's encoded, over our own QUIC/FEC transport. VBV buffer size
+        // only bounds how large a single frame is allowed to get before the
+        // rate controller clamps it, not when frames are emitted.
+        config.rc_params.max_bit_rate = bitrate_bps + bitrate_bps / 2;
+        config.rc_params.vbv_buffer_size = bitrate_bps * 2;
+        config.rc_params.vbv_initial_delay = bitrate_bps * 2;
         // Spatial AQ (`enableAQ`, bit 3 of `NV_ENC_RC_PARAMS`'s packed
         // bitfield — layout cross-checked against the authoritative FFmpeg
         // nv-codec-headers nvEncodeAPI.h, LSB-first matching declared field
