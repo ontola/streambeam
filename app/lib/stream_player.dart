@@ -1255,7 +1255,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   bool _isInMenuEdgeZone(Offset global) {
     if (widget.screenEdgeGrab <= 0) return false;
     final screenW = MediaQuery.sizeOf(context).width;
-    return global.dx >= screenW - widget.screenEdgeGrab;
+    // The menu opens from either edge (dual-edge drag) — keep both out of
+    // the touch-input mapping.
+    return global.dx >= screenW - widget.screenEdgeGrab ||
+        global.dx <= widget.screenEdgeGrab;
   }
 
   // ---- Mouse path (desktop, or a mouse attached to a phone) ----
@@ -2023,7 +2026,7 @@ class _StreamMenu extends StatelessWidget {
                     ),
                     child: Text(
                       touchControls
-                          ? 'Drag from the right edge for menu\n'
+                          ? 'Drag from the left or right edge for menu\n'
                               '1 finger: move cursor · tap: left click\n'
                               '2 fingers: pinch zoom / pan (local only)\n'
                               'Quick 2-finger tap: right click'
