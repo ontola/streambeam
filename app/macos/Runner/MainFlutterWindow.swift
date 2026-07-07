@@ -88,7 +88,12 @@ class MainFlutterWindow: NSWindow {
         if v.configure(codecConfig: config, codec: codec, width: width, height: height) {
           self.video?.dispose()
           self.video = v
-          result(Int(v.textureId))
+          let dims = v.videoDimensions
+          result([
+            "textureId": Int(v.textureId),
+            "width": Int(dims.width),
+            "height": Int(dims.height),
+          ])
         } else {
           v.dispose()
           result(FlutterError(code: "configure", message: "decoder setup failed", details: nil))

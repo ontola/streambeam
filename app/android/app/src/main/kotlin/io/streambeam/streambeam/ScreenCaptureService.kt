@@ -40,9 +40,20 @@ class ScreenCaptureService : Service() {
     private var inputSurface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var drainThread: Thread? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
 
     @Volatile
     private var running = false
+
+    /** Current encode size; swaps on device rotation (see [maybeRestartForRotation]). */
+    @Volatile
+    private var captureWidth = 0
+
+    @Volatile
+    private var captureHeight = 0
+
+    @Volatile
+    private var captureDpi = 0
 
     private val approvalHandler = Handler(Looper.getMainLooper())
     private var shownApprovalId: Long = -1
@@ -93,7 +104,9 @@ class ScreenCaptureService : Service() {
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
         val (w, h) = scaledSize(metrics.widthPixels, metrics.heightPixels)
-        val dpi = metrics.densityDpi
+        captureWidth = w
+        captureHeight = h
+        captureDpi = metrics.densityDpi
 
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = mpm.getMediaProjection(resultCode, data)
@@ -107,6 +120,29 @@ class ScreenCaptureService : Service() {
 
         NativeStream.nativeBeginScreenSession(w, h)
 
+        val enc = buildEncoder(w, h)
+        val surface = enc.createInputSurface()
+        enc.start()
+        codec = enc
+        inputSurface = surface
+
+        virtualDisplay = proj.createVirtualDisplay(
+            "streambeam-screen",
+            w,
+            h,
+            captureDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            surface,
+            null,
+            null,
+        )
+
+        running = true
+        drainThread = Thread({ drainLoop() }, "sbm-encoder").apply { start() }
+        watchForRotation()
+    }
+
+    private fun buildEncoder(w: Int, h: Int): MediaCodec {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
             setInteger(
                 MediaFormat.KEY_COLOR_FORMAT,
@@ -122,31 +158,75 @@ class ScreenCaptureService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 setInteger(MediaFormat.KEY_LATENCY, 1)
             }
+            // SPS/PPS in-band on every keyframe. This is what makes device
+            // rotation work without a protocol message: after the encoder is
+            // rebuilt at the rotated size, the next keyframe carries the new
+            // SPS and clients reconfigure their decoder from it.
+            setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
         }
-
         val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val surface = enc.createInputSurface()
-        enc.start()
-        codec = enc
-        inputSurface = surface
-
-        virtualDisplay = proj.createVirtualDisplay(
-            "streambeam-screen",
-            w,
-            h,
-            dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            surface,
-            null,
-            null,
-        )
-
-        running = true
-        drainThread = Thread({ drainLoop(w, h) }, "sbm-encoder").apply { start() }
+        return enc
     }
 
-    private fun drainLoop(w: Int, h: Int) {
+    /** Rebuild the encoder + virtual display when the screen rotates. */
+    private fun watchForRotation() {
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                approvalHandler.post { maybeRestartForRotation() }
+            }
+        }
+        dm.registerDisplayListener(listener, approvalHandler)
+        displayListener = listener
+    }
+
+    private fun maybeRestartForRotation() {
+        if (!running) return
+        val metrics = DisplayMetrics()
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealMetrics(metrics)
+        val (w, h) = scaledSize(metrics.widthPixels, metrics.heightPixels)
+        if (w == captureWidth && h == captureHeight) return
+        android.util.Log.i(TAG, "display rotated: ${captureWidth}x$captureHeight -> ${w}x$h")
+
+        // Stop the drain thread before touching the codec it reads from.
+        running = false
+        drainThread?.join(500)
+        drainThread = null
+        try {
+            codec?.stop()
+        } catch (_: Exception) {
+        }
+        codec?.release()
+        codec = null
+        inputSurface?.release()
+        inputSurface = null
+
+        captureWidth = w
+        captureHeight = h
+        try {
+            val enc = buildEncoder(w, h)
+            val surface = enc.createInputSurface()
+            enc.start()
+            codec = enc
+            inputSurface = surface
+            // Keep the projection + virtual display; just retarget them.
+            virtualDisplay?.resize(w, h, captureDpi)
+            virtualDisplay?.surface = surface
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "encoder rebuild after rotation failed", e)
+            stopSelf()
+            return
+        }
+        running = true
+        drainThread = Thread({ drainLoop() }, "sbm-encoder").apply { start() }
+    }
+
+    private fun drainLoop() {
         val enc = codec ?: return
         val info = MediaCodec.BufferInfo()
         while (running) {
@@ -174,7 +254,9 @@ class ScreenCaptureService : Service() {
                     buf.get(bytes)
                     val isConfig = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
                     val isKey = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                    NativeStream.nativeSubmitScreenFrame(bytes, isKey, isConfig, w, h)
+                    NativeStream.nativeSubmitScreenFrame(
+                        bytes, isKey, isConfig, captureWidth, captureHeight,
+                    )
                 }
                 try {
                     enc.releaseOutputBuffer(index, false)
@@ -217,6 +299,11 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         running = false
+        displayListener?.let {
+            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
+                .unregisterDisplayListener(it)
+        }
+        displayListener = null
         approvalPoll?.let { approvalHandler.removeCallbacks(it) }
         notificationManager().cancel(APPROVAL_NOTIF_ID)
         drainThread?.join(500)

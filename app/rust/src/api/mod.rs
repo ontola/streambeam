@@ -581,6 +581,16 @@ async fn desktop_stream_loop(
         .clone()
         .ok_or("Host did not send video configuration (CodecConfig).")?;
     let is_av1 = session.codec == "av01";
+    // In-band reconfiguration (H.264): hosts that can change geometry
+    // mid-session (a rotating phone) prepend SPS/PPS to every keyframe; a
+    // keyframe whose parameter sets differ from the current ones means the
+    // stream size changed and the platform decoder must be rebuilt. Track
+    // the active parameter sets to compare against.
+    let mut current_sps_pps = if is_av1 {
+        None
+    } else {
+        streambeam_core::extract_avc_decoder_config(&codec_config)
+    };
     // H.264 config passes through as Annex-B SPS/PPS; for AV1 the platform
     // decoder wants an `av1C` record, built here from the sequence header in
     // the host's config (same extraction the Android decoder does).
@@ -645,6 +655,34 @@ async fn desktop_stream_loop(
             } else {
                 frame
             };
+            // Rotation / mid-session resize: new parameter sets on a keyframe
+            // → tell Dart to rebuild the decoder before feeding it this frame.
+            // Dimensions are left 0 — the platform decoder reads them from
+            // the new SPS and reports them back from `configure`.
+            if !is_av1 && keyframe {
+                if let Some(new_cfg) = streambeam_core::extract_avc_decoder_config(&data) {
+                    if current_sps_pps.as_ref() != Some(&new_cfg) {
+                        let mut cfg = streambeam_core::nal_with_start_code(&new_cfg.0);
+                        cfg.extend_from_slice(&streambeam_core::nal_with_start_code(&new_cfg.1));
+                        current_sps_pps = Some(new_cfg);
+                        if sink
+                            .add(DesktopStreamEvent {
+                                is_config: true,
+                                codec: session.codec.clone(),
+                                codec_config: cfg,
+                                width: 0,
+                                height: 0,
+                                fps: session.fps,
+                                data: Vec::new(),
+                                keyframe: false,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
             if sink
                 .add(DesktopStreamEvent {
                     is_config: false,

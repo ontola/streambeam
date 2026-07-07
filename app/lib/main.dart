@@ -770,20 +770,41 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       (ev) async {
         if (!mounted) return;
         if (ev.isConfig) {
+          // Sent once at session start and again on an in-band
+          // reconfiguration (the host device rotated): rebuild the native
+          // decoder and adopt the new geometry.
           try {
-            final id = await _desktopVideoChannel
-                .invokeMethod<int>('configure', {
+            final res = await _desktopVideoChannel
+                .invokeMethod<dynamic>('configure', {
                   'codecConfig': ev.codecConfig,
                   'codec': ev.codec,
                   'width': ev.width,
                   'height': ev.height,
                 });
+            int? id;
+            // Prefer what the decoder read from the bitstream (reconfig
+            // events carry 0×0 on the wire); fall back to the event, then
+            // to whatever we already had.
+            var w = ev.width > 0 ? ev.width : _desktopWidth;
+            var h = ev.height > 0 ? ev.height : _desktopHeight;
+            if (res is int) {
+              // Legacy result shape (Windows runner): just the texture id.
+              id = res;
+            } else if (res is Map) {
+              id = res['textureId'] as int?;
+              final rw = res['width'] as int? ?? 0;
+              final rh = res['height'] as int? ?? 0;
+              if (rw > 0 && rh > 0) {
+                w = rw;
+                h = rh;
+              }
+            }
             if (id != null && mounted) {
               setState(() {
                 _desktopTextureId = id;
-                _desktopAspect = ev.height > 0 ? ev.width / ev.height : 16 / 9;
-                _desktopWidth = ev.width;
-                _desktopHeight = ev.height;
+                _desktopAspect = h > 0 ? w / h : 16 / 9;
+                _desktopWidth = w;
+                _desktopHeight = h;
                 _status = 'Streaming…';
                 _showVideo = true;
                 _busy = false;

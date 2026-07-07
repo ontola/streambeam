@@ -44,6 +44,15 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         return enabled && upscalerStorage != nil
     }
 
+    /// Actual coded dimensions from the format description (SPS / av1C
+    /// derived) — reported back to Dart so the aspect ratio tracks in-band
+    /// reconfigurations (device rotation) without wire-level geometry.
+    var videoDimensions: (width: Int32, height: Int32) {
+        guard let fd = formatDesc else { return (0, 0) }
+        let dims = CMVideoFormatDescriptionGetDimensions(fd)
+        return (dims.width, dims.height)
+    }
+
     // MARK: FlutterTexture
 
     func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? {
