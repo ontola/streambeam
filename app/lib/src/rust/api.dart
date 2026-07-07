@@ -182,9 +182,15 @@ Future<StreamStats> reconnectPlayStream({
 Stream<DesktopStreamEvent> playStreamDesktop({
   required String payload,
   required bool allowAv1,
+  required int maxWidth,
+  required int maxHeight,
+  required int maxFps,
 }) => StreambeamFfi.instance.api.crateApiPlayStreamDesktop(
   payload: payload,
   allowAv1: allowAv1,
+  maxWidth: maxWidth,
+  maxHeight: maxHeight,
+  maxFps: maxFps,
 );
 
 /// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
@@ -195,11 +201,17 @@ Stream<DesktopStreamEvent> playStreamDesktopKnown({
   required List<int> hostPubkey,
   required String addr,
   required bool allowAv1,
+  required int maxWidth,
+  required int maxHeight,
+  required int maxFps,
 }) => StreambeamFfi.instance.api.crateApiPlayStreamDesktopKnown(
   hostName: hostName,
   hostPubkey: hostPubkey,
   addr: addr,
   allowAv1: allowAv1,
+  maxWidth: maxWidth,
+  maxHeight: maxHeight,
+  maxFps: maxFps,
 );
 
 bool hostPlatformSupported() =>

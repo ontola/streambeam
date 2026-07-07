@@ -550,6 +550,9 @@ fn wire__crate__api__play_stream_desktop_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_payload = <String>::sse_decode(&mut deserializer);
             let api_allow_av1 = <bool>::sse_decode(&mut deserializer);
+            let api_max_width = <u16>::sse_decode(&mut deserializer);
+            let api_max_height = <u16>::sse_decode(&mut deserializer);
+            let api_max_fps = <u8>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
                 crate::api::DesktopStreamEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
@@ -558,9 +561,15 @@ fn wire__crate__api__play_stream_desktop_impl(
             move |context| async move {
                 transform_result_sse::<_, String>(
                     (move || async move {
-                        let output_ok =
-                            crate::api::play_stream_desktop(api_payload, api_allow_av1, api_sink)
-                                .await?;
+                        let output_ok = crate::api::play_stream_desktop(
+                            api_payload,
+                            api_allow_av1,
+                            api_max_width,
+                            api_max_height,
+                            api_max_fps,
+                            api_sink,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -595,6 +604,9 @@ fn wire__crate__api__play_stream_desktop_known_impl(
             let api_host_pubkey = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_addr = <String>::sse_decode(&mut deserializer);
             let api_allow_av1 = <bool>::sse_decode(&mut deserializer);
+            let api_max_width = <u16>::sse_decode(&mut deserializer);
+            let api_max_height = <u16>::sse_decode(&mut deserializer);
+            let api_max_fps = <u8>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
                 crate::api::DesktopStreamEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
@@ -608,6 +620,9 @@ fn wire__crate__api__play_stream_desktop_known_impl(
                             api_host_pubkey,
                             api_addr,
                             api_allow_av1,
+                            api_max_width,
+                            api_max_height,
+                            api_max_fps,
                             api_sink,
                         )
                         .await?;

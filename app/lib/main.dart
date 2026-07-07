@@ -18,7 +18,9 @@ import 'stream_player.dart';
 import 'ui.dart';
 
 final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
-final _githubReleasesUrl = Uri.parse('https://github.com/joepio/streambeam/releases');
+final _githubReleasesUrl = Uri.parse(
+  'https://github.com/joepio/streambeam/releases',
+);
 final _ontolaUrl = Uri.parse('https://ontola.io');
 const _logoAsset = 'assets/streambeam-logo.svg';
 
@@ -154,8 +156,9 @@ Future<void> main() async {
 Future<void> _applyDeviceName() async {
   String? name;
   try {
-    name = await const MethodChannel('streambeam/device')
-        .invokeMethod<String>('getName');
+    name = await const MethodChannel(
+      'streambeam/device',
+    ).invokeMethod<String>('getName');
   } catch (_) {}
   if ((name == null || name.trim().isEmpty) && !Platform.isAndroid) {
     // gethostname often carries an mDNS suffix ("Joeps-MacBook-Pro.local").
@@ -528,7 +531,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       // Start the camera only after the MobileScanner widget is actually in the
       // tree — calling start() immediately races the not-yet-attached platform
       // view, leaving the preview blank until you toggle again.
-      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_syncScanner()));
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => unawaited(_syncScanner()),
+      );
     } else {
       unawaited(_syncScanner());
     }
@@ -620,16 +625,18 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  static const _nativeDiscoveryChannel =
-      MethodChannel('streambeam/native_discovery');
+  static const _nativeDiscoveryChannel = MethodChannel(
+    'streambeam/native_discovery',
+  );
 
   /// Desktop host discovery via native Bonjour (macOS). The browser runs
   /// continuously once started, so results accumulate across refreshes.
   Future<List<DiscoveredHost>> _discoverHostsNative() async {
     await _nativeDiscoveryChannel.invokeMethod('start');
     await Future<void>.delayed(const Duration(seconds: 1));
-    final raw =
-        await _nativeDiscoveryChannel.invokeMethod<List<dynamic>>('getHosts');
+    final raw = await _nativeDiscoveryChannel.invokeMethod<List<dynamic>>(
+      'getHosts',
+    );
     return (raw ?? const []).map((entry) {
       final map = entry as Map;
       final addrs = (map['addrs'] as List?) ?? const [];
@@ -701,7 +708,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (cached != null) return cached;
     bool can;
     try {
-      can = await _desktopVideoChannel.invokeMethod<bool>('canDecodeAV1') ??
+      can =
+          await _desktopVideoChannel.invokeMethod<bool>('canDecodeAV1') ??
           false;
     } catch (_) {
       can = false;
@@ -719,26 +727,42 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _status = 'Connecting…';
       _statusIsError = false;
     });
+    final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
     _attachDesktopStream(
-      playStreamDesktop(payload: payload, allowAv1: await _desktopCanAv1()),
+      playStreamDesktop(
+        payload: payload,
+        allowAv1: await _desktopCanAv1(),
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
+        maxFps: maxFps,
+      ),
     );
   }
 
   /// Watch a discovered/saved host by its pinned key (no QR needed; the host
   /// prompts to approve on first contact).
-  Future<void> _startDesktopPlaybackKnown(DiscoveredHost host, String addr) async {
+  Future<void> _startDesktopPlaybackKnown(
+    DiscoveredHost host,
+    String addr,
+  ) async {
     await _stopDesktopPlayback();
     setState(() {
       _busy = true;
       _status = 'Connecting…';
       _statusIsError = false;
     });
-    _attachDesktopStream(playStreamDesktopKnown(
-      hostName: host.name,
-      hostPubkey: host.hostPubkey,
-      addr: addr,
-      allowAv1: await _desktopCanAv1(),
-    ));
+    final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
+    _attachDesktopStream(
+      playStreamDesktopKnown(
+        hostName: host.name,
+        hostPubkey: host.hostPubkey,
+        addr: addr,
+        allowAv1: await _desktopCanAv1(),
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
+        maxFps: maxFps,
+      ),
+    );
   }
 
   void _attachDesktopStream(Stream<DesktopStreamEvent> stream) {
@@ -747,15 +771,13 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         if (!mounted) return;
         if (ev.isConfig) {
           try {
-            final id = await _desktopVideoChannel.invokeMethod<int>(
-              'configure',
-              {
-                'codecConfig': ev.codecConfig,
-                'codec': ev.codec,
-                'width': ev.width,
-                'height': ev.height,
-              },
-            );
+            final id = await _desktopVideoChannel
+                .invokeMethod<int>('configure', {
+                  'codecConfig': ev.codecConfig,
+                  'codec': ev.codec,
+                  'width': ev.width,
+                  'height': ev.height,
+                });
             if (id != null && mounted) {
               setState(() {
                 _desktopTextureId = id;
@@ -841,7 +863,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     try {
       final payload = await _payloadFromClipboard();
       if (payload == null) {
-        _reportError('Clipboard empty. Copy sbm1: from streambeam-host on your PC, or scan the QR.');
+        _reportError(
+          'Clipboard empty. Copy sbm1: from streambeam-host on your PC, or scan the QR.',
+        );
         return;
       }
       if (payload.length < 48) {
@@ -1110,7 +1134,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _payloadCtrl.text = payload;
     }
     if (!payload.startsWith('sbm1:')) {
-      _reportError('No pairing code found. Copy sbm1: from streambeam-host or scan the QR.');
+      _reportError(
+        'No pairing code found. Copy sbm1: from streambeam-host or scan the QR.',
+      );
       return;
     }
     if (payload.length < 48) {
@@ -1274,90 +1300,95 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         SliverPadding(
           padding: const EdgeInsets.all(16),
           sliver: SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Devices first — the whole point of the screen.
-                _DevicesSection(
-                  busy: _busy,
-                  hosts: _hostEntries(),
-                  discovering: _discoveryBusy,
-                  discoveryError: _discoveryError,
-                  onHostTap: _busy
-                      ? null
-                      : (h) => unawaited(_connectHostEntry(h)),
-                  onForgetHost: _busy
-                      ? null
-                      : (_) => unawaited(_forgetSavedHost()),
-                ),
-                if (_status != null) ...[
-                  const SizedBox(height: 12),
-                  StatusNotice(
-                    message: _status!,
-                    isError: _statusIsError,
-                    onCopy: _statusIsError
-                        ? () => unawaited(_copyStatus())
-                        : null,
-                    onDismiss: _statusIsError ? _dismissStatus : null,
+            child: CenteredContent(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Devices first — the whole point of the screen.
+                  _DevicesSection(
+                    busy: _busy,
+                    hosts: _hostEntries(),
+                    discovering: _discoveryBusy,
+                    discoveryError: _discoveryError,
+                    onHostTap: _busy
+                        ? null
+                        : (h) => unawaited(_connectHostEntry(h)),
+                    onForgetHost: _busy
+                        ? null
+                        : (_) => unawaited(_forgetSavedHost()),
                   ),
-                ],
-                const SizedBox(height: 16),
-                // Add a host by QR or pasted code.
-                if (Platform.isAndroid && _qrPreviewOpen) ...[
-                  _QrScanPreview(
-                    controller: _scannerController!,
-                    paused: _busy,
-                    onDetect: _handleQrDetect,
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                Row(
-                  children: [
-                    Expanded(
-                      child: _clipboardReady
-                          ? FilledButton.icon(
-                              onPressed: _busy ? null : _pasteFromClipboard,
-                              icon: const Icon(Icons.content_paste),
-                              label: const Text('Paste & play'),
-                            )
-                          : OutlinedButton.icon(
-                              onPressed: null,
-                              icon: const Icon(Icons.content_paste_outlined),
-                              label: const Text('Paste'),
-                            ),
+                  if (_status != null) ...[
+                    const SizedBox(height: 12),
+                    StatusNotice(
+                      message: _status!,
+                      isError: _statusIsError,
+                      onCopy: _statusIsError
+                          ? () => unawaited(_copyStatus())
+                          : null,
+                      onDismiss: _statusIsError ? _dismissStatus : null,
                     ),
-                    if (Platform.isAndroid) ...[
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton.tonalIcon(
-                          onPressed: _busy ? null : _toggleQrPreview,
-                          icon: Icon(
-                            _qrPreviewOpen
-                                ? Icons.close
-                                : Icons.qr_code_scanner,
-                          ),
-                          label: Text(_qrPreviewOpen ? 'Hide scanner' : 'Scan QR'),
-                        ),
-                      ),
-                    ],
                   ],
-                ),
-                const SizedBox(height: 24),
-                // Onboarding / "get the host" info, de-emphasised below.
-                _StreamFromPromo(compact: _hostEntries().isNotEmpty),
-                const SizedBox(height: 20),
-                Center(
-                  child: TextButton(
-                    onPressed: openOntola,
-                    style: TextButton.styleFrom(
-                      foregroundColor:
-                          Theme.of(context).colorScheme.onSurfaceVariant,
-                      textStyle: Theme.of(context).textTheme.bodySmall,
+                  const SizedBox(height: 16),
+                  // Add a host by QR or pasted code.
+                  if (Platform.isAndroid && _qrPreviewOpen) ...[
+                    _QrScanPreview(
+                      controller: _scannerController!,
+                      paused: _busy,
+                      onDetect: _handleQrDetect,
                     ),
-                    child: const Text('Made with <3 by Ontola.io'),
+                    const SizedBox(height: 8),
+                  ],
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _clipboardReady
+                            ? FilledButton.icon(
+                                onPressed: _busy ? null : _pasteFromClipboard,
+                                icon: const Icon(Icons.content_paste),
+                                label: const Text('Paste & play'),
+                              )
+                            : OutlinedButton.icon(
+                                onPressed: null,
+                                icon: const Icon(Icons.content_paste_outlined),
+                                label: const Text('Paste'),
+                              ),
+                      ),
+                      if (Platform.isAndroid) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            onPressed: _busy ? null : _toggleQrPreview,
+                            icon: Icon(
+                              _qrPreviewOpen
+                                  ? Icons.close
+                                  : Icons.qr_code_scanner,
+                            ),
+                            label: Text(
+                              _qrPreviewOpen ? 'Hide scanner' : 'Scan QR',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 24),
+                  // Onboarding / "get the host" info, de-emphasised below.
+                  _StreamFromPromo(compact: _hostEntries().isNotEmpty),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: TextButton(
+                      onPressed: openOntola,
+                      style: TextButton.styleFrom(
+                        foregroundColor: Theme.of(
+                          context,
+                        ).colorScheme.onSurfaceVariant,
+                        textStyle: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      child: const Text('Made with <3 by Ontola.io'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1426,7 +1457,9 @@ class _QrScanPreview extends StatelessWidget {
                     vertical: 4,
                   ),
                   child: Text(
-                    paused ? 'Scanner paused while streaming' : 'Point at host QR',
+                    paused
+                        ? 'Scanner paused while streaming'
+                        : 'Point at host QR',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: Colors.white,
                     ),
@@ -1515,8 +1548,8 @@ class _DevicesSection extends StatelessWidget {
                 discovering
                     ? 'Searching…'
                     : hosts.isEmpty
-                        ? 'None found'
-                        : '$onlineCount online · ${hosts.length} listed',
+                    ? 'None found'
+                    : '$onlineCount online · ${hosts.length} listed',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -1549,8 +1582,10 @@ class _DevicesSection extends StatelessWidget {
                       onPressed: busy ? null : () => onForgetHost!(h),
                     )
                   else if (canTap)
-                    Icon(Icons.play_circle_fill,
-                        color: theme.colorScheme.primary),
+                    Icon(
+                      Icons.play_circle_fill,
+                      color: theme.colorScheme.primary,
+                    ),
                 ],
               ),
             );
@@ -1564,7 +1599,8 @@ class _DevicesSection extends StatelessWidget {
             ),
           ),
         ],
-        if (hosts.isNotEmpty && hosts.any((h) => h.hostPubkey.length != 32)) ...[
+        if (hosts.isNotEmpty &&
+            hosts.any((h) => h.hostPubkey.length != 32)) ...[
           const SizedBox(height: 4),
           Text(
             'Update StreamBeam on that device for tap-to-connect.',
@@ -1704,4 +1740,3 @@ class _StreamFromPromo extends StatelessWidget {
     );
   }
 }
-

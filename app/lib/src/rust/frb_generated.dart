@@ -133,6 +133,9 @@ abstract class StreambeamFfiApi extends BaseApi {
   Stream<DesktopStreamEvent> crateApiPlayStreamDesktop({
     required String payload,
     required bool allowAv1,
+    required int maxWidth,
+    required int maxHeight,
+    required int maxFps,
   });
 
   Stream<DesktopStreamEvent> crateApiPlayStreamDesktopKnown({
@@ -140,6 +143,9 @@ abstract class StreambeamFfiApi extends BaseApi {
     required List<int> hostPubkey,
     required String addr,
     required bool allowAv1,
+    required int maxWidth,
+    required int maxHeight,
+    required int maxFps,
   });
 
   PlaybackDiagnostics crateApiPlaybackDiagnostics();
@@ -646,6 +652,9 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   Stream<DesktopStreamEvent> crateApiPlayStreamDesktop({
     required String payload,
     required bool allowAv1,
+    required int maxWidth,
+    required int maxHeight,
+    required int maxFps,
   }) {
     final sink = RustStreamSink<DesktopStreamEvent>();
     unawaited(
@@ -655,6 +664,9 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             final serializer = SseSerializer(generalizedFrbRustBinding);
             sse_encode_String(payload, serializer);
             sse_encode_bool(allowAv1, serializer);
+            sse_encode_u_16(maxWidth, serializer);
+            sse_encode_u_16(maxHeight, serializer);
+            sse_encode_u_8(maxFps, serializer);
             sse_encode_StreamSink_desktop_stream_event_Sse(sink, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
@@ -668,7 +680,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             decodeErrorData: sse_decode_String,
           ),
           constMeta: kCrateApiPlayStreamDesktopConstMeta,
-          argValues: [payload, allowAv1, sink],
+          argValues: [payload, allowAv1, maxWidth, maxHeight, maxFps, sink],
           apiImpl: this,
         ),
       ),
@@ -678,7 +690,14 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
 
   TaskConstMeta get kCrateApiPlayStreamDesktopConstMeta => const TaskConstMeta(
     debugName: "play_stream_desktop",
-    argNames: ["payload", "allowAv1", "sink"],
+    argNames: [
+      "payload",
+      "allowAv1",
+      "maxWidth",
+      "maxHeight",
+      "maxFps",
+      "sink",
+    ],
   );
 
   @override
@@ -687,6 +706,9 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     required List<int> hostPubkey,
     required String addr,
     required bool allowAv1,
+    required int maxWidth,
+    required int maxHeight,
+    required int maxFps,
   }) {
     final sink = RustStreamSink<DesktopStreamEvent>();
     unawaited(
@@ -698,6 +720,9 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             sse_encode_list_prim_u_8_loose(hostPubkey, serializer);
             sse_encode_String(addr, serializer);
             sse_encode_bool(allowAv1, serializer);
+            sse_encode_u_16(maxWidth, serializer);
+            sse_encode_u_16(maxHeight, serializer);
+            sse_encode_u_8(maxFps, serializer);
             sse_encode_StreamSink_desktop_stream_event_Sse(sink, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
@@ -711,7 +736,16 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             decodeErrorData: sse_decode_String,
           ),
           constMeta: kCrateApiPlayStreamDesktopKnownConstMeta,
-          argValues: [hostName, hostPubkey, addr, allowAv1, sink],
+          argValues: [
+            hostName,
+            hostPubkey,
+            addr,
+            allowAv1,
+            maxWidth,
+            maxHeight,
+            maxFps,
+            sink,
+          ],
           apiImpl: this,
         ),
       ),
@@ -722,7 +756,16 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   TaskConstMeta get kCrateApiPlayStreamDesktopKnownConstMeta =>
       const TaskConstMeta(
         debugName: "play_stream_desktop_known",
-        argNames: ["hostName", "hostPubkey", "addr", "allowAv1", "sink"],
+        argNames: [
+          "hostName",
+          "hostPubkey",
+          "addr",
+          "allowAv1",
+          "maxWidth",
+          "maxHeight",
+          "maxFps",
+          "sink",
+        ],
       );
 
   @override

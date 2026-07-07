@@ -835,6 +835,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         transformationController: _transformController,
                         minScale: 1,
                         maxScale: 4,
+                        // Local pinch-zoom is a touch affordance. On mouse
+                        // platforms InteractiveViewer would claim scroll
+                        // events for zooming — they must reach the input
+                        // layer as remote wheel input instead.
+                        scaleEnabled: widget.touchControls,
                         panEnabled: _panEnabled && _multiTouchSession,
                         clipBehavior: Clip.none,
                         child: SizedBox(

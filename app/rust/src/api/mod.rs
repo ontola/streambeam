@@ -417,9 +417,18 @@ pub struct DesktopStreamEvent {
 pub async fn play_stream_desktop(
     payload: String,
     allow_av1: bool,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
     sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
-    if let Err(e) = play_stream_desktop_inner(payload, allow_av1, &sink).await {
+    if let Err(e) = play_stream_desktop_inner(
+        payload,
+        desktop_video_caps(allow_av1, max_width, max_height, max_fps),
+        &sink,
+    )
+    .await
+    {
         let _ = sink.add_error(e);
     }
     Ok(())
@@ -427,23 +436,44 @@ pub async fn play_stream_desktop(
 
 /// `allow_av1` comes from the platform decoder probe (VideoToolbox hardware
 /// AV1 exists on Apple silicon M3+ only) — advertising it blindly would make
-/// the host encode a stream the client can't decode.
-fn desktop_video_caps(allow_av1: bool) -> streambeam_proto::control::VideoCaps {
-    let mut caps = streambeam_core::fallback_video_caps();
-    caps.av1 = allow_av1;
-    caps
+/// the host encode a stream the client can't decode. `max_*` are the real
+/// display capability from Dart's `Display` query (0 → safe fallback), same
+/// contract as the Android path's `video_caps`.
+fn desktop_video_caps(
+    allow_av1: bool,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
+) -> streambeam_proto::control::VideoCaps {
+    let fallback = streambeam_core::fallback_video_caps();
+    streambeam_proto::control::VideoCaps {
+        h264: true,
+        hevc: false,
+        av1: allow_av1,
+        max_width: if max_width > 0 {
+            max_width
+        } else {
+            fallback.max_width
+        },
+        max_height: if max_height > 0 {
+            max_height
+        } else {
+            fallback.max_height
+        },
+        max_fps: if max_fps > 0 { max_fps } else { fallback.max_fps },
+    }
 }
 
 async fn play_stream_desktop_inner(
     payload: String,
-    allow_av1: bool,
+    caps: streambeam_proto::control::VideoCaps,
     sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     let session = connect_as_identity(
         &payload,
         &crate::store::client_name(),
         Some(&client_identity_path()),
-        desktop_video_caps(allow_av1),
+        caps,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -460,10 +490,19 @@ pub async fn play_stream_desktop_known(
     host_pubkey: Vec<u8>,
     addr: String,
     allow_av1: bool,
+    max_width: u16,
+    max_height: u16,
+    max_fps: u8,
     sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
-    if let Err(e) =
-        play_stream_desktop_known_inner(host_name, host_pubkey, addr, allow_av1, &sink).await
+    if let Err(e) = play_stream_desktop_known_inner(
+        host_name,
+        host_pubkey,
+        addr,
+        desktop_video_caps(allow_av1, max_width, max_height, max_fps),
+        &sink,
+    )
+    .await
     {
         let _ = sink.add_error(e);
     }
@@ -474,7 +513,7 @@ async fn play_stream_desktop_known_inner(
     host_name: String,
     host_pubkey: Vec<u8>,
     addr: String,
-    allow_av1: bool,
+    caps: streambeam_proto::control::VideoCaps,
     sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     let pubkey: [u8; 32] = host_pubkey
@@ -488,7 +527,7 @@ async fn play_stream_desktop_known_inner(
         addr,
         &crate::store::client_name(),
         &client_identity_path(),
-        desktop_video_caps(allow_av1),
+        caps,
     )
     .await
     .map_err(|e| e.to_string())?;
