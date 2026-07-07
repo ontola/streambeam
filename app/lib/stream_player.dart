@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'gamepad_forwarder.dart';
 import 'src/rust/api.dart';
+import 'vk_keys.dart';
 
 /// How single-finger drag maps to the remote mouse.
 enum PointerMode {
@@ -254,6 +255,42 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   DateTime? _diagLastSampleAt;
   final _keyboardFocus = FocusNode();
   final _keyboardCtrl = TextEditingController();
+  /// Physical-keyboard forwarding (mouse-first platforms): focus node that
+  /// captures keys while streaming, and the VKs currently held remotely so
+  /// they can be released if capture stops mid-press (no stuck keys).
+  final _streamKeyFocus = FocusNode(debugLabel: 'stream-keys');
+  final _pressedVks = <int>{};
+
+  bool get _keyForwardingActive =>
+      widget.inputSupported &&
+      !widget.touchControls &&
+      widget.isStreaming &&
+      _hasVideo &&
+      !_menuOpen &&
+      !_keyboardOpen;
+
+  KeyEventResult _onStreamKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_keyForwardingActive) return KeyEventResult.ignored;
+    final vk = vkForLogicalKey(event.logicalKey);
+    if (vk == null) return KeyEventResult.ignored;
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      _pressedVks.add(vk);
+      sendKey(vk: vk, down: true);
+    } else if (event is KeyUpEvent) {
+      _pressedVks.remove(vk);
+      sendKey(vk: vk, down: false);
+    }
+    return KeyEventResult.handled;
+  }
+
+  /// Release every remotely-held key (capture stopping must not strand a
+  /// pressed modifier on the host).
+  void _releaseAllKeys() {
+    for (final vk in _pressedVks) {
+      sendKey(vk: vk, down: false);
+    }
+    _pressedVks.clear();
+  }
 
   bool get _showStatusOverlay =>
       !widget.isStreaming && (widget.statusIsError || widget.status != null);
@@ -324,6 +361,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     } else if (!widget.isStreaming && oldWidget.isStreaming) {
       _endVideoWatch();
       _endDiagnostics();
+      _releaseAllKeys();
     }
   }
 
@@ -456,6 +494,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _liveDiagListenable.dispose();
     _keyboardFocus.dispose();
     _keyboardCtrl.dispose();
+    _releaseAllKeys();
+    _streamKeyFocus.dispose();
     super.dispose();
   }
 
@@ -466,6 +506,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       _menuDrag = 0;
     });
     _syncDiagnosticsPoll();
+    if (!widget.touchControls) _streamKeyFocus.requestFocus();
   }
 
   void _openKeyboard() {
@@ -540,6 +581,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     });
     if (shouldOpen) {
       _lastMenuSide = _panelSide;
+      _releaseAllKeys();
     }
     _syncDiagnosticsPoll();
   }
@@ -648,6 +690,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                 _menuOpen = true;
                 _menuDrag = 0;
               });
+              _releaseAllKeys();
               _syncDiagnosticsPoll();
             },
           ),
@@ -708,7 +751,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       },
       child: Material(
         color: Colors.black,
-        child: LayoutBuilder(
+        // Physical-keyboard capture (mouse-first platforms): keys go to the
+        // host while streaming; the menu/keyboard overlays release focus.
+        child: Focus(
+          focusNode: _streamKeyFocus,
+          autofocus: !widget.touchControls,
+          onKeyEvent: _onStreamKeyEvent,
+          child: LayoutBuilder(
           builder: (context, constraints) {
             final viewport = Size(constraints.maxWidth, constraints.maxHeight);
             final videoSize = _fitVideoSize(viewport);
@@ -969,6 +1018,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
               ],
             );
           },
+          ),
         ),
       ),
     );
@@ -1033,6 +1083,12 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   double _twoFingerTravel = 0;
   DateTime? _twoFingerDownAt;
 
+  /// Touch press-hold-drag: holding one finger still starts a remote
+  /// left-button drag (move to drag, lift to drop).
+  static const _longPressDelay = Duration(milliseconds: 450);
+  Timer? _longPressTimer;
+  bool _touchDragActive = false;
+
   int get _refW => widget.refWidth.clamp(1, 65535);
   int get _refH => widget.refHeight.clamp(1, 65535);
 
@@ -1057,6 +1113,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   @override
   void dispose() {
+    _cancelLongPress();
     _cancelRelFlush();
     _flushRel();
     if (_mouseButtons != 0) _syncMouseButtons(0);
@@ -1070,6 +1127,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _resetMouseState() {
+    _cancelLongPress();
     _cancelRelFlush();
     _flushRel();
     _activePointers.clear();
@@ -1165,15 +1223,19 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       [kPrimaryMouseButton, 0],
       [kSecondaryMouseButton, 1],
       [kMiddleMouseButton, 2],
+      [kBackMouseButton, 3],
+      [kForwardMouseButton, 4],
     ];
+    var tracked = 0;
     for (final m in mapping) {
+      tracked |= m[0];
       final wasDown = _mouseButtons & m[0] != 0;
       final isDown = next & m[0] != 0;
       if (wasDown != isDown) {
         sendMouseButton(button: m[1], down: isDown);
       }
     }
-    _mouseButtons = next & (kPrimaryMouseButton | kSecondaryMouseButton | kMiddleMouseButton);
+    _mouseButtons = next & tracked;
   }
 
   void _onMouseDown(PointerDownEvent event) {
@@ -1205,11 +1267,13 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (local != null) _sendAbs(local);
   }
 
-  /// Accumulate pixel deltas into whole scroll lines (host expects lines).
+  /// Convert pixel deltas to wheel units (±120 per notch, PROTOCOL.md) and
+  /// send fractional-notch amounts so trackpad scrolling stays smooth.
   void _sendScrollPixels(double dxPixels, double dyPixels) {
-    const pixelsPerLine = 40.0;
-    _scrollAccumX += dxPixels / pixelsPerLine;
-    _scrollAccumY += dyPixels / pixelsPerLine;
+    // One classic notch ≈ 40 px of scroll → 3 wheel units per pixel.
+    const unitsPerPixel = 3.0;
+    _scrollAccumX += dxPixels * unitsPerPixel;
+    _scrollAccumY += dyPixels * unitsPerPixel;
     final sx = _scrollAccumX.truncate();
     final sy = _scrollAccumY.truncate();
     if (sx == 0 && sy == 0) return;
@@ -1236,6 +1300,31 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       !_multiFingerContact &&
       _pointers.length <= 1;
 
+  void _startLongPressTimer() {
+    _longPressTimer?.cancel();
+    _longPressTimer = Timer(_longPressDelay, () {
+      _longPressTimer = null;
+      if (!_canSendMouse || _pointers.length != 1 || _touchDragActive) return;
+      if (_singleTravel >= _tapSlop) return;
+      final pos = _pointers.values.firstOrNull;
+      if (pos == null) return;
+      _touchDragActive = true;
+      if (widget.mode == PointerMode.direct) _sendAbs(pos);
+      sendMouseButton(button: 0, down: true);
+      HapticFeedback.mediumImpact();
+    });
+  }
+
+  /// Stop the press-hold timer and, if a drag is in flight, drop it.
+  void _cancelLongPress() {
+    _longPressTimer?.cancel();
+    _longPressTimer = null;
+    if (_touchDragActive) {
+      sendMouseButton(button: 0, down: false);
+      _touchDragActive = false;
+    }
+  }
+
   double? _twoFingerSpan() {
     if (_pointers.length < 2) return null;
     final pts = _pointers.values.toList(growable: false);
@@ -1257,6 +1346,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _pendingTwoFinger = _pointers.length >= 2;
       return;
     }
+    _cancelLongPress();
     _cancelRelFlush();
     _flushRel();
     _pendingTwoFinger = _pointers.length >= 2;
@@ -1314,6 +1404,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (widget.mode == PointerMode.direct) {
       _sendAbs(local);
     }
+    _startLongPressTimer();
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -1346,6 +1437,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _singleTravel,
       (tracked - _singleOrigin!).distance,
     );
+    // Moving before the hold delay means "move the cursor", not "drag".
+    if (!_touchDragActive && _singleTravel >= _tapSlop) {
+      _longPressTimer?.cancel();
+      _longPressTimer = null;
+    }
     if (widget.mode == PointerMode.direct) {
       _sendAbs(tracked);
     } else {
@@ -1362,6 +1458,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _onMouseUp(event);
       return;
     }
+    final wasDrag = _touchDragActive;
+    _cancelLongPress();
     final countBefore = _pointers.length;
     final activeBefore = _activePointers.length;
     final pendingTwo = _pendingTwoFinger;
@@ -1384,6 +1482,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       } else if (activeBefore == 1 &&
           countBefore == 1 &&
           !pendingTwo &&
+          !wasDrag &&
           !widget.multiTouchSession &&
           origin != null &&
           downAt != null &&
@@ -1437,7 +1536,22 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
         onPointerHover: _onPointerHover,
         onPointerSignal: _onPointerSignal,
         onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
-        child: const SizedBox.expand(),
+        child: Stack(
+          children: [
+            // The remote cursor is the source of truth while controlling —
+            // hide the local one over the video (menus/buttons above this
+            // layer still show theirs).
+            Positioned.fromRect(
+              rect: widget.videoRect,
+              child: MouseRegion(
+                cursor: widget.mouseControlEnabled
+                    ? SystemMouseCursors.none
+                    : MouseCursor.defer,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

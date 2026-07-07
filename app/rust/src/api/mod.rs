@@ -72,6 +72,14 @@ pub fn send_mouse_button(button: u8, down: bool) {
     crate::input::send(streambeam_proto::input::InputEvent::MouseButton { button, down });
 }
 
+/// Forward a key press/release. `vk` is a Windows virtual-key code — the
+/// wire's canonical key encoding (see PROTOCOL.md); viewers map their
+/// platform's key events to VK before sending.
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_key(vk: u16, down: bool) {
+    crate::input::send(streambeam_proto::input::InputEvent::Key { vk, down });
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_gamepad_plug(pad: u8, connected: bool) {
     crate::input::send(streambeam_proto::input::InputEvent::GamepadPlug {

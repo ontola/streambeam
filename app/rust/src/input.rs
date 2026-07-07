@@ -54,6 +54,9 @@ fn coalesce_batch(
     let mut i = 0;
     while i < batch.len() {
         match batch[i] {
+            // Runs of relative moves / scrolls sum; runs of absolute
+            // positions collapse to the newest. Button/key events always
+            // pass through untouched, in order.
             InputEvent::MouseMove { dx, dy } => {
                 let mut sum_dx = i32::from(dx);
                 let mut sum_dy = i32::from(dy);
@@ -72,6 +75,37 @@ fn coalesce_batch(
                     dx: sum_dx.clamp(-32768, 32767) as i16,
                     dy: sum_dy.clamp(-32768, 32767) as i16,
                 });
+                i = j;
+            }
+            InputEvent::Scroll { dx, dy } => {
+                let mut sum_dx = i32::from(dx);
+                let mut sum_dy = i32::from(dy);
+                let mut j = i + 1;
+                while j < batch.len() {
+                    match batch[j] {
+                        InputEvent::Scroll { dx, dy } => {
+                            sum_dx = sum_dx.saturating_add(i32::from(dx));
+                            sum_dy = sum_dy.saturating_add(i32::from(dy));
+                            j += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                out.push(InputEvent::Scroll {
+                    dx: sum_dx.clamp(-32768, 32767) as i16,
+                    dy: sum_dy.clamp(-32768, 32767) as i16,
+                });
+                i = j;
+            }
+            InputEvent::MouseAbs { .. } => {
+                let mut j = i + 1;
+                while j < batch.len() {
+                    match batch[j] {
+                        InputEvent::MouseAbs { .. } => j += 1,
+                        _ => break,
+                    }
+                }
+                out.push(batch[j - 1].clone());
                 i = j;
             }
             ref other => {

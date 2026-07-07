@@ -34,6 +34,9 @@ fn apply_windows(event: InputEvent) {
             InputEvent::Scroll { dx, dy } => {
                 scroll_wheel(dx, dy);
             }
+            InputEvent::Key { vk, down } => {
+                key(vk, down);
+            }
             InputEvent::GamepadPlug { .. } | InputEvent::GamepadState { .. } => {
                 crate::gamepad_inject::apply(event);
             }
@@ -87,19 +90,26 @@ unsafe fn mouse_move(dx: i16, dy: i16) {
 unsafe fn mouse_button(button: u8, down: bool) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, mouse_event,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP,
+        mouse_event,
     };
+    const XBUTTON1: u32 = 1; // back
+    const XBUTTON2: u32 = 2; // forward
 
-    let flags = match (button, down) {
-        (0, true) => MOUSEEVENTF_LEFTDOWN,
-        (0, false) => MOUSEEVENTF_LEFTUP,
-        (1, true) => MOUSEEVENTF_RIGHTDOWN,
-        (1, false) => MOUSEEVENTF_RIGHTUP,
-        (2, true) => MOUSEEVENTF_MIDDLEDOWN,
-        (2, false) => MOUSEEVENTF_MIDDLEUP,
+    let (flags, data) = match (button, down) {
+        (0, true) => (MOUSEEVENTF_LEFTDOWN, 0),
+        (0, false) => (MOUSEEVENTF_LEFTUP, 0),
+        (1, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
+        (1, false) => (MOUSEEVENTF_RIGHTUP, 0),
+        (2, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
+        (2, false) => (MOUSEEVENTF_MIDDLEUP, 0),
+        (3, true) => (MOUSEEVENTF_XDOWN, XBUTTON1),
+        (3, false) => (MOUSEEVENTF_XUP, XBUTTON1),
+        (4, true) => (MOUSEEVENTF_XDOWN, XBUTTON2),
+        (4, false) => (MOUSEEVENTF_XUP, XBUTTON2),
         _ => return,
     };
-    mouse_event(flags, 0, 0, 0, 0);
+    mouse_event(flags, 0, 0, data as i32, 0);
 }
 
 #[cfg(windows)]
@@ -108,13 +118,33 @@ unsafe fn scroll_wheel(dx: i16, dy: i16) {
         MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, mouse_event,
     };
 
-    // Windows wheel delta is in multiples of 120; scale client lines roughly to that.
+    // Wire deltas are wheel units (120 = one notch; see PROTOCOL.md), so
+    // fractional-notch trackpad scrolling stays smooth end-to-end.
     if dy != 0 {
-        let delta = i32::from(dy).saturating_mul(120);
-        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0);
+        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, i32::from(dy), 0);
     }
     if dx != 0 {
-        let delta = i32::from(dx).saturating_mul(120);
-        mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, delta, 0);
+        mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, i32::from(dx), 0);
     }
+}
+
+#[cfg(windows)]
+unsafe fn key(vk: u16, down: bool) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    };
+
+    let input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: if down { 0 } else { KEYEVENTF_KEYUP },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let _ = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
 }

@@ -123,8 +123,9 @@ HostMsg   { PairAck, PairReject { reason }, SessionAccept { session_id, codec, w
 
 ```rust
 InputEvent { MouseMove { dx, dy },                       // coalesced ≤ 250 Hz
-             MouseAbs { x, y, ref_w, ref_h },            // touch; host scales
-             MouseButton { button, down }, Scroll { dx, dy },
+             MouseAbs { x, y, ref_w, ref_h },            // touch/mouse position; host scales
+             MouseButton { button, down },               // 0 left · 1 right · 2 middle · 3 back · 4 forward
+             Scroll { dx, dy },                          // wheel units: ±120 = one notch; fractions allowed (trackpads)
              Key { vk, down },                           // Windows VK codes on the wire
              GamepadState { pad, buttons, lt, rt, lx, ly, rx, ry },  // full state, idempotent
              GamepadPlug { pad, connected } }

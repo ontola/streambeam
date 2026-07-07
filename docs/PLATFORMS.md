@@ -24,9 +24,9 @@ receives. "Control my phone from my PC" needs the host half on the target.
 
 | Platform | As viewer (capture & send) | As host (inject received) |
 |---|---|---|
-| **Windows** | ➖ (no desktop watch yet) | ✅ mouse (SendInput) · ✅ gamepad (VIIPER virtual pad) · ⬜ keyboard (`Key` events currently dropped) |
+| **Windows** | ➖ (no desktop watch yet) | ✅ mouse (SendInput, incl. back/forward buttons + smooth wheel) · ✅ gamepad (VIIPER virtual pad) · 🔨 keyboard (SendInput VK injection landed 2026-07-07; verify on device) |
 | **Android** | ✅ mouse (touch + trackpad) · ✅ gamepad · ⬜ keyboard | ⬜ needs an AccessibilityService / Shizuku — no unrestricted inject API (this is why PC→phone control isn't wired) |
-| **macOS** | ✅ mouse (hover/click/drag/scroll map 1:1 while watching) · ⬜ keyboard | ⬜ CGEvent (needs the Accessibility permission) |
+| **macOS** | ✅ mouse (hover/click/drag/scroll map 1:1 while watching) · ✅ keyboard (physical keys → VK while streaming) | ⬜ CGEvent (needs the Accessibility permission) |
 | **Linux** | ➖ | ⬜ uinput / XTest |
 | **iOS** | ⬜ later | ➖ |
 

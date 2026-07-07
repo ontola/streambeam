@@ -10,216 +10,354 @@ import 'dart:ffi' as ffi;
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 
+abstract class StreambeamFfiApiImplPlatform
+    extends BaseApiImpl<StreambeamFfiWire> {
+  StreambeamFfiApiImplPlatform({
+    required super.handler,
+    required super.wire,
+    required super.generalizedFrbRustBinding,
+    required super.portManager,
+  });
 
+  @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw);
 
+  @protected
+  RustStreamSink<DesktopStreamEvent>
+  dco_decode_StreamSink_desktop_stream_event_Sse(dynamic raw);
 
-                abstract class StreambeamFfiApiImplPlatform extends BaseApiImpl<StreambeamFfiWire> {
-                  StreambeamFfiApiImplPlatform({
-                    required super.handler,
-                    required super.wire,
-                    required super.generalizedFrbRustBinding,
-                    required super.portManager,
-                  });
+  @protected
+  String dco_decode_String(dynamic raw);
 
-                  
+  @protected
+  bool dco_decode_bool(dynamic raw);
 
-                  @protected AnyhowException dco_decode_AnyhowException(dynamic raw);
+  @protected
+  HostPairRequest dco_decode_box_autoadd_host_pair_request(dynamic raw);
 
-@protected RustStreamSink<DesktopStreamEvent> dco_decode_StreamSink_desktop_stream_event_Sse(dynamic raw);
+  @protected
+  SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw);
 
-@protected String dco_decode_String(dynamic raw);
+  @protected
+  DesktopStreamEvent dco_decode_desktop_stream_event(dynamic raw);
 
-@protected bool dco_decode_bool(dynamic raw);
+  @protected
+  DiscoveredHost dco_decode_discovered_host(dynamic raw);
 
-@protected HostPairRequest dco_decode_box_autoadd_host_pair_request(dynamic raw);
+  @protected
+  HostClientInfo dco_decode_host_client_info(dynamic raw);
 
-@protected SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw);
+  @protected
+  HostPairRequest dco_decode_host_pair_request(dynamic raw);
 
-@protected DesktopStreamEvent dco_decode_desktop_stream_event(dynamic raw);
+  @protected
+  HostSnapshot dco_decode_host_snapshot(dynamic raw);
 
-@protected DiscoveredHost dco_decode_discovered_host(dynamic raw);
+  @protected
+  int dco_decode_i_16(dynamic raw);
 
-@protected HostClientInfo dco_decode_host_client_info(dynamic raw);
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
 
-@protected HostPairRequest dco_decode_host_pair_request(dynamic raw);
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
 
-@protected HostSnapshot dco_decode_host_snapshot(dynamic raw);
+  @protected
+  List<DiscoveredHost> dco_decode_list_discovered_host(dynamic raw);
 
-@protected int dco_decode_i_16(dynamic raw);
+  @protected
+  List<HostClientInfo> dco_decode_list_host_client_info(dynamic raw);
 
-@protected PlatformInt64 dco_decode_i_64(dynamic raw);
+  @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
-@protected List<String> dco_decode_list_String(dynamic raw);
+  @protected
+  Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
-@protected List<DiscoveredHost> dco_decode_list_discovered_host(dynamic raw);
+  @protected
+  String? dco_decode_opt_String(dynamic raw);
 
-@protected List<HostClientInfo> dco_decode_list_host_client_info(dynamic raw);
+  @protected
+  HostPairRequest? dco_decode_opt_box_autoadd_host_pair_request(dynamic raw);
 
-@protected List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
+  @protected
+  SavedHostInfo? dco_decode_opt_box_autoadd_saved_host_info(dynamic raw);
 
-@protected Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+  @protected
+  PlaybackDiagnostics dco_decode_playback_diagnostics(dynamic raw);
 
-@protected String? dco_decode_opt_String(dynamic raw);
+  @protected
+  SavedHostInfo dco_decode_saved_host_info(dynamic raw);
 
-@protected HostPairRequest? dco_decode_opt_box_autoadd_host_pair_request(dynamic raw);
+  @protected
+  StreamStats dco_decode_stream_stats(dynamic raw);
 
-@protected SavedHostInfo? dco_decode_opt_box_autoadd_saved_host_info(dynamic raw);
+  @protected
+  int dco_decode_u_16(dynamic raw);
 
-@protected PlaybackDiagnostics dco_decode_playback_diagnostics(dynamic raw);
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
-@protected SavedHostInfo dco_decode_saved_host_info(dynamic raw);
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
-@protected StreamStats dco_decode_stream_stats(dynamic raw);
+  @protected
+  int dco_decode_u_8(dynamic raw);
 
-@protected int dco_decode_u_16(dynamic raw);
+  @protected
+  void dco_decode_unit(dynamic raw);
 
-@protected int dco_decode_u_32(dynamic raw);
+  @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
 
-@protected BigInt dco_decode_u_64(dynamic raw);
+  @protected
+  RustStreamSink<DesktopStreamEvent>
+  sse_decode_StreamSink_desktop_stream_event_Sse(SseDeserializer deserializer);
 
-@protected int dco_decode_u_8(dynamic raw);
+  @protected
+  String sse_decode_String(SseDeserializer deserializer);
 
-@protected void dco_decode_unit(dynamic raw);
+  @protected
+  bool sse_decode_bool(SseDeserializer deserializer);
 
-@protected AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+  @protected
+  HostPairRequest sse_decode_box_autoadd_host_pair_request(
+    SseDeserializer deserializer,
+  );
 
-@protected RustStreamSink<DesktopStreamEvent> sse_decode_StreamSink_desktop_stream_event_Sse(SseDeserializer deserializer);
+  @protected
+  SavedHostInfo sse_decode_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  );
 
-@protected String sse_decode_String(SseDeserializer deserializer);
+  @protected
+  DesktopStreamEvent sse_decode_desktop_stream_event(
+    SseDeserializer deserializer,
+  );
 
-@protected bool sse_decode_bool(SseDeserializer deserializer);
+  @protected
+  DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
 
-@protected HostPairRequest sse_decode_box_autoadd_host_pair_request(SseDeserializer deserializer);
+  @protected
+  HostClientInfo sse_decode_host_client_info(SseDeserializer deserializer);
 
-@protected SavedHostInfo sse_decode_box_autoadd_saved_host_info(SseDeserializer deserializer);
+  @protected
+  HostPairRequest sse_decode_host_pair_request(SseDeserializer deserializer);
 
-@protected DesktopStreamEvent sse_decode_desktop_stream_event(SseDeserializer deserializer);
+  @protected
+  HostSnapshot sse_decode_host_snapshot(SseDeserializer deserializer);
 
-@protected DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
+  @protected
+  int sse_decode_i_16(SseDeserializer deserializer);
 
-@protected HostClientInfo sse_decode_host_client_info(SseDeserializer deserializer);
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
-@protected HostPairRequest sse_decode_host_pair_request(SseDeserializer deserializer);
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<DiscoveredHost> sse_decode_list_discovered_host(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostClientInfo> sse_decode_list_host_client_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
+
+  @protected
+  Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
 
-@protected HostSnapshot sse_decode_host_snapshot(SseDeserializer deserializer);
-
-@protected int sse_decode_i_16(SseDeserializer deserializer);
-
-@protected PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
-
-@protected List<String> sse_decode_list_String(SseDeserializer deserializer);
-
-@protected List<DiscoveredHost> sse_decode_list_discovered_host(SseDeserializer deserializer);
-
-@protected List<HostClientInfo> sse_decode_list_host_client_info(SseDeserializer deserializer);
-
-@protected List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
-
-@protected Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
-
-@protected String? sse_decode_opt_String(SseDeserializer deserializer);
-
-@protected HostPairRequest? sse_decode_opt_box_autoadd_host_pair_request(SseDeserializer deserializer);
-
-@protected SavedHostInfo? sse_decode_opt_box_autoadd_saved_host_info(SseDeserializer deserializer);
-
-@protected PlaybackDiagnostics sse_decode_playback_diagnostics(SseDeserializer deserializer);
-
-@protected SavedHostInfo sse_decode_saved_host_info(SseDeserializer deserializer);
-
-@protected StreamStats sse_decode_stream_stats(SseDeserializer deserializer);
-
-@protected int sse_decode_u_16(SseDeserializer deserializer);
-
-@protected int sse_decode_u_32(SseDeserializer deserializer);
-
-@protected BigInt sse_decode_u_64(SseDeserializer deserializer);
-
-@protected int sse_decode_u_8(SseDeserializer deserializer);
-
-@protected void sse_decode_unit(SseDeserializer deserializer);
-
-@protected int sse_decode_i_32(SseDeserializer deserializer);
-
-@protected void sse_encode_AnyhowException(AnyhowException self, SseSerializer serializer);
-
-@protected void sse_encode_StreamSink_desktop_stream_event_Sse(RustStreamSink<DesktopStreamEvent> self, SseSerializer serializer);
-
-@protected void sse_encode_String(String self, SseSerializer serializer);
-
-@protected void sse_encode_bool(bool self, SseSerializer serializer);
-
-@protected void sse_encode_box_autoadd_host_pair_request(HostPairRequest self, SseSerializer serializer);
-
-@protected void sse_encode_box_autoadd_saved_host_info(SavedHostInfo self, SseSerializer serializer);
-
-@protected void sse_encode_desktop_stream_event(DesktopStreamEvent self, SseSerializer serializer);
-
-@protected void sse_encode_discovered_host(DiscoveredHost self, SseSerializer serializer);
-
-@protected void sse_encode_host_client_info(HostClientInfo self, SseSerializer serializer);
-
-@protected void sse_encode_host_pair_request(HostPairRequest self, SseSerializer serializer);
-
-@protected void sse_encode_host_snapshot(HostSnapshot self, SseSerializer serializer);
-
-@protected void sse_encode_i_16(int self, SseSerializer serializer);
-
-@protected void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
-
-@protected void sse_encode_list_String(List<String> self, SseSerializer serializer);
-
-@protected void sse_encode_list_discovered_host(List<DiscoveredHost> self, SseSerializer serializer);
-
-@protected void sse_encode_list_host_client_info(List<HostClientInfo> self, SseSerializer serializer);
-
-@protected void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
-
-@protected void sse_encode_list_prim_u_8_strict(Uint8List self, SseSerializer serializer);
-
-@protected void sse_encode_opt_String(String? self, SseSerializer serializer);
-
-@protected void sse_encode_opt_box_autoadd_host_pair_request(HostPairRequest? self, SseSerializer serializer);
-
-@protected void sse_encode_opt_box_autoadd_saved_host_info(SavedHostInfo? self, SseSerializer serializer);
-
-@protected void sse_encode_playback_diagnostics(PlaybackDiagnostics self, SseSerializer serializer);
-
-@protected void sse_encode_saved_host_info(SavedHostInfo self, SseSerializer serializer);
-
-@protected void sse_encode_stream_stats(StreamStats self, SseSerializer serializer);
-
-@protected void sse_encode_u_16(int self, SseSerializer serializer);
-
-@protected void sse_encode_u_32(int self, SseSerializer serializer);
-
-@protected void sse_encode_u_64(BigInt self, SseSerializer serializer);
-
-@protected void sse_encode_u_8(int self, SseSerializer serializer);
-
-@protected void sse_encode_unit(void self, SseSerializer serializer);
-
-@protected void sse_encode_i_32(int self, SseSerializer serializer);
-                }
-                
-
+  @protected
+  HostPairRequest? sse_decode_opt_box_autoadd_host_pair_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SavedHostInfo? sse_decode_opt_box_autoadd_saved_host_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PlaybackDiagnostics sse_decode_playback_diagnostics(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SavedHostInfo sse_decode_saved_host_info(SseDeserializer deserializer);
+
+  @protected
+  StreamStats sse_decode_stream_stats(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_8(SseDeserializer deserializer);
+
+  @protected
+  void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_desktop_stream_event_Sse(
+    RustStreamSink<DesktopStreamEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_host_pair_request(
+    HostPairRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_saved_host_info(
+    SavedHostInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_desktop_stream_event(
+    DesktopStreamEvent self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_discovered_host(
+    DiscoveredHost self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_client_info(
+    HostClientInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_pair_request(
+    HostPairRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_snapshot(HostSnapshot self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_discovered_host(
+    List<DiscoveredHost> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_client_info(
+    List<HostClientInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_u_8_strict(
+    Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_host_pair_request(
+    HostPairRequest? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_saved_host_info(
+    SavedHostInfo? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_playback_diagnostics(
+    PlaybackDiagnostics self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_saved_host_info(SavedHostInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_stream_stats(StreamStats self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_8(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
+}
 
 // Section: wire_class
 
+class StreambeamFfiWire implements BaseWire {
+  factory StreambeamFfiWire.fromExternalLibrary(ExternalLibrary lib) =>
+      StreambeamFfiWire(lib.ffiDynamicLibrary);
 
-        class StreambeamFfiWire implements BaseWire {
+  /// Holds the symbol lookup function.
+  final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
+  _lookup;
 
-            factory StreambeamFfiWire.fromExternalLibrary(ExternalLibrary lib) =>
-              StreambeamFfiWire(lib.ffiDynamicLibrary);
-        
-            /// Holds the symbol lookup function.
-            final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
-                _lookup;
-  
-            /// The symbols are looked up in [dynamicLibrary].
-            StreambeamFfiWire(ffi.DynamicLibrary dynamicLibrary)
-                : _lookup = dynamicLibrary.lookup;
-
-            
-        }
-        
+  /// The symbols are looked up in [dynamicLibrary].
+  StreambeamFfiWire(ffi.DynamicLibrary dynamicLibrary)
+    : _lookup = dynamicLibrary.lookup;
+}

@@ -6,69 +6,170 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-
-            // These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `play_stream_desktop_inner`, `play_stream_desktop_known_inner`, `receive_stats`
+// These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `play_stream_desktop_inner`, `play_stream_desktop_known_inner`, `receive_stats`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
+BigInt playbackFramesRendered() =>
+    StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
 
-            BigInt  playbackFramesRendered() => StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
+PlaybackDiagnostics playbackDiagnostics() =>
+    StreambeamFfi.instance.api.crateApiPlaybackDiagnostics();
 
-PlaybackDiagnostics  playbackDiagnostics() => StreambeamFfi.instance.api.crateApiPlaybackDiagnostics();
+void sendMouseMove({required int dx, required int dy}) =>
+    StreambeamFfi.instance.api.crateApiSendMouseMove(dx: dx, dy: dy);
 
-void  sendMouseMove({required int dx , required int dy }) => StreambeamFfi.instance.api.crateApiSendMouseMove(dx: dx, dy: dy);
+void sendMouseScroll({required int dx, required int dy}) =>
+    StreambeamFfi.instance.api.crateApiSendMouseScroll(dx: dx, dy: dy);
 
-void  sendMouseScroll({required int dx , required int dy }) => StreambeamFfi.instance.api.crateApiSendMouseScroll(dx: dx, dy: dy);
+void sendMouseAbs({
+  required int x,
+  required int y,
+  required int refW,
+  required int refH,
+}) => StreambeamFfi.instance.api.crateApiSendMouseAbs(
+  x: x,
+  y: y,
+  refW: refW,
+  refH: refH,
+);
 
-void  sendMouseAbs({required int x , required int y , required int refW , required int refH }) => StreambeamFfi.instance.api.crateApiSendMouseAbs(x: x, y: y, refW: refW, refH: refH);
-
-void  sendMouseClick({required int button }) => StreambeamFfi.instance.api.crateApiSendMouseClick(button: button);
+void sendMouseClick({required int button}) =>
+    StreambeamFfi.instance.api.crateApiSendMouseClick(button: button);
 
 /// Separate press/release — needed for drag & text selection with a real
 /// mouse (desktop watch); [`send_mouse_click`] stays for tap semantics.
-void  sendMouseButton({required int button , required bool down }) => StreambeamFfi.instance.api.crateApiSendMouseButton(button: button, down: down);
+void sendMouseButton({required int button, required bool down}) => StreambeamFfi
+    .instance
+    .api
+    .crateApiSendMouseButton(button: button, down: down);
 
-void  sendGamepadPlug({required int pad , required bool connected }) => StreambeamFfi.instance.api.crateApiSendGamepadPlug(pad: pad, connected: connected);
+/// Forward a key press/release. `vk` is a Windows virtual-key code — the
+/// wire's canonical key encoding (see PROTOCOL.md); viewers map their
+/// platform's key events to VK before sending.
+void sendKey({required int vk, required bool down}) =>
+    StreambeamFfi.instance.api.crateApiSendKey(vk: vk, down: down);
 
-void  sendGamepadState({required int pad , required int buttons , required int lt , required int rt , required int lx , required int ly , required int rx , required int ry }) => StreambeamFfi.instance.api.crateApiSendGamepadState(pad: pad, buttons: buttons, lt: lt, rt: rt, lx: lx, ly: ly, rx: rx, ry: ry);
+void sendGamepadPlug({required int pad, required bool connected}) =>
+    StreambeamFfi.instance.api.crateApiSendGamepadPlug(
+      pad: pad,
+      connected: connected,
+    );
+
+void sendGamepadState({
+  required int pad,
+  required int buttons,
+  required int lt,
+  required int rt,
+  required int lx,
+  required int ly,
+  required int rx,
+  required int ry,
+}) => StreambeamFfi.instance.api.crateApiSendGamepadState(
+  pad: pad,
+  buttons: buttons,
+  lt: lt,
+  rt: rt,
+  lx: lx,
+  ly: ly,
+  rx: rx,
+  ry: ry,
+);
 
 /// Call once at startup with the app documents directory (Android/iOS).
-Future<void>  setAppDataDir({required String dir }) => StreambeamFfi.instance.api.crateApiSetAppDataDir(dir: dir);
+Future<void> setAppDataDir({required String dir}) =>
+    StreambeamFfi.instance.api.crateApiSetAppDataDir(dir: dir);
 
 /// Set the name peers see for this device (client name when watching, host name
 /// when beaming). Call at startup with the platform device name.
-void  setDeviceName({required String name }) => StreambeamFfi.instance.api.crateApiSetDeviceName(name: name);
+void setDeviceName({required String name}) =>
+    StreambeamFfi.instance.api.crateApiSetDeviceName(name: name);
 
-String  streambeamVersion() => StreambeamFfi.instance.api.crateApiStreambeamVersion();
+String streambeamVersion() =>
+    StreambeamFfi.instance.api.crateApiStreambeamVersion();
 
-String?  savedHostLabel() => StreambeamFfi.instance.api.crateApiSavedHostLabel();
+String? savedHostLabel() => StreambeamFfi.instance.api.crateApiSavedHostLabel();
 
-SavedHostInfo?  loadSavedHostInfo() => StreambeamFfi.instance.api.crateApiLoadSavedHostInfo();
+SavedHostInfo? loadSavedHostInfo() =>
+    StreambeamFfi.instance.api.crateApiLoadSavedHostInfo();
 
 /// Persist host pubkey/addrs from a scanned `sbm1:` payload for later reconnect.
-Future<void>  saveHostFromPayload({required String payload }) => StreambeamFfi.instance.api.crateApiSaveHostFromPayload(payload: payload);
+Future<void> saveHostFromPayload({required String payload}) =>
+    StreambeamFfi.instance.api.crateApiSaveHostFromPayload(payload: payload);
 
 /// Remove the saved host so Watch / reconnect is unavailable until paired again.
-Future<void>  forgetSavedHost() => StreambeamFfi.instance.api.crateApiForgetSavedHost();
+Future<void> forgetSavedHost() =>
+    StreambeamFfi.instance.api.crateApiForgetSavedHost();
 
-Future<List<DiscoveredHost>>  discoverHosts({required int timeoutMs }) => StreambeamFfi.instance.api.crateApiDiscoverHosts(timeoutMs: timeoutMs);
+Future<List<DiscoveredHost>> discoverHosts({required int timeoutMs}) =>
+    StreambeamFfi.instance.api.crateApiDiscoverHosts(timeoutMs: timeoutMs);
 
 /// Connect to a host found on the LAN (QR not required; approve on PC if new).
 /// `max_width`/`max_height`/`max_fps` should be this device's real display
 /// capability (Dart reads it via `dart:ui`'s `Display` API — see
 /// `stream_player.dart`) so the host can encode at a resolution/frame rate
 /// that's actually worth sending, not a fixed guess.
-Future<StreamStats>  playDiscoveredHost({required String hostName , required List<int> hostPubkey , required String addr , required PlatformInt64 nativeWindow , required int maxVideoFrames , required int maxWidth , required int maxHeight , required int maxFps }) => StreambeamFfi.instance.api.crateApiPlayDiscoveredHost(hostName: hostName, hostPubkey: hostPubkey, addr: addr, nativeWindow: nativeWindow, maxVideoFrames: maxVideoFrames, maxWidth: maxWidth, maxHeight: maxHeight, maxFps: maxFps);
+Future<StreamStats> playDiscoveredHost({
+  required String hostName,
+  required List<int> hostPubkey,
+  required String addr,
+  required PlatformInt64 nativeWindow,
+  required int maxVideoFrames,
+  required int maxWidth,
+  required int maxHeight,
+  required int maxFps,
+}) => StreambeamFfi.instance.api.crateApiPlayDiscoveredHost(
+  hostName: hostName,
+  hostPubkey: hostPubkey,
+  addr: addr,
+  nativeWindow: nativeWindow,
+  maxVideoFrames: maxVideoFrames,
+  maxWidth: maxWidth,
+  maxHeight: maxHeight,
+  maxFps: maxFps,
+);
 
 /// Pair, start session, and receive up to `max_video_frames` (for M3 stats / soak).
-Future<StreamStats>  connectAndReceive({required String payload , required int maxVideoFrames }) => StreambeamFfi.instance.api.crateApiConnectAndReceive(payload: payload, maxVideoFrames: maxVideoFrames);
+Future<StreamStats> connectAndReceive({
+  required String payload,
+  required int maxVideoFrames,
+}) => StreambeamFfi.instance.api.crateApiConnectAndReceive(
+  payload: payload,
+  maxVideoFrames: maxVideoFrames,
+);
 
 /// Decode and render video to an Android Surface (`native_window` = `ANativeWindow*`).
 /// See `play_discovered_host`'s doc for `max_width`/`max_height`/`max_fps`.
-Future<StreamStats>  playStream({required String payload , required PlatformInt64 nativeWindow , required int maxVideoFrames , required int maxWidth , required int maxHeight , required int maxFps }) => StreambeamFfi.instance.api.crateApiPlayStream(payload: payload, nativeWindow: nativeWindow, maxVideoFrames: maxVideoFrames, maxWidth: maxWidth, maxHeight: maxHeight, maxFps: maxFps);
+Future<StreamStats> playStream({
+  required String payload,
+  required PlatformInt64 nativeWindow,
+  required int maxVideoFrames,
+  required int maxWidth,
+  required int maxHeight,
+  required int maxFps,
+}) => StreambeamFfi.instance.api.crateApiPlayStream(
+  payload: payload,
+  nativeWindow: nativeWindow,
+  maxVideoFrames: maxVideoFrames,
+  maxWidth: maxWidth,
+  maxHeight: maxHeight,
+  maxFps: maxFps,
+);
 
 /// Reconnect to the last paired host without rescanning QR (host must still trust this client).
 /// See `play_discovered_host`'s doc for `max_width`/`max_height`/`max_fps`.
-Future<StreamStats>  reconnectPlayStream({required PlatformInt64 nativeWindow , required int maxVideoFrames , required int maxWidth , required int maxHeight , required int maxFps }) => StreambeamFfi.instance.api.crateApiReconnectPlayStream(nativeWindow: nativeWindow, maxVideoFrames: maxVideoFrames, maxWidth: maxWidth, maxHeight: maxHeight, maxFps: maxFps);
+Future<StreamStats> reconnectPlayStream({
+  required PlatformInt64 nativeWindow,
+  required int maxVideoFrames,
+  required int maxWidth,
+  required int maxHeight,
+  required int maxFps,
+}) => StreambeamFfi.instance.api.crateApiReconnectPlayStream(
+  nativeWindow: nativeWindow,
+  maxVideoFrames: maxVideoFrames,
+  maxWidth: maxWidth,
+  maxHeight: maxHeight,
+  maxFps: maxFps,
+);
 
 /// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
 /// and stream H.264 access units to the platform decoder (VideoToolbox on
@@ -78,254 +179,341 @@ Future<StreamStats>  reconnectPlayStream({required PlatformInt64 nativeWindow , 
 /// the function's own `Result`: the generated binding fires that future
 /// `unawaited`, so a returned `Err` becomes an unhandled Dart exception the
 /// UI never sees.
-Stream<DesktopStreamEvent>  playStreamDesktop({required String payload }) => StreambeamFfi.instance.api.crateApiPlayStreamDesktop(payload: payload);
+Stream<DesktopStreamEvent> playStreamDesktop({required String payload}) =>
+    StreambeamFfi.instance.api.crateApiPlayStreamDesktop(payload: payload);
 
 /// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
 /// uses the pinned key; the host prompts to approve on first contact).
 /// Errors go through the sink — see [`play_stream_desktop`].
-Stream<DesktopStreamEvent>  playStreamDesktopKnown({required String hostName , required List<int> hostPubkey , required String addr }) => StreambeamFfi.instance.api.crateApiPlayStreamDesktopKnown(hostName: hostName, hostPubkey: hostPubkey, addr: addr);
+Stream<DesktopStreamEvent> playStreamDesktopKnown({
+  required String hostName,
+  required List<int> hostPubkey,
+  required String addr,
+}) => StreambeamFfi.instance.api.crateApiPlayStreamDesktopKnown(
+  hostName: hostName,
+  hostPubkey: hostPubkey,
+  addr: addr,
+);
 
-bool  hostPlatformSupported() => StreambeamFfi.instance.api.crateApiHostPlatformSupported();
+bool hostPlatformSupported() =>
+    StreambeamFfi.instance.api.crateApiHostPlatformSupported();
 
-void  startHost({String? hostName , String? listen , required int fps , required int maxEncodeDim }) => StreambeamFfi.instance.api.crateApiStartHost(hostName: hostName, listen: listen, fps: fps, maxEncodeDim: maxEncodeDim);
+void startHost({
+  String? hostName,
+  String? listen,
+  required int fps,
+  required int maxEncodeDim,
+}) => StreambeamFfi.instance.api.crateApiStartHost(
+  hostName: hostName,
+  listen: listen,
+  fps: fps,
+  maxEncodeDim: maxEncodeDim,
+);
 
-void  stopHost() => StreambeamFfi.instance.api.crateApiStopHost();
+void stopHost() => StreambeamFfi.instance.api.crateApiStopHost();
 
-HostSnapshot  hostSnapshot() => StreambeamFfi.instance.api.crateApiHostSnapshot();
+HostSnapshot hostSnapshot() =>
+    StreambeamFfi.instance.api.crateApiHostSnapshot();
 
-void  hostSetDiscoverable({required bool on_ }) => StreambeamFfi.instance.api.crateApiHostSetDiscoverable(on_: on_);
+void hostSetDiscoverable({required bool on_}) =>
+    StreambeamFfi.instance.api.crateApiHostSetDiscoverable(on_: on_);
 
-void  hostSetAcceptsConnections({required bool on_ }) => StreambeamFfi.instance.api.crateApiHostSetAcceptsConnections(on_: on_);
+void hostSetAcceptsConnections({required bool on_}) =>
+    StreambeamFfi.instance.api.crateApiHostSetAcceptsConnections(on_: on_);
 
-bool  hostDisconnectClient({required String addr }) => StreambeamFfi.instance.api.crateApiHostDisconnectClient(addr: addr);
+bool hostDisconnectClient({required String addr}) =>
+    StreambeamFfi.instance.api.crateApiHostDisconnectClient(addr: addr);
 
-bool  hostForgetClient({required String addr }) => StreambeamFfi.instance.api.crateApiHostForgetClient(addr: addr);
+bool hostForgetClient({required String addr}) =>
+    StreambeamFfi.instance.api.crateApiHostForgetClient(addr: addr);
 
-bool  hostRespondPairing({required BigInt id , required bool allow }) => StreambeamFfi.instance.api.crateApiHostRespondPairing(id: id, allow: allow);
+bool hostRespondPairing({required BigInt id, required bool allow}) =>
+    StreambeamFfi.instance.api.crateApiHostRespondPairing(id: id, allow: allow);
 
-            /// One event on the desktop watch stream. The first event is the config
+/// One event on the desktop watch stream. The first event is the config
 /// (`is_config = true`, geometry + SPS/PPS); every later event is a frame
 /// (`is_config = false`, `data` = one Annex-B access unit). A plain struct
 /// (not an enum) so the Dart side needs no `freezed` codegen.
-class DesktopStreamEvent  {
-                final bool isConfig;
-final Uint8List codecConfig;
-final int width;
-final int height;
-final int fps;
-final Uint8List data;
-final bool keyframe;
+class DesktopStreamEvent {
+  final bool isConfig;
+  final Uint8List codecConfig;
+  final int width;
+  final int height;
+  final int fps;
+  final Uint8List data;
+  final bool keyframe;
 
-                const DesktopStreamEvent({required this.isConfig ,required this.codecConfig ,required this.width ,required this.height ,required this.fps ,required this.data ,required this.keyframe ,});
+  const DesktopStreamEvent({
+    required this.isConfig,
+    required this.codecConfig,
+    required this.width,
+    required this.height,
+    required this.fps,
+    required this.data,
+    required this.keyframe,
+  });
 
-                
-                
+  @override
+  int get hashCode =>
+      isConfig.hashCode ^
+      codecConfig.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      fps.hashCode ^
+      data.hashCode ^
+      keyframe.hashCode;
 
-                
-        @override
-        int get hashCode => isConfig.hashCode^codecConfig.hashCode^width.hashCode^height.hashCode^fps.hashCode^data.hashCode^keyframe.hashCode;
-        
-
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is DesktopStreamEvent &&
-                runtimeType == other.runtimeType
-                && isConfig == other.isConfig&& codecConfig == other.codecConfig&& width == other.width&& height == other.height&& fps == other.fps&& data == other.data&& keyframe == other.keyframe;
-        
-            }
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DesktopStreamEvent &&
+          runtimeType == other.runtimeType &&
+          isConfig == other.isConfig &&
+          codecConfig == other.codecConfig &&
+          width == other.width &&
+          height == other.height &&
+          fps == other.fps &&
+          data == other.data &&
+          keyframe == other.keyframe;
+}
 
 /// LAN hosts advertising via mDNS.
-class DiscoveredHost  {
-                final String name;
-final int port;
-final List<String> addrs;
-/// Host Ed25519 public key (32 bytes) from mDNS; empty if host is too old.
-final Uint8List hostPubkey;
+class DiscoveredHost {
+  final String name;
+  final int port;
+  final List<String> addrs;
 
-                const DiscoveredHost({required this.name ,required this.port ,required this.addrs ,required this.hostPubkey ,});
+  /// Host Ed25519 public key (32 bytes) from mDNS; empty if host is too old.
+  final Uint8List hostPubkey;
 
-                
-                
+  const DiscoveredHost({
+    required this.name,
+    required this.port,
+    required this.addrs,
+    required this.hostPubkey,
+  });
 
-                
-        @override
-        int get hashCode => name.hashCode^port.hashCode^addrs.hashCode^hostPubkey.hashCode;
-        
+  @override
+  int get hashCode =>
+      name.hashCode ^ port.hashCode ^ addrs.hashCode ^ hostPubkey.hashCode;
 
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is DiscoveredHost &&
-                runtimeType == other.runtimeType
-                && name == other.name&& port == other.port&& addrs == other.addrs&& hostPubkey == other.hostPubkey;
-        
-            }
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DiscoveredHost &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          port == other.port &&
+          addrs == other.addrs &&
+          hostPubkey == other.hostPubkey;
+}
 
-class HostClientInfo  {
-                final String name;
-final String addr;
-final Uint8List hostPubkey;
+class HostClientInfo {
+  final String name;
+  final String addr;
+  final Uint8List hostPubkey;
 
-                const HostClientInfo({required this.name ,required this.addr ,required this.hostPubkey ,});
+  const HostClientInfo({
+    required this.name,
+    required this.addr,
+    required this.hostPubkey,
+  });
 
-                
-                
+  @override
+  int get hashCode => name.hashCode ^ addr.hashCode ^ hostPubkey.hashCode;
 
-                
-        @override
-        int get hashCode => name.hashCode^addr.hashCode^hostPubkey.hashCode;
-        
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostClientInfo &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          addr == other.addr &&
+          hostPubkey == other.hostPubkey;
+}
 
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is HostClientInfo &&
-                runtimeType == other.runtimeType
-                && name == other.name&& addr == other.addr&& hostPubkey == other.hostPubkey;
-        
-            }
+class HostPairRequest {
+  final BigInt id;
+  final String clientName;
+  final String clientAddr;
 
-class HostPairRequest  {
-                final BigInt id;
-final String clientName;
-final String clientAddr;
+  const HostPairRequest({
+    required this.id,
+    required this.clientName,
+    required this.clientAddr,
+  });
 
-                const HostPairRequest({required this.id ,required this.clientName ,required this.clientAddr ,});
+  @override
+  int get hashCode => id.hashCode ^ clientName.hashCode ^ clientAddr.hashCode;
 
-                
-                
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostPairRequest &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          clientName == other.clientName &&
+          clientAddr == other.clientAddr;
+}
 
-                
-        @override
-        int get hashCode => id.hashCode^clientName.hashCode^clientAddr.hashCode;
-        
+class HostSnapshot {
+  final bool running;
+  final String hostName;
+  final String listenAddr;
+  final String? pairingLink;
+  final String? pairingPayload;
+  final String? error;
+  final bool discoverable;
+  final bool acceptsConnections;
+  final List<HostClientInfo> clients;
+  final HostPairRequest? pendingApproval;
 
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is HostPairRequest &&
-                runtimeType == other.runtimeType
-                && id == other.id&& clientName == other.clientName&& clientAddr == other.clientAddr;
-        
-            }
+  const HostSnapshot({
+    required this.running,
+    required this.hostName,
+    required this.listenAddr,
+    this.pairingLink,
+    this.pairingPayload,
+    this.error,
+    required this.discoverable,
+    required this.acceptsConnections,
+    required this.clients,
+    this.pendingApproval,
+  });
 
-class HostSnapshot  {
-                final bool running;
-final String hostName;
-final String listenAddr;
-final String? pairingLink;
-final String? pairingPayload;
-final String? error;
-final bool discoverable;
-final bool acceptsConnections;
-final List<HostClientInfo> clients;
-final HostPairRequest? pendingApproval;
+  @override
+  int get hashCode =>
+      running.hashCode ^
+      hostName.hashCode ^
+      listenAddr.hashCode ^
+      pairingLink.hashCode ^
+      pairingPayload.hashCode ^
+      error.hashCode ^
+      discoverable.hashCode ^
+      acceptsConnections.hashCode ^
+      clients.hashCode ^
+      pendingApproval.hashCode;
 
-                const HostSnapshot({required this.running ,required this.hostName ,required this.listenAddr ,this.pairingLink ,this.pairingPayload ,this.error ,required this.discoverable ,required this.acceptsConnections ,required this.clients ,this.pendingApproval ,});
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSnapshot &&
+          runtimeType == other.runtimeType &&
+          running == other.running &&
+          hostName == other.hostName &&
+          listenAddr == other.listenAddr &&
+          pairingLink == other.pairingLink &&
+          pairingPayload == other.pairingPayload &&
+          error == other.error &&
+          discoverable == other.discoverable &&
+          acceptsConnections == other.acceptsConnections &&
+          clients == other.clients &&
+          pendingApproval == other.pendingApproval;
+}
 
-                
-                
+class PlaybackDiagnostics {
+  final int width;
+  final int height;
+  final int fps;
+  final String codec;
+  final BigInt bytesReceived;
+  final BigInt framesRendered;
 
-                
-        @override
-        int get hashCode => running.hashCode^hostName.hashCode^listenAddr.hashCode^pairingLink.hashCode^pairingPayload.hashCode^error.hashCode^discoverable.hashCode^acceptsConnections.hashCode^clients.hashCode^pendingApproval.hashCode;
-        
+  const PlaybackDiagnostics({
+    required this.width,
+    required this.height,
+    required this.fps,
+    required this.codec,
+    required this.bytesReceived,
+    required this.framesRendered,
+  });
 
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is HostSnapshot &&
-                runtimeType == other.runtimeType
-                && running == other.running&& hostName == other.hostName&& listenAddr == other.listenAddr&& pairingLink == other.pairingLink&& pairingPayload == other.pairingPayload&& error == other.error&& discoverable == other.discoverable&& acceptsConnections == other.acceptsConnections&& clients == other.clients&& pendingApproval == other.pendingApproval;
-        
-            }
+  @override
+  int get hashCode =>
+      width.hashCode ^
+      height.hashCode ^
+      fps.hashCode ^
+      codec.hashCode ^
+      bytesReceived.hashCode ^
+      framesRendered.hashCode;
 
-class PlaybackDiagnostics  {
-                final int width;
-final int height;
-final int fps;
-final String codec;
-final BigInt bytesReceived;
-final BigInt framesRendered;
-
-                const PlaybackDiagnostics({required this.width ,required this.height ,required this.fps ,required this.codec ,required this.bytesReceived ,required this.framesRendered ,});
-
-                
-                
-
-                
-        @override
-        int get hashCode => width.hashCode^height.hashCode^fps.hashCode^codec.hashCode^bytesReceived.hashCode^framesRendered.hashCode;
-        
-
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is PlaybackDiagnostics &&
-                runtimeType == other.runtimeType
-                && width == other.width&& height == other.height&& fps == other.fps&& codec == other.codec&& bytesReceived == other.bytesReceived&& framesRendered == other.framesRendered;
-        
-            }
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaybackDiagnostics &&
+          runtimeType == other.runtimeType &&
+          width == other.width &&
+          height == other.height &&
+          fps == other.fps &&
+          codec == other.codec &&
+          bytesReceived == other.bytesReceived &&
+          framesRendered == other.framesRendered;
+}
 
 /// Saved host details for the device list (shown even when offline).
-class SavedHostInfo  {
-                final String name;
-final int port;
-final List<String> addrs;
-final Uint8List hostPubkey;
+class SavedHostInfo {
+  final String name;
+  final int port;
+  final List<String> addrs;
+  final Uint8List hostPubkey;
 
-                const SavedHostInfo({required this.name ,required this.port ,required this.addrs ,required this.hostPubkey ,});
+  const SavedHostInfo({
+    required this.name,
+    required this.port,
+    required this.addrs,
+    required this.hostPubkey,
+  });
 
-                
-                
+  @override
+  int get hashCode =>
+      name.hashCode ^ port.hashCode ^ addrs.hashCode ^ hostPubkey.hashCode;
 
-                
-        @override
-        int get hashCode => name.hashCode^port.hashCode^addrs.hashCode^hostPubkey.hashCode;
-        
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SavedHostInfo &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          port == other.port &&
+          addrs == other.addrs &&
+          hostPubkey == other.hostPubkey;
+}
 
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is SavedHostInfo &&
-                runtimeType == other.runtimeType
-                && name == other.name&& port == other.port&& addrs == other.addrs&& hostPubkey == other.hostPubkey;
-        
-            }
+class StreamStats {
+  final int width;
+  final int height;
+  final int fps;
+  final String codec;
+  final BigInt videoFrames;
+  final BigInt audioPackets;
 
-class StreamStats  {
-                final int width;
-final int height;
-final int fps;
-final String codec;
-final BigInt videoFrames;
-final BigInt audioPackets;
+  const StreamStats({
+    required this.width,
+    required this.height,
+    required this.fps,
+    required this.codec,
+    required this.videoFrames,
+    required this.audioPackets,
+  });
 
-                const StreamStats({required this.width ,required this.height ,required this.fps ,required this.codec ,required this.videoFrames ,required this.audioPackets ,});
+  @override
+  int get hashCode =>
+      width.hashCode ^
+      height.hashCode ^
+      fps.hashCode ^
+      codec.hashCode ^
+      videoFrames.hashCode ^
+      audioPackets.hashCode;
 
-                
-                
-
-                
-        @override
-        int get hashCode => width.hashCode^height.hashCode^fps.hashCode^codec.hashCode^videoFrames.hashCode^audioPackets.hashCode;
-        
-
-                
-        @override
-        bool operator ==(Object other) =>
-            identical(this, other) ||
-            other is StreamStats &&
-                runtimeType == other.runtimeType
-                && width == other.width&& height == other.height&& fps == other.fps&& codec == other.codec&& videoFrames == other.videoFrames&& audioPackets == other.audioPackets;
-        
-            }
-            
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StreamStats &&
+          runtimeType == other.runtimeType &&
+          width == other.width &&
+          height == other.height &&
+          fps == other.fps &&
+          codec == other.codec &&
+          videoFrames == other.videoFrames &&
+          audioPackets == other.audioPackets;
+}
