@@ -17,6 +17,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     private var formatDesc: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
     private var latest: CVPixelBuffer?
+    private var disposed = false
     private let lock = NSLock()
 
     /// MetalFXUpscaler when supported (macOS 13+, Metal GPU); typed `AnyObject`
@@ -207,21 +208,28 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             frame = scaled
         }
         lock.lock()
+        // A decode callback can land after dispose() (async decompression);
+        // marking an unregistered texture trips kInternalInconsistency.
+        guard !disposed else {
+            lock.unlock()
+            return
+        }
         latest = frame
         lock.unlock()
         registry.textureFrameAvailable(textureId)
     }
 
     func dispose() {
+        lock.lock()
+        disposed = true
+        latest = nil
+        lock.unlock()
         if let session = session {
             VTDecompressionSessionWaitForAsynchronousFrames(session)
             VTDecompressionSessionInvalidate(session)
         }
         session = nil
         formatDesc = nil
-        lock.lock()
-        latest = nil
-        lock.unlock()
         registry.unregisterTexture(textureId)
     }
 
