@@ -261,12 +261,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   final _streamKeyFocus = FocusNode(debugLabel: 'stream-keys');
   final _pressedVks = <int>{};
 
+  /// Keys keep forwarding with the docked sidebar open — it sits beside the
+  /// video, not over it.
   bool get _keyForwardingActive =>
       widget.inputSupported &&
       !widget.touchControls &&
       widget.isStreaming &&
       _hasVideo &&
-      !_menuOpen &&
       !_keyboardOpen;
 
   KeyEventResult _onStreamKeyEvent(FocusNode node, KeyEvent event) {
@@ -324,7 +325,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     // before showing the player) — didUpdateWidget won't fire for that.
     if (widget.isStreaming) {
       _hintPlayed = true;
-      _hintController.forward(from: 0);
+      if (widget.touchControls) _hintController.forward(from: 0);
       _beginVideoWatch();
       _beginDiagnostics();
     }
@@ -353,7 +354,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (widget.isStreaming && !oldWidget.isStreaming && !_hintPlayed) {
       _hintPlayed = true;
       _panelSide = _lastMenuSide;
-      _hintController.forward(from: 0);
+      // The peek hint only makes sense for the touch overlay; the docked
+      // sidebar (mouse) opens via the menu button instead.
+      if (widget.touchControls) _hintController.forward(from: 0);
     }
     if (widget.isStreaming && !oldWidget.isStreaming) {
       _beginVideoWatch();
@@ -597,12 +600,16 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     return _menuWidth - visible;
   }
 
+  /// Overlay mode only (touch): the docked sidebar never covers the video,
+  /// so it neither blocks the pointer nor needs a scrim.
   bool get _menuBlocksPointer =>
-      _menuOpen ||
-      _edgeDragActive ||
-      (_menuVisibleWidth > 12 && !_hintController.isAnimating);
+      widget.touchControls &&
+      (_menuOpen ||
+          _edgeDragActive ||
+          (_menuVisibleWidth > 12 && !_hintController.isAnimating));
 
   bool get _showMenuScrim =>
+      widget.touchControls &&
       (_menuVisibleWidth > 20 || _edgeDragActive) &&
       !_hintController.isAnimating;
 
@@ -615,33 +622,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     child: const SizedBox(width: 20),
   );
 
-  Widget _menuContent() => ValueListenableBuilder<_LiveDiagnostics>(
-    valueListenable: _liveDiagListenable,
-    builder: (context, liveDiag, _) => _StreamMenu(
-      diagnostics: liveDiag,
-      showDiagnostics: widget.isStreaming,
-      touchControls: widget.inputSupported && widget.touchControls,
-      anchorLeft: _menuOnLeft,
-      pointerMode: _pointerMode,
-      onPointerModeChanged: (mode) {
-        setState(() {
-          _pointerMode = mode;
-          _blockViewerGestures = false;
-          _multiTouchSession = false;
-        });
-      },
-      streamMode: widget.streamMode,
-      onStreamModeChanged: widget.onStreamModeChanged,
-      customSettings: widget.customSettings,
-      onCustomSettingsChanged: widget.onCustomSettingsChanged,
-      onCustomSettingsCommitted: widget.onCustomSettingsCommitted,
-      upscaleSupported: widget.upscaleSupported,
-      upscaleActive: widget.upscaleActive,
-      onToggleUpscale: widget.onToggleUpscale,
-      onStop: _handleStop,
-      onKeyboard: _openKeyboard,
-    ),
-  );
+  Widget _menuContent() => _buildMenuPanel(anchorLeft: _menuOnLeft);
 
   /// Floating menu button (mouse-first platforms): tap opens the panel,
   /// drag snaps it to any corner — a left corner also moves the panel to
@@ -717,6 +698,62 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     });
   }
 
+  /// The side panel content — the single builder shared by the touch
+  /// overlay (`_menuContent`) and the docked (mouse) sidebar, so the two
+  /// presentations can't drift apart.
+  Widget _buildMenuPanel({required bool anchorLeft, VoidCallback? onClose}) {
+    return ValueListenableBuilder<_LiveDiagnostics>(
+      valueListenable: _liveDiagListenable,
+      builder: (context, liveDiag, _) => _StreamMenu(
+        diagnostics: liveDiag,
+        showDiagnostics: widget.isStreaming,
+        touchControls: widget.inputSupported && widget.touchControls,
+        anchorLeft: anchorLeft,
+        onClose: onClose,
+        pointerMode: _pointerMode,
+        onPointerModeChanged: (mode) {
+          setState(() {
+            _pointerMode = mode;
+            _blockViewerGestures = false;
+            _multiTouchSession = false;
+          });
+        },
+        streamMode: widget.streamMode,
+        onStreamModeChanged: widget.onStreamModeChanged,
+        customSettings: widget.customSettings,
+        onCustomSettingsChanged: widget.onCustomSettingsChanged,
+        onCustomSettingsCommitted: widget.onCustomSettingsCommitted,
+        upscaleSupported: widget.upscaleSupported,
+        upscaleActive: widget.upscaleActive,
+        onToggleUpscale: widget.onToggleUpscale,
+        onStop: _handleStop,
+        onKeyboard: _openKeyboard,
+      ),
+    );
+  }
+
+  /// Docked sidebar (mouse platforms): pushes the video aside instead of
+  /// overlaying it, so it can stay open while playing.
+  Widget _buildDockedMenu() {
+    final menuW = _menuWidth;
+    return ClipRect(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        width: _menuOpen ? menuW : 0,
+        child: OverflowBox(
+          // Pin the panel to its screen-edge side so the width animation
+          // reads as a slide-in.
+          alignment:
+              _menuOnLeft ? Alignment.centerRight : Alignment.centerLeft,
+          minWidth: menuW,
+          maxWidth: menuW,
+          child: _buildMenuPanel(anchorLeft: _menuOnLeft, onClose: _closeMenu),
+        ),
+      ),
+    );
+  }
+
   Size _fitVideoSize(Size viewport) {
     final ratio = widget.aspectRatio;
     if (ratio <= 0 || !ratio.isFinite) {
@@ -757,7 +794,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           focusNode: _streamKeyFocus,
           autofocus: !widget.touchControls,
           onKeyEvent: _onStreamKeyEvent,
-          child: LayoutBuilder(
+          // Mouse platforms dock the menu beside the video (it reflows);
+          // touch keeps the slide-over overlay inside the Stack below.
+          child: Row(children: [
+            if (!widget.touchControls && _menuOnLeft) _buildDockedMenu(),
+            Expanded(
+              child: LayoutBuilder(
           builder: (context, constraints) {
             final viewport = Size(constraints.maxWidth, constraints.maxHeight);
             final videoSize = _fitVideoSize(viewport);
@@ -926,26 +968,29 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
               onHorizontalDragEnd: _onEdgeDragEnd,
               child: Container(color: Colors.black54.withValues(alpha: 0.35)),
             ),
-          Positioned(
-            top: 0,
-            bottom: 0,
-            left: _panelSide == MenuSide.left ? 0 : null,
-            right: _panelSide == MenuSide.right ? 0 : null,
-            width: _menuWidth,
-            child: Transform.translate(
-              // Right-side panel slides off to the right (positive X);
-              // left-side is the mirror image, off to the left (negative X).
-              offset: Offset(
-                _panelSide == MenuSide.right ? menuSlide : -menuSlide,
-                0,
-              ),
-              child: Row(
-                children: _panelSide == MenuSide.right
-                    ? [_menuDragHandle(), Expanded(child: _menuContent())]
-                    : [Expanded(child: _menuContent()), _menuDragHandle()],
+          // Touch: slide-over overlay panel. Mouse platforms dock the panel
+          // beside the video instead (see the Row wrapping this Stack).
+          if (widget.touchControls)
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: _panelSide == MenuSide.left ? 0 : null,
+              right: _panelSide == MenuSide.right ? 0 : null,
+              width: _menuWidth,
+              child: Transform.translate(
+                // Right-side panel slides off to the right (positive X);
+                // left-side is the mirror image, off to the left (negative X).
+                offset: Offset(
+                  _panelSide == MenuSide.right ? menuSlide : -menuSlide,
+                  0,
+                ),
+                child: Row(
+                  children: _panelSide == MenuSide.right
+                      ? [_menuDragHandle(), Expanded(child: _menuContent())]
+                      : [Expanded(child: _menuContent()), _menuDragHandle()],
+                ),
               ),
             ),
-          ),
           if (widget.touchControls) ...[
             Positioned(
               right: 0,
@@ -1018,7 +1063,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
               ],
             );
           },
-          ),
+              ),
+            ),
+            if (!widget.touchControls && !_menuOnLeft) _buildDockedMenu(),
+          ]),
         ),
       ),
     );
@@ -1593,6 +1641,7 @@ class _StreamMenu extends StatelessWidget {
     required this.showDiagnostics,
     required this.touchControls,
     this.anchorLeft = false,
+    this.onClose,
     required this.pointerMode,
     required this.onPointerModeChanged,
     required this.streamMode,
@@ -1612,6 +1661,9 @@ class _StreamMenu extends StatelessWidget {
   final bool touchControls;
   /// True when the panel is anchored to the left screen edge.
   final bool anchorLeft;
+  /// Shown as a close button in the header (docked sidebar); overlay mode
+  /// closes via scrim/edge-drag instead and passes null.
+  final VoidCallback? onClose;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
   final StreamMode streamMode;
@@ -1664,12 +1716,25 @@ class _StreamMenu extends StatelessWidget {
                 metrics.horizontal + 4,
                 compact ? 4 : 8,
               ),
-              child: Text(
-                'StreamBeam',
-                style: (compact
-                        ? theme.textTheme.titleSmall
-                        : theme.textTheme.titleMedium)
-                    ?.copyWith(fontWeight: FontWeight.w600),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'StreamBeam',
+                      style: (compact
+                              ? theme.textTheme.titleSmall
+                              : theme.textTheme.titleMedium)
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  if (onClose != null)
+                    IconButton(
+                      tooltip: 'Close menu',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: onClose,
+                    ),
+                ],
               ),
             ),
             Expanded(
