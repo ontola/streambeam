@@ -339,10 +339,25 @@ pub struct DesktopStreamEvent {
 /// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
 /// and stream H.264 access units to the platform decoder (VideoToolbox on
 /// macOS). Video-only for now; input/control is a separate path.
+///
+/// Errors go through `sink.add_error` (→ the Dart stream's `onError`), never
+/// the function's own `Result`: the generated binding fires that future
+/// `unawaited`, so a returned `Err` becomes an unhandled Dart exception the
+/// UI never sees.
 #[flutter_rust_bridge::frb]
 pub async fn play_stream_desktop(
     payload: String,
     sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    if let Err(e) = play_stream_desktop_inner(payload, &sink).await {
+        let _ = sink.add_error(e);
+    }
+    Ok(())
+}
+
+async fn play_stream_desktop_inner(
+    payload: String,
+    sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     let session = connect_as_identity(
         &payload,
@@ -357,12 +372,25 @@ pub async fn play_stream_desktop(
 
 /// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
 /// uses the pinned key; the host prompts to approve on first contact).
+/// Errors go through the sink — see [`play_stream_desktop`].
 #[flutter_rust_bridge::frb]
 pub async fn play_stream_desktop_known(
     host_name: String,
     host_pubkey: Vec<u8>,
     addr: String,
     sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    if let Err(e) = play_stream_desktop_known_inner(host_name, host_pubkey, addr, &sink).await {
+        let _ = sink.add_error(e);
+    }
+    Ok(())
+}
+
+async fn play_stream_desktop_known_inner(
+    host_name: String,
+    host_pubkey: Vec<u8>,
+    addr: String,
+    sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     let pubkey: [u8; 32] = host_pubkey
         .try_into()
@@ -393,7 +421,7 @@ pub async fn play_stream_desktop_known(
 /// access units to the platform decoder.
 async fn desktop_stream_loop(
     mut session: streambeam_core::ClientSession,
-    sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+    sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     use streambeam_proto::media::CHANNEL_VIDEO;
 

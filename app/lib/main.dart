@@ -263,6 +263,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (lower.contains('could not reach host') || lower.contains('connect failed')) {
       return 'Could not reach your PC. Check that streambeam-host is running and both devices are on the same Wi‑Fi.';
     }
+    if (lower.contains('pair rejected')) {
+      return 'The host refused this device. Approve it on the host, or pair again with its QR / sbm1: code.';
+    }
+    if (lower.contains('stream closed')) {
+      return 'The host closed the connection. If this device is not paired yet, scan the host QR or use Paste & play with its sbm1: code.';
+    }
     return m;
   }
 

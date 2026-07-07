@@ -13,7 +13,7 @@ Legend: ✅ working · 🔨 in progress · ⬜ not started · ➖ n/a / blocked 
 |---|---|---|
 | **Windows** | ✅ WGC/DXGI capture + Media Foundation H.264 (hardware NVENC / async-MFT in progress) | ⬜ needs a desktop decode/render path (MF/D3D11 → Flutter texture) |
 | **Android** | ✅ MediaProjection + MediaCodec H.264 — **video only** (host audio not wired) | ✅ MediaCodec → Surface |
-| **macOS** | ⬜ needs ScreenCaptureKit capture + VideoToolbox encode behind the `VideoEncoder` trait | 🔨 VideoToolbox decode → Flutter texture wired, plus MetalFX spatial upscaling (on by default, see [UPSCALE.md](UPSCALE.md)); end-to-end device verify pending |
+| **macOS** | ⬜ needs ScreenCaptureKit capture + VideoToolbox encode behind the `VideoEncoder` trait | ✅ VideoToolbox decode → Flutter texture, MetalFX spatial upscaling on by default ([UPSCALE.md](UPSCALE.md)) — verified vs fakehost 2026-07-07 |
 | **Linux** | ⬜ PipeWire portal + VAAPI | ⬜ VA-API / Vulkan decode → texture |
 | **iOS** | ➖ no background screen capture | ⬜ later |
 
