@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "streambeam_video.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -32,8 +33,15 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
-target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
+# flutter_wrapper_plugin (normally only linked into plugin DLLs) is pulled in
+# here too because PluginRegistrar/TextureRegistrar's implementations live in
+# it, not in flutter_wrapper_app — needed for SetUpVideoChannel's PixelBuffer
+# texture registration in flutter_window.cpp.
+target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app flutter_wrapper_plugin)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+# Media Foundation H.264 decode for the Windows Watch texture path
+# (streambeam_video.cpp).
+target_link_libraries(${BINARY_NAME} PRIVATE "mfplat.lib" "mfuuid.lib" "mf.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

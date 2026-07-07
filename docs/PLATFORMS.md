@@ -11,7 +11,7 @@ Legend: ✅ working · 🔨 in progress · ⬜ not started · ➖ n/a / blocked 
 
 | Platform | Beam (host: capture → encode → serve) | Watch (client: receive → decode → display) |
 |---|---|---|
-| **Windows** | ✅ WGC/DXGI capture + Media Foundation H.264 (hardware NVENC / async-MFT in progress) | ⬜ needs a desktop decode/render path (MF/D3D11 → Flutter texture) |
+| **Windows** | ✅ WGC/DXGI capture + Media Foundation H.264 (hardware NVENC / async-MFT in progress) | 🔨 Media Foundation H.264 software decoder MFT → NV12→BGRA CPU convert → Flutter `PixelBufferTexture`, same `streambeam/video_desktop` channel contract as macOS — builds and links clean (`app/windows/runner/streambeam_video.{h,cpp}`), host-side smoke-tested via NVENC session logs, but the actual on-screen decode path hasn't been visually confirmed yet (2026-07-07) |
 | **Android** | ✅ MediaProjection + MediaCodec H.264 — **video only** (host audio not wired) | ✅ MediaCodec → Surface |
 | **macOS** | ⬜ needs ScreenCaptureKit capture + VideoToolbox encode behind the `VideoEncoder` trait | ✅ VideoToolbox decode → Flutter texture, MetalFX spatial upscaling on by default ([UPSCALE.md](UPSCALE.md)) — verified 2026-07-07 vs fakehost and a real Windows host (paired via sbm1 paste, smooth LAN stream) |
 | **Linux** | ⬜ PipeWire portal + VAAPI | ⬜ VA-API / Vulkan decode → texture |
