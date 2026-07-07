@@ -5,6 +5,7 @@ class MainFlutterWindow: NSWindow {
   private var videoChannel: FlutterMethodChannel?
   private var video: StreamBeamVideo?
   private var discoveryChannel: FlutterMethodChannel?
+  private var deviceChannel: FlutterMethodChannel?
   private let discovery = StreamBeamDiscovery()
 
   override func awakeFromNib() {
@@ -16,8 +17,28 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     setUpVideoChannel(flutterViewController)
     setUpDiscoveryChannel(flutterViewController)
+    setUpDeviceChannel(flutterViewController)
 
     super.awakeFromNib()
+  }
+
+  /// Device metadata — same channel contract as Android's MainActivity.
+  /// `getName` returns the user-facing computer name ("Joep's MacBook Pro"),
+  /// which peers see instead of a generic "StreamBeam".
+  private func setUpDeviceChannel(_ controller: FlutterViewController) {
+    let registrar = controller.registrar(forPlugin: "StreamBeamDevice")
+    let channel = FlutterMethodChannel(
+      name: "streambeam/device",
+      binaryMessenger: registrar.messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "getName":
+        result(Host.current().localizedName ?? ProcessInfo.processInfo.hostName)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    deviceChannel = channel
   }
 
   /// Native Bonjour host discovery (the Rust mdns-sd library can't reliably

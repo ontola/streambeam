@@ -148,17 +148,22 @@ Future<void> main() async {
 }
 
 /// Tell the Rust core this device's name so peers see it instead of a generic
-/// "StreamBeam". On Android that's the user-set device name; on desktop the OS
-/// hostname is already used, so nothing to do.
+/// "StreamBeam". Android and macOS answer the `streambeam/device` channel
+/// with the user-facing device name ("Xiaomi 15", "Joep's MacBook Pro");
+/// platforms without a native handler fall back to the OS hostname.
 Future<void> _applyDeviceName() async {
-  if (!Platform.isAndroid) return;
+  String? name;
   try {
-    final name = await const MethodChannel('streambeam/device')
+    name = await const MethodChannel('streambeam/device')
         .invokeMethod<String>('getName');
-    if (name != null && name.trim().isNotEmpty) {
-      setDeviceName(name: name.trim());
-    }
   } catch (_) {}
+  if ((name == null || name.trim().isEmpty) && !Platform.isAndroid) {
+    // gethostname often carries an mDNS suffix ("Joeps-MacBook-Pro.local").
+    name = Platform.localHostname.replaceFirst(RegExp(r'\.local$'), '');
+  }
+  if (name != null && name.trim().isNotEmpty) {
+    setDeviceName(name: name.trim());
+  }
 }
 
 class StreamBeamApp extends StatelessWidget {
