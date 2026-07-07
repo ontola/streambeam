@@ -1,6 +1,7 @@
 //! Client session logic: frame reassembly, stats (IDR policy lands in M1 follow-ups).
 
 pub mod annex_b;
+pub mod obu;
 pub mod reassemble;
 pub mod saved_host;
 pub mod session;
@@ -9,6 +10,11 @@ pub use annex_b::{
     AccessUnit, access_unit_is_keyframe, access_unit_to_avcc_sample, access_unit_without_sei,
     avcc_from_sps_pps, extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code,
     split_access_units, split_nal_units,
+};
+pub use obu::{
+    access_unit_is_keyframe as av1_access_unit_is_keyframe,
+    access_unit_without_redundant_headers as av1_access_unit_without_redundant_headers,
+    extract_sequence_header as av1_extract_sequence_header,
 };
 pub use reassemble::{FrameReassembler, FrameStats, LossReport};
 pub use saved_host::{

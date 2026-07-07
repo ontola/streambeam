@@ -2,6 +2,25 @@
 
 use thiserror::Error;
 
+/// The codec a client asked for (`VideoCaps.av1`) and/or an encoder actually
+/// produced. Lives here rather than in the Windows-only `nvenc` module so
+/// `server.rs` (cross-platform) can reason about it without pulling in any
+/// platform-specific encoder code.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Codec {
+    H264,
+    Av1,
+}
+
+impl Codec {
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Codec::H264 => "h264",
+            Codec::Av1 => "av01",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EncodedFrame {
     pub data: Vec<u8>,
@@ -59,4 +78,14 @@ pub trait VideoEncoder: Send {
     /// `MockEncoder`'s bundled clip) simply ignore it; `server.rs`'s
     /// adaptive controller calls this unconditionally regardless of backend.
     fn set_bitrate(&mut self, _kbps: u32) {}
+
+    /// Which codec `encode_next()`'s output is actually encoded as — may
+    /// differ from what a client requested (e.g. AV1 unavailable on this
+    /// GPU, silently fell back to H.264). Reported to the client via
+    /// `HostMsg::SessionAccept.codec` instead of assuming the request was
+    /// honored. Defaults to H.264 since every encoder except the direct
+    /// NVENC path only ever produces that.
+    fn codec(&self) -> Codec {
+        Codec::H264
+    }
 }

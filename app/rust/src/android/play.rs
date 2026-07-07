@@ -11,9 +11,10 @@ use ndk::media::media_codec::{
 use ndk::native_window::NativeWindow;
 use streambeam_core::{
     ClientSession, FrameReassembler, LossReport, SavedHost, access_unit_is_keyframe,
-    access_unit_to_avcc_sample, access_unit_without_sei, avcc_from_sps_pps, connect_as_identity,
-    connect_known, extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code, request_idr,
-    request_invalidate_ref_frames, save_saved_host,
+    access_unit_to_avcc_sample, access_unit_without_sei, av1_access_unit_is_keyframe,
+    av1_access_unit_without_redundant_headers, av1_extract_sequence_header, avcc_from_sps_pps,
+    connect_as_identity, connect_known, extract_avc_decoder_config, idr_sample_avcc,
+    nal_with_start_code, request_idr, request_invalidate_ref_frames, save_saved_host,
 };
 use streambeam_proto::control::VideoCaps;
 use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
@@ -39,6 +40,11 @@ enum FeedMode {
     AnnexB,
     /// `csd-0` holds avcC; input buffers are length-prefixed AVCC.
     Avcc,
+    /// `csd-0` holds the sequence header OBU; input buffers are the raw OBU
+    /// stream our encoder already produces — no repackaging needed (unlike
+    /// H.264's AVCC path), AV1 has no length-prefixed wire format both this
+    /// pipeline and MediaCodec agree on needing.
+    Av1,
 }
 
 fn codec_err(step: &str, err: impl std::fmt::Display) -> String {
@@ -60,14 +66,15 @@ fn media_err_label(err: ndk::media_error::MediaError) -> &'static str {
 
 fn try_configure_decoder(
     window: &NativeWindow,
+    mime: &str,
     width: i32,
     height: i32,
     set_csd: impl FnOnce(&mut MediaFormat),
 ) -> Result<MediaCodec, ndk::media_error::MediaError> {
-    let mut codec = MediaCodec::from_decoder_type("video/avc")
+    let mut codec = MediaCodec::from_decoder_type(mime)
         .ok_or(ndk::media_error::MediaError::ErrorUnsupported)?;
     let mut format = MediaFormat::new();
-    format.set_str("mime", "video/avc");
+    format.set_str("mime", mime);
     format.set_i32("width", width);
     format.set_i32("height", height);
     format.set_i32("max-input-size", 512 * 1024);
@@ -108,7 +115,7 @@ fn start_decoder(
     let csd0_sc = nal_with_start_code(sps);
     let csd1_sc = nal_with_start_code(pps);
 
-    match try_configure_decoder(window, width, height, |fmt| {
+    match try_configure_decoder(window, "video/avc", width, height, |fmt| {
         fmt.set_buffer("csd-0", &csd0_sc);
         fmt.set_buffer("csd-1", &csd1_sc);
     }) {
@@ -119,7 +126,7 @@ fn start_decoder(
         Err(e) => attempts.push(format!("Annex-B CSD: {}", media_err_label(e))),
     }
 
-    match try_configure_decoder(window, width, height, |fmt| {
+    match try_configure_decoder(window, "video/avc", width, height, |fmt| {
         fmt.set_buffer("csd-0", sps);
         fmt.set_buffer("csd-1", pps);
     }) {
@@ -130,7 +137,7 @@ fn start_decoder(
         Err(e) => attempts.push(format!("raw SPS/PPS: {}", media_err_label(e))),
     }
 
-    match try_configure_decoder(window, width, height, |fmt| {
+    match try_configure_decoder(window, "video/avc", width, height, |fmt| {
         fmt.set_buffer("csd-0", avcc);
     }) {
         Ok(codec) => {
@@ -147,6 +154,30 @@ fn start_decoder(
     ))
 }
 
+/// `sequence_header` is the AV1 OBU (with its own size field, self-contained
+/// — see `streambeam_core::av1_extract_sequence_header`) pulled from the
+/// first keyframe's temporal unit.
+fn start_decoder_av1(
+    window: &NativeWindow,
+    width: i32,
+    height: i32,
+    sequence_header: &[u8],
+) -> Result<(MediaCodec, FeedMode), String> {
+    try_configure_decoder(window, "video/av01", width, height, |fmt| {
+        fmt.set_buffer("csd-0", sequence_header);
+    })
+    .map(|codec| {
+        log::info!("streambeam decoder configured for AV1 with sequence-header csd-0");
+        (codec, FeedMode::Av1)
+    })
+    .map_err(|e| {
+        format!(
+            "AV1 video decoder could not start on this phone ({})",
+            media_err_label(e)
+        )
+    })
+}
+
 fn prime_sample(mode: FeedMode, config: &[u8]) -> Result<Vec<u8>, String> {
     match mode {
         FeedMode::AnnexB => {
@@ -158,6 +189,16 @@ fn prime_sample(mode: FeedMode, config: &[u8]) -> Result<Vec<u8>, String> {
         }
         FeedMode::Avcc => idr_sample_avcc(config)
             .ok_or_else(|| "Host video config is missing an IDR keyframe.".into()),
+        // The codec-config access unit *is* the first keyframe here (see
+        // `play_session_blocking`'s AV1 branch) — same OBU stream MediaCodec
+        // expects for any other frame, no separate "prime" transform needed.
+        FeedMode::Av1 => {
+            let au = av1_access_unit_without_redundant_headers(config);
+            if au.is_empty() {
+                return Err("Host keyframe was empty.".into());
+            }
+            Ok(au)
+        }
     }
 }
 
@@ -165,7 +206,23 @@ fn encode_frame(mode: FeedMode, frame: &[u8]) -> Vec<u8> {
     match mode {
         FeedMode::AnnexB => frame.to_vec(),
         FeedMode::Avcc => access_unit_to_avcc_sample(frame),
+        FeedMode::Av1 => av1_access_unit_without_redundant_headers(frame),
     }
+}
+
+fn is_keyframe(mode: FeedMode, frame: &[u8]) -> bool {
+    match mode {
+        FeedMode::AnnexB | FeedMode::Avcc => access_unit_is_keyframe(frame),
+        FeedMode::Av1 => av1_access_unit_is_keyframe(frame),
+    }
+}
+
+/// True if this device has a hardware/software AV1 decoder at all —
+/// `MediaCodec::from_decoder_type` returning `None` is itself the capability
+/// check (no separate `MediaCodecList` query needed). A throwaway probe: the
+/// codec is immediately dropped, never configured or started.
+fn av1_decode_supported() -> bool {
+    MediaCodec::from_decoder_type("video/av01").is_some()
 }
 
 /// `max_width`/`max_height`/`max_fps` come from Dart's `dart:ui` `Display`
@@ -178,7 +235,7 @@ fn video_caps(max_width: u16, max_height: u16, max_fps: u8) -> VideoCaps {
     VideoCaps {
         h264: true,
         hevc: false,
-        av1: false,
+        av1: av1_decode_supported(),
         max_width: if max_width > 0 {
             max_width
         } else {
@@ -329,9 +386,6 @@ fn play_session_blocking(
         .codec_config
         .as_deref()
         .ok_or("Host did not send video configuration (CodecConfig).")?;
-    let (sps, pps) =
-        extract_avc_decoder_config(config).ok_or("Host video config is missing H.264 SPS/PPS.")?;
-    let avcc = avcc_from_sps_pps(&sps, &pps).ok_or("Could not build H.264 decoder config.")?;
 
     let window = unsafe {
         let ptr = NonNull::new(native_window as *mut ndk_sys::ANativeWindow)
@@ -347,7 +401,20 @@ fn play_session_blocking(
         session.fps,
         session.codec.clone(),
     );
-    let (mut codec, feed_mode) = start_decoder(&window, width, height, &sps, &pps, &avcc)?;
+    // `SessionAccept.codec` is the host's own report of what it actually
+    // encoded with — not necessarily what this client asked for (e.g. the
+    // host's GPU might not support AV1 even though this device can decode
+    // it), so branch on that rather than assuming.
+    let (mut codec, feed_mode) = if session.codec == "av01" {
+        let sequence_header = av1_extract_sequence_header(config)
+            .ok_or("Host video config is missing an AV1 sequence header.")?;
+        start_decoder_av1(&window, width, height, &sequence_header)?
+    } else {
+        let (sps, pps) = extract_avc_decoder_config(config)
+            .ok_or("Host video config is missing H.264 SPS/PPS.")?;
+        let avcc = avcc_from_sps_pps(&sps, &pps).ok_or("Could not build H.264 decoder config.")?;
+        start_decoder(&window, width, height, &sps, &pps, &avcc)?
+    };
     codec
         .start()
         .map_err(|e| codec_err("start", media_err_label(e)))?;
@@ -474,12 +541,19 @@ fn play_session_blocking(
 
             match asm.push_datagram(datagram) {
                 Ok(Some((_id, frame))) => {
-                    let frame = access_unit_without_sei(&frame);
+                    // H.264-only cleanup (drops SEI NALs some decoders
+                    // reject); AV1's own redundant-header stripping happens
+                    // in `encode_frame` instead, since it needs `feed_mode`
+                    // dispatch the same way — no separate step here.
+                    let frame = match feed_mode {
+                        FeedMode::AnnexB | FeedMode::Avcc => access_unit_without_sei(&frame),
+                        FeedMode::Av1 => frame,
+                    };
                     if frame.is_empty() {
                         continue;
                     }
-                    let is_keyframe = access_unit_is_keyframe(&frame);
-                    completions.push((is_keyframe, frame));
+                    let keyframe = is_keyframe(feed_mode, &frame);
+                    completions.push((keyframe, frame));
                 }
                 Ok(None) => {}
                 Err(e) => {

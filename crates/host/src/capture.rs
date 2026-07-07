@@ -47,7 +47,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
-use crate::encode::{EncodeError, EncodedFrame, VideoEncoder, default_bitrate_bps};
+use crate::encode::{Codec, EncodeError, EncodedFrame, VideoEncoder, default_bitrate_bps};
 use crate::nvenc::NvencEncoder;
 use crate::scale::GpuScaler;
 
@@ -84,14 +84,21 @@ pub struct DesktopEncoder {
     frame_rx: Receiver<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
     pending_bitrate: Arc<Mutex<Option<u32>>>,
+    /// The codec actually driving the encoder — may not match what was
+    /// requested (see `codec()`).
+    codec: Codec,
     _thread: JoinHandle<()>,
 }
 
 impl DesktopEncoder {
     /// `max_encode_dim` caps the encoded video's longest side (native capture
     /// resolution is unaffected) — see the field doc on `Pipeline` for why.
-    pub fn new(fps: u32, max_encode_dim: u32) -> Result<Self, String> {
-        let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(u32, u32), String>>();
+    /// `wanted_codec` is a request, not a guarantee — `codec()` reports
+    /// what actually ended up encoding (see `Pipeline::new`'s AV1-then-H.264
+    /// NVENC fallback).
+    pub fn new(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Result<Self, String> {
+        let (init_tx, init_rx) =
+            std::sync::mpsc::channel::<Result<(u32, u32, Codec), String>>();
         let (req_tx, req_rx) = std::sync::mpsc::channel::<Request>();
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Option<EncodedFrame>>(4);
         let force_idr = Arc::new(AtomicBool::new(false));
@@ -107,6 +114,7 @@ impl DesktopEncoder {
                 run_pipeline(
                     fps,
                     max_encode_dim,
+                    wanted_codec,
                     init_tx,
                     req_rx,
                     frame_tx,
@@ -118,7 +126,7 @@ impl DesktopEncoder {
             .map_err(|e| format!("spawn capture thread: {e}"))?;
 
         match init_rx.recv() {
-            Ok(Ok((width, height))) => Ok(Self {
+            Ok(Ok((width, height, codec))) => Ok(Self {
                 width,
                 height,
                 codec_config,
@@ -126,6 +134,7 @@ impl DesktopEncoder {
                 frame_rx,
                 force_idr,
                 pending_bitrate,
+                codec,
                 _thread: thread,
             }),
             Ok(Err(e)) => Err(e),
@@ -170,27 +179,33 @@ impl VideoEncoder for DesktopEncoder {
     fn codec_config(&self) -> Option<Vec<u8>> {
         self.codec_config.lock().unwrap().clone()
     }
+
+    fn codec(&self) -> Codec {
+        self.codec
+    }
 }
 
 /// Body of the capture thread: init, report dims, then serve encode requests.
 fn run_pipeline(
     fps: u32,
     max_encode_dim: u32,
-    init_tx: Sender<Result<(u32, u32), String>>,
+    wanted_codec: Codec,
+    init_tx: Sender<Result<(u32, u32, Codec), String>>,
     req_rx: Receiver<Request>,
     frame_tx: SyncSender<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
     pending_bitrate: Arc<Mutex<Option<u32>>>,
     codec_config: Arc<Mutex<Option<Vec<u8>>>>,
 ) {
-    let mut pipe = match Pipeline::new(fps, max_encode_dim) {
+    let mut pipe = match Pipeline::new(fps, max_encode_dim, wanted_codec) {
         Ok(p) => p,
         Err(e) => {
             let _ = init_tx.send(Err(e));
             return;
         }
     };
-    if init_tx.send(Ok((pipe.width, pipe.height))).is_err() {
+    let codec = pipe.codec();
+    if init_tx.send(Ok((pipe.width, pipe.height, codec))).is_err() {
         return;
     }
 
@@ -306,7 +321,7 @@ impl Pipeline {
     /// shards with a `u16` count (see `MAX_DATA_SHARDS` in `streambeam_proto`),
     /// and a very large keyframe (native 4K, say) can still exceed it — a
     /// phone screen has no use for that much detail anyway.
-    fn new(fps: u32, max_encode_dim: u32) -> Result<Self, String> {
+    fn new(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Result<Self, String> {
         unsafe {
             // MTA so the objects can be used from this thread freely.
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -323,21 +338,38 @@ impl Pipeline {
             }
 
             let bitrate_bps = default_bitrate_bps(width, height, fps);
-            let nvenc_attempt: Result<(NvencEncoder, ID3D11Texture2D, Option<GpuScaler>), String> =
-                (|| {
-                    let tex = create_encode_texture(&device, width, height)?;
-                    let encoder =
-                        NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps)?;
-                    let scaler = if (capture_width, capture_height) != (width, height) {
-                        Some(GpuScaler::new(&device, &context, width, height, &tex)?)
-                    } else {
-                        None
-                    };
-                    Ok((encoder, tex, scaler))
-                })();
+            let try_nvenc = |codec: Codec| -> Result<(NvencEncoder, ID3D11Texture2D, Option<GpuScaler>), String> {
+                let tex = create_encode_texture(&device, width, height)?;
+                let encoder =
+                    NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps, codec)?;
+                let scaler = if (capture_width, capture_height) != (width, height) {
+                    Some(GpuScaler::new(&device, &context, width, height, &tex)?)
+                } else {
+                    None
+                };
+                Ok((encoder, tex, scaler))
+            };
+            // AV1 support is GPU-generation-gated (Ada Lovelace/RTX 40-series
+            // and later) in a way plain H.264 NVENC isn't, so a client asking
+            // for AV1 on an older NVIDIA GPU is a real, expected case, not
+            // just "no NVENC at all" — worth a distinct retry at H.264 on
+            // NVENC before falling all the way to the software encoder.
+            let nvenc_attempt = try_nvenc(wanted_codec).or_else(|e| {
+                if wanted_codec == Codec::Av1 {
+                    crate::logging::log(&format!(
+                        "AV1 NVENC unavailable ({e}) — retrying with H.264 NVENC"
+                    ));
+                    try_nvenc(Codec::H264)
+                } else {
+                    Err(e)
+                }
+            });
             let backend = match nvenc_attempt {
                 Ok((encoder, encode_texture, scaler)) => {
-                    crate::logging::log("using direct NVENC hardware encoder");
+                    crate::logging::log(&format!(
+                        "using direct NVENC hardware encoder ({:?})",
+                        encoder.codec()
+                    ));
                     EncoderBackend::Nvenc {
                         encoder,
                         encode_texture,
@@ -346,7 +378,7 @@ impl Pipeline {
                 }
                 Err(e) => {
                     crate::logging::log(&format!(
-                        "NVENC unavailable ({e}) — falling back to Media Foundation software encoder"
+                        "NVENC unavailable ({e}) — falling back to Media Foundation software encoder (H.264)"
                     ));
                     let transform = create_software_encoder(width, height, fps)?;
                     EncoderBackend::Software {
@@ -584,6 +616,16 @@ impl Pipeline {
         }
     }
 
+    /// The codec actually in use — the software fallback is always H.264;
+    /// NVENC reports whatever it actually initialized with (see `new`'s
+    /// AV1-then-H.264 retry).
+    fn codec(&self) -> Codec {
+        match &self.backend {
+            EncoderBackend::Nvenc { encoder, .. } => encoder.codec(),
+            EncoderBackend::Software { .. } => Codec::H264,
+        }
+    }
+
     unsafe fn encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
         match &mut self.backend {
             EncoderBackend::Nvenc {
@@ -625,6 +667,7 @@ impl Pipeline {
                         self.height,
                         self.fps,
                         self.bitrate_bps,
+                        encoder.codec(),
                     ) {
                         Ok(fresh) => {
                             *encoder = fresh;

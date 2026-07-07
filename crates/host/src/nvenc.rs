@@ -81,6 +81,55 @@ const NV_ENC_H264_PROFILE_HIGH_GUID: GUID = GUID::from_values(
     0x4b89,
     [0xaf, 0x2a, 0xd5, 0x37, 0xc9, 0x2b, 0xe3, 0x10],
 );
+// AV1 support (Ada Lovelace/RTX 40-series and later). Unlike the struct
+// layouts elsewhere in this file, a GUID is just a 16-byte opaque comparison
+// key, not a memory-layout-critical field order — if either of these is
+// wrong, `NvEncGetEncodePresetConfigEx`/`NvEncInitializeEncoder` simply
+// return a "not supported" error (handled by falling back to H.264 in
+// `capture.rs`), not corruption. Not independently re-verified against the
+// authoritative header the way the H.264 GUIDs above were (no AV1-capable
+// GPU used for that cross-check) — if AV1 never initializes on a GPU that
+// should support it, check these first.
+const NV_ENC_CODEC_AV1_GUID: GUID = GUID::from_values(
+    0x0a352289,
+    0x0aa7,
+    0x4759,
+    [0x86, 0x2d, 0x5d, 0x15, 0xcd, 0x16, 0xd2, 0x54],
+);
+const NV_ENC_AV1_PROFILE_MAIN_GUID: GUID = GUID::from_values(
+    0x5f2a39f5,
+    0xf14e,
+    0x4f95,
+    [0x9a, 0x9e, 0xb7, 0x6d, 0x56, 0x8f, 0xcf, 0x97],
+);
+
+use crate::encode::Codec;
+
+/// Selects the codec/profile GUIDs `NvencEncoder::new` initializes with, and
+/// which bitstream format `encode` parses its own output as (Annex-B NALs
+/// vs AV1 OBUs) for keyframe detection.
+impl Codec {
+    fn encode_guid(self) -> GUID {
+        match self {
+            Codec::H264 => NV_ENC_CODEC_H264_GUID,
+            Codec::Av1 => NV_ENC_CODEC_AV1_GUID,
+        }
+    }
+
+    fn profile_guid(self) -> GUID {
+        match self {
+            Codec::H264 => NV_ENC_H264_PROFILE_HIGH_GUID,
+            Codec::Av1 => NV_ENC_AV1_PROFILE_MAIN_GUID,
+        }
+    }
+
+    fn is_keyframe(self, bytes: &[u8]) -> bool {
+        match self {
+            Codec::H264 => streambeam_core::access_unit_is_keyframe(bytes),
+            Codec::Av1 => streambeam_core::av1_access_unit_is_keyframe(bytes),
+        }
+    }
+}
 
 // --- enums (only the values we actually use) ---
 const NVENC_DEVICE_TYPE_DIRECTX: u32 = 0x0;
@@ -442,6 +491,7 @@ pub struct NvencEncoder {
     width: u32,
     height: u32,
     frame_index: i64,
+    codec: Codec,
 }
 
 // The encoder handle + function table are just data + a DLL's exported
@@ -463,6 +513,7 @@ impl NvencEncoder {
         height: u32,
         fps: u32,
         bitrate_bps: u32,
+        codec: Codec,
     ) -> Result<Self, String> {
         let lib = libloading::Library::new(NVENC_DLL)
             .map_err(|e| format!("LoadLibrary {NVENC_DLL}: {e}"))?;
@@ -502,7 +553,7 @@ impl NvencEncoder {
             "NvEncGetEncodePresetConfigEx",
             (functions.get_encode_preset_config_ex)(
                 encoder.as_ptr(),
-                NV_ENC_CODEC_H264_GUID,
+                codec.encode_guid(),
                 NV_ENC_PRESET_P4_GUID,
                 NVENC_TUNING_INFO_ULTRA_LOW_LATENCY,
                 &mut preset_uninit,
@@ -510,10 +561,12 @@ impl NvencEncoder {
         )?;
         let mut config = preset_uninit.assume_init().preset_cfg;
         // Override only what we care about; every other field (including
-        // the whole codec-specific H264 sub-config) stays exactly what the
-        // ultra-low-latency preset already set, which already enables
-        // SPS/PPS repetition on every IDR — required since our client parses
-        // SPS/PPS straight out of each keyframe's Annex-B bytes.
+        // the whole codec-specific H264/AV1 sub-config) stays exactly what
+        // the ultra-low-latency preset already set, which for H.264 already
+        // enables SPS/PPS repetition on every IDR — required since our
+        // client parses SPS/PPS straight out of each keyframe's Annex-B
+        // bytes. AV1's equivalent (repeating the sequence header OBU on
+        // every keyframe) is likewise a preset default we don't override.
         config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
         config.frame_interval_p = 1; // no B-frames — lowest latency
         // Was forced to Baseline (no CABAC) to match the software encoder's
@@ -527,7 +580,7 @@ impl NvencEncoder {
         // = 1` above already keeps it B-frame-free regardless of profile, so
         // this doesn't reintroduce the extra reference-frame latency High
         // profile can otherwise imply.
-        config.profile_guid = NV_ENC_H264_PROFILE_HIGH_GUID;
+        config.profile_guid = codec.profile_guid();
         config.rc_params.rate_control_mode = NVENC_PARAMS_RC_MODE_CBR;
         config.rc_params.average_bit_rate = bitrate_bps;
         config.rc_params.max_bit_rate = bitrate_bps;
@@ -550,7 +603,7 @@ impl NvencEncoder {
 
         let mut init_params: InitializeParams = std::mem::zeroed();
         init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
-        init_params.encode_guid = NV_ENC_CODEC_H264_GUID;
+        init_params.encode_guid = codec.encode_guid();
         init_params.preset_guid = NV_ENC_PRESET_P4_GUID;
         init_params.encode_width = width;
         init_params.encode_height = height;
@@ -609,7 +662,12 @@ impl NvencEncoder {
             width,
             height,
             frame_index: 0,
+            codec,
         })
+    }
+
+    pub fn codec(&self) -> Codec {
+        self.codec
     }
 
     /// Encode whatever is currently in the registered texture. `force_idr`
@@ -688,7 +746,7 @@ impl NvencEncoder {
             (self.functions.unlock_bitstream)(self.encoder.as_ptr(), self.bitstream_buffer),
         )?;
 
-        let keyframe = streambeam_core::access_unit_is_keyframe(&bytes);
+        let keyframe = self.codec.is_keyframe(&bytes);
 
         Ok(Some(EncodedFrame {
             data: bytes,

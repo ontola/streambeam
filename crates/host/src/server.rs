@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::active_stream::{ActiveStreamTracker, CloseableConn};
 use crate::audio::OpusCatalog;
-use crate::encode::{VideoEncoder, default_bitrate_bps};
+use crate::encode::{Codec, VideoEncoder, default_bitrate_bps};
 use crate::mock::MockEncoder;
 
 impl CloseableConn for quinn::Connection {
@@ -351,13 +351,16 @@ impl StreamControl {
 }
 
 /// Build the video source: real desktop capture on Windows, else the test clip.
-fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
+fn build_encoder(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Box<dyn VideoEncoder> {
     #[cfg(windows)]
     {
-        match crate::capture::DesktopEncoder::new(fps, max_encode_dim) {
+        match crate::capture::DesktopEncoder::new(fps, max_encode_dim, wanted_codec) {
             Ok(enc) => {
                 let (w, h) = enc.dimensions();
-                crate::logging::log(&format!("desktop capture ready — {w}x{h} @ {fps}fps"));
+                crate::logging::log(&format!(
+                    "desktop capture ready — {w}x{h} @ {fps}fps ({})",
+                    enc.codec().wire_name()
+                ));
                 return Box::new(enc);
             }
             Err(e) => {
@@ -373,6 +376,9 @@ fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
         // capture service (MediaProjection + MediaCodec) is on its way — but it
         // starts asynchronously and may not have delivered the codec config yet
         // when we get here. Wait for it before falling back to the mock clip.
+        // Android beaming doesn't support AV1 encode (MediaCodec surface
+        // encoder path is H.264-only) — `wanted_codec` is silently ignored,
+        // same as the mock clip below.
         for _ in 0..50 {
             if crate::android_screen::is_ready() {
                 crate::logging::log("android screen capture ready — streaming live screen");
@@ -382,7 +388,7 @@ fn build_encoder(fps: u32, max_encode_dim: u32) -> Box<dyn VideoEncoder> {
         }
         crate::logging::log("android screen capture didn't become ready — using mock clip");
     }
-    let _ = (fps, max_encode_dim);
+    let _ = (fps, max_encode_dim, wanted_codec);
     Box::new(MockEncoder::bundled())
 }
 
@@ -600,6 +606,7 @@ struct CachedEncoder {
     codec_config: Option<Vec<u8>>,
     build_fps: u32,
     build_dim: u32,
+    build_codec: Codec,
 }
 
 type SharedEncoderCell = AsyncMutex<Option<CachedEncoder>>;
@@ -795,6 +802,12 @@ async fn handle_client(
                 } else {
                     default_fps
                 };
+                // AV1's better compression is only worth it if this client
+                // can actually decode it — `build_encoder` still isn't a
+                // hard promise (falls back to H.264 if this host's GPU
+                // doesn't support AV1 NVENC either), but there's no point
+                // even trying for a client that never asked for it.
+                let wanted_codec = if video.av1 { Codec::Av1 } else { Codec::H264 };
 
                 // Claim the shared encoder *before* deciding whether to
                 // rebuild it — this waits for a still-live previous
@@ -809,6 +822,7 @@ async fn handle_client(
                 let needs_rebuild = !matches!(
                     cell.as_ref(),
                     Some(c) if c.build_fps == build_fps && c.build_dim == build_dim
+                        && c.build_codec == wanted_codec
                 );
                 if needs_rebuild {
                     // Rebuilding mid-connection (a client re-sending
@@ -820,15 +834,18 @@ async fn handle_client(
                     // sends `SessionRequest` once, right after connecting,
                     // and changes caps by fully reconnecting (see
                     // `_reconnectForNewCaps` in the Flutter app).
-                    let encoder = build_encoder(build_fps, build_dim);
+                    let encoder = build_encoder(build_fps, build_dim, wanted_codec);
                     let (width, height) = encoder.dimensions();
                     let codec_config = encoder.codec_config();
+                    let build_codec = encoder.codec();
                     log!(
-                        "encoder {} — {width}x{height} @ {build_fps}fps (requested by {client_name}: {}x{} @ {}fps), {} opus packets",
+                        "encoder {} — {width}x{height} @ {build_fps}fps, {} (requested by {client_name}: {}x{} @ {}fps, av1={}), {} opus packets",
                         if cell.is_some() { "rebuilt" } else { "ready" },
+                        build_codec.wire_name(),
                         video.max_width,
                         video.max_height,
                         video.max_fps,
+                        video.av1,
                         OpusCatalog::bundled().len()
                     );
                     *cell = Some(CachedEncoder {
@@ -838,14 +855,16 @@ async fn handle_client(
                         codec_config,
                         build_fps,
                         build_dim,
+                        build_codec,
                     });
                 }
                 let cached = cell.as_ref().expect("just populated above if empty");
-                let (encoder, width, height, codec_config) = (
+                let (encoder, width, height, codec_config, build_codec) = (
                     cached.encoder.clone(),
                     cached.width,
                     cached.height,
                     cached.codec_config.clone(),
+                    cached.build_codec,
                 );
                 drop(cell);
                 resolved = Some((encoder.clone(), width, height));
@@ -921,7 +940,7 @@ async fn handle_client(
                     &mut send,
                     &HostMsg::SessionAccept {
                         session_id: 1,
-                        codec: "h264".into(),
+                        codec: build_codec.wire_name().into(),
                         width,
                         height,
                         fps: build_fps.min(255) as u8,
