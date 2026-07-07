@@ -79,6 +79,15 @@ class MainActivity : FlutterActivity() {
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            "streambeam/device",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getName" -> result.success(deviceName())
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             "streambeam/screencast",
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -92,6 +101,25 @@ class MainActivity : FlutterActivity() {
         }
         pendingLink = linkFrom(intent)
         requestPostNotifications()
+    }
+
+    /** The user-set device name (Settings), falling back to the model. */
+    private fun deviceName(): String {
+        try {
+            val setName = android.provider.Settings.Global.getString(
+                contentResolver,
+                android.provider.Settings.Global.DEVICE_NAME,
+            )
+            if (!setName.isNullOrBlank()) return setName
+        } catch (_: Exception) {
+        }
+        val model = Build.MODEL ?: ""
+        val mfr = Build.MANUFACTURER ?: ""
+        return if (model.startsWith(mfr, ignoreCase = true) || mfr.isBlank()) {
+            model.ifBlank { "Android device" }
+        } else {
+            "$mfr $model".trim()
+        }
     }
 
     private fun requestPostNotifications() {

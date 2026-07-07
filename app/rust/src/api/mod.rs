@@ -35,40 +35,45 @@ pub fn playback_diagnostics() -> PlaybackDiagnostics {
     }
 }
 
+// The send_* input functions are platform-generic: they enqueue on the
+// active session's input pump (`crate::input`) and silently no-op when no
+// session is streaming.
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_move(dx: i16, dy: i16) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::MouseMove { dx, dy });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_scroll(dx: i16, dy: i16) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::Scroll { dx, dy });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
-    #[cfg(target_os = "android")]
-    crate::input::send(streambeam_proto::input::InputEvent::MouseAbs { x, y, ref_w, ref_h });
+    crate::input::send(streambeam_proto::input::InputEvent::MouseAbs {
+        x,
+        y,
+        ref_w,
+        ref_h,
+    });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_click(button: u8) {
-    #[cfg(target_os = "android")]
-    {
-        use streambeam_proto::input::InputEvent;
-        crate::input::send(InputEvent::MouseButton { button, down: true });
-        crate::input::send(InputEvent::MouseButton {
-            button,
-            down: false,
-        });
-    }
+    send_mouse_button(button, true);
+    send_mouse_button(button, false);
+}
+
+/// Separate press/release — needed for drag & text selection with a real
+/// mouse (desktop watch); [`send_mouse_click`] stays for tap semantics.
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_mouse_button(button: u8, down: bool) {
+    crate::input::send(streambeam_proto::input::InputEvent::MouseButton { button, down });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_gamepad_plug(pad: u8, connected: bool) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::GamepadPlug {
         pad: pad.min(3),
         connected,
@@ -86,7 +91,6 @@ pub fn send_gamepad_state(
     rx: i16,
     ry: i16,
 ) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::GamepadState {
         pad: pad.min(3),
         buttons,
@@ -119,6 +123,13 @@ pub fn init_app() {
 pub fn set_app_data_dir(dir: String) {
     crate::store::set_data_dir(&dir);
     let _ = std::fs::create_dir_all(&dir);
+}
+
+/// Set the name peers see for this device (client name when watching, host name
+/// when beaming). Call at startup with the platform device name.
+#[flutter_rust_bridge::frb(sync)]
+pub fn set_device_name(name: String) {
+    crate::store::set_device_name(&name);
 }
 
 #[derive(Debug, Clone)]
@@ -284,7 +295,7 @@ pub async fn connect_and_receive(
 ) -> Result<StreamStats, String> {
     let session = connect_as_identity(
         &payload,
-        "streambeam-android",
+        &crate::store::client_name(),
         Some(&client_identity_path()),
         streambeam_core::fallback_video_caps(),
     )
@@ -365,6 +376,217 @@ pub async fn reconnect_play_stream(
         let _ = (native_window, max_video_frames, max_width, max_height, max_fps);
         Err("reconnect_play_stream is Android-only".into())
     }
+}
+
+/// One event on the desktop watch stream. The first event is the config
+/// (`is_config = true`, geometry + SPS/PPS); every later event is a frame
+/// (`is_config = false`, `data` = one Annex-B access unit). A plain struct
+/// (not an enum) so the Dart side needs no `freezed` codegen.
+#[derive(Debug, Clone)]
+pub struct DesktopStreamEvent {
+    pub is_config: bool,
+    pub codec_config: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u8,
+    pub data: Vec<u8>,
+    pub keyframe: bool,
+}
+
+/// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
+/// and stream H.264 access units to the platform decoder (VideoToolbox on
+/// macOS). Video-only for now; input/control is a separate path.
+///
+/// Errors go through `sink.add_error` (→ the Dart stream's `onError`), never
+/// the function's own `Result`: the generated binding fires that future
+/// `unawaited`, so a returned `Err` becomes an unhandled Dart exception the
+/// UI never sees.
+#[flutter_rust_bridge::frb]
+pub async fn play_stream_desktop(
+    payload: String,
+    sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    if let Err(e) = play_stream_desktop_inner(payload, &sink).await {
+        let _ = sink.add_error(e);
+    }
+    Ok(())
+}
+
+async fn play_stream_desktop_inner(
+    payload: String,
+    sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    let session = connect_as_identity(
+        &payload,
+        &crate::store::client_name(),
+        Some(&client_identity_path()),
+        streambeam_core::fallback_video_caps(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = save_host_from_payload(payload);
+    desktop_stream_loop(session, sink).await
+}
+
+/// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
+/// uses the pinned key; the host prompts to approve on first contact).
+/// Errors go through the sink — see [`play_stream_desktop`].
+#[flutter_rust_bridge::frb]
+pub async fn play_stream_desktop_known(
+    host_name: String,
+    host_pubkey: Vec<u8>,
+    addr: String,
+    sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    if let Err(e) = play_stream_desktop_known_inner(host_name, host_pubkey, addr, &sink).await {
+        let _ = sink.add_error(e);
+    }
+    Ok(())
+}
+
+async fn play_stream_desktop_known_inner(
+    host_name: String,
+    host_pubkey: Vec<u8>,
+    addr: String,
+    sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    let pubkey: [u8; 32] = host_pubkey
+        .try_into()
+        .map_err(|_| "host public key must be 32 bytes".to_string())?;
+    let addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("invalid host address: {e}"))?;
+    let session = streambeam_core::connect_known(
+        pubkey,
+        addr,
+        &crate::store::client_name(),
+        &client_identity_path(),
+        streambeam_core::fallback_video_caps(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = save_saved_host(
+        &saved_host_path(),
+        &SavedHost {
+            host_name,
+            host_pubkey: pubkey,
+            addrs: vec![addr],
+        },
+    );
+    desktop_stream_loop(session, sink).await
+}
+
+/// Shared desktop watch loop: reassemble the media plane and stream H.264
+/// access units to the platform decoder.
+async fn desktop_stream_loop(
+    mut session: streambeam_core::ClientSession,
+    sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
+) -> Result<(), String> {
+    use streambeam_proto::media::CHANNEL_VIDEO;
+
+    // Feed the shared playback counters so `playback_diagnostics()` /
+    // `playback_frames_rendered()` work identically to the Android path
+    // (the player UI polls them regardless of platform).
+    crate::playback::reset();
+    crate::playback::set_session(
+        session.width,
+        session.height,
+        session.fps,
+        session.codec.clone(),
+    );
+
+    // Wire mouse/gamepad control: pump `crate::input::send` onto the
+    // session's input stream, torn down whichever way this function exits.
+    struct InputPumpGuard(tokio::task::JoinHandle<()>);
+    impl Drop for InputPumpGuard {
+        fn drop(&mut self) {
+            crate::input::set_sender(None);
+            self.0.abort();
+        }
+    }
+    let _input_guard = session.input.take().map(|input_send| {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::input::set_sender(Some(tx));
+        InputPumpGuard(tokio::spawn(crate::input::pump(input_send, rx)))
+    });
+
+    let codec_config = session
+        .codec_config
+        .clone()
+        .ok_or("Host did not send video configuration (CodecConfig).")?;
+    sink.add(DesktopStreamEvent {
+        is_config: true,
+        codec_config,
+        width: u32::from(session.width),
+        height: u32::from(session.height),
+        fps: session.fps,
+        data: Vec::new(),
+        keyframe: false,
+    })
+    .map_err(|e| e.to_string())?;
+
+    // Ask for a keyframe up front so decoding can start immediately.
+    let _ = streambeam_core::request_idr(&mut session).await;
+
+    let mut asm = FrameReassembler::default();
+    loop {
+        let datagram =
+            tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
+                .await
+                .map_err(|_| "timed out waiting for media".to_string())?
+                .map_err(|e| e.to_string())?;
+
+        crate::playback::note_bytes_received(datagram.len() as u64);
+        let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
+        if header.channel != CHANNEL_VIDEO {
+            continue;
+        }
+        if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
+            let keyframe = header.is_keyframe();
+            // "Rendered" here means handed to the platform decoder — the
+            // closest observable point on desktop, where decode happens in
+            // the native layer past this crate.
+            crate::playback::note_frame_rendered();
+            if sink
+                .add(DesktopStreamEvent {
+                    is_config: false,
+                    codec_config: Vec::new(),
+                    width: 0,
+                    height: 0,
+                    fps: 0,
+                    data: frame,
+                    keyframe,
+                })
+                .is_err()
+            {
+                // Dart closed the stream (playback stopped).
+                break;
+            }
+        }
+
+        // Recover from unrecoverable loss the same way the other clients do.
+        if let Some(report) = asm.take_loss_report() {
+            match report {
+                streambeam_core::LossReport::Invalidate {
+                    first_frame,
+                    last_frame,
+                } => {
+                    let _ = streambeam_core::request_invalidate_ref_frames(
+                        &mut session,
+                        first_frame,
+                        last_frame,
+                    )
+                    .await;
+                }
+                streambeam_core::LossReport::NeedIdr => {
+                    let _ = streambeam_core::request_idr(&mut session).await;
+                }
+            }
+        }
+    }
+
+    let _ = session.conn.close(0u32.into(), b"bye");
+    Ok(())
 }
 
 async fn receive_stats(

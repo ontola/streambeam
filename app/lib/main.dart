@@ -123,6 +123,7 @@ Future<void> main() async {
   await StreambeamFfi.init();
   final dir = await streambeamDataDir();
   setAppDataDir(dir: dir);
+  await _applyDeviceName();
   if (Platform.isAndroid) {
     // Without this, the system nav bar (back/home buttons) defaults to a
     // plain white background — indistinguishable from this app's white
@@ -136,8 +137,28 @@ Future<void> main() async {
         systemNavigationBarIconBrightness: Brightness.dark,
       ),
     );
+    // Keep the system nav (back/home) visible; the fullscreen player goes
+    // immersive on its own while watching.
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
   }
   runApp(const StreamBeamApp());
+}
+
+/// Tell the Rust core this device's name so peers see it instead of a generic
+/// "StreamBeam". On Android that's the user-set device name; on desktop the OS
+/// hostname is already used, so nothing to do.
+Future<void> _applyDeviceName() async {
+  if (!Platform.isAndroid) return;
+  try {
+    final name = await const MethodChannel('streambeam/device')
+        .invokeMethod<String>('getName');
+    if (name != null && name.trim().isNotEmpty) {
+      setDeviceName(name: name.trim());
+    }
+  } catch (_) {}
 }
 
 class StreamBeamApp extends StatelessWidget {
@@ -198,6 +219,20 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   CustomStreamSettings _customSettings = const CustomStreamSettings();
   int _streamWidth = 640;
   int _streamHeight = 360;
+
+  // Desktop (macOS) watch: Rust streams H.264 frames, a VideoToolbox decoder in
+  // the native Runner turns them into a Flutter texture.
+  static const _desktopVideoChannel = MethodChannel('streambeam/video_desktop');
+  int? _desktopTextureId;
+  double _desktopAspect = 16 / 9;
+  int _desktopWidth = 0;
+  int _desktopHeight = 0;
+  StreamSubscription<DesktopStreamEvent>? _desktopSub;
+  // MetalFX upscaling (macOS): on by default; the native side reports back
+  // whether it's actually available on this machine.
+  bool _upscaleEnabled = true;
+  bool _upscaleActive = false;
+  bool? _upscaleSupported;
 
   void _setStatus(String message, {bool error = false}) {
     if (!mounted) return;
@@ -264,6 +299,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       return 'Connected, but no video arrived. The PC\'s screen may be locked or '
           'asleep — StreamBeam needs it awake to capture — or streaming failed '
           'to start on that end. Check the host\'s logs.';
+    }
+    if (lower.contains('stream closed')) {
+      return 'The host closed the connection. If this device is not paired yet, scan the host QR or use Paste & play with its sbm1: code.';
     }
     // Rust's describe_connect_failure (core/src/session.rs) already produces
     // a specific, actionable message per failure kind (timeout vs reset vs
@@ -445,6 +483,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _cancelSurfaceTimeout();
     unawaited(_releaseMdnsLock());
     _scannerController?.dispose();
+    unawaited(_desktopSub?.cancel());
     _payloadCtrl.dispose();
     super.dispose();
   }
@@ -478,8 +517,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   Future<void> _toggleQrPreview() async {
     if (_busy) return;
-    setState(() => _qrPreviewOpen = !_qrPreviewOpen);
-    await _syncScanner();
+    final opening = !_qrPreviewOpen;
+    setState(() => _qrPreviewOpen = opening);
+    if (opening) {
+      // Start the camera only after the MobileScanner widget is actually in the
+      // tree — calling start() immediately races the not-yet-attached platform
+      // view, leaving the preview blank until you toggle again.
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_syncScanner()));
+    } else {
+      unawaited(_syncScanner());
+    }
   }
 
   void _closeQrPreview() {
@@ -568,6 +615,28 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  static const _nativeDiscoveryChannel =
+      MethodChannel('streambeam/native_discovery');
+
+  /// Desktop host discovery via native Bonjour (macOS). The browser runs
+  /// continuously once started, so results accumulate across refreshes.
+  Future<List<DiscoveredHost>> _discoverHostsNative() async {
+    await _nativeDiscoveryChannel.invokeMethod('start');
+    await Future<void>.delayed(const Duration(seconds: 1));
+    final raw =
+        await _nativeDiscoveryChannel.invokeMethod<List<dynamic>>('getHosts');
+    return (raw ?? const []).map((entry) {
+      final map = entry as Map;
+      final addrs = (map['addrs'] as List?) ?? const [];
+      return DiscoveredHost(
+        name: map['name'] as String? ?? '',
+        port: map['port'] as int? ?? 0,
+        addrs: addrs.map((e) => e as String).toList(),
+        hostPubkey: (map['pubkey'] as Uint8List?) ?? Uint8List(0),
+      );
+    }).toList();
+  }
+
   Future<void> _discoverHosts() async {
     if (_discoveryBusy) return;
     if (mounted) {
@@ -577,8 +646,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     }
     try {
-      await _ensureMdnsLock();
-      final hosts = await discoverHosts(timeoutMs: 6000);
+      final List<DiscoveredHost> hosts;
+      if (Platform.isAndroid) {
+        await _ensureMdnsLock();
+        hosts = await discoverHosts(timeoutMs: 6000);
+      } else {
+        // macOS: Rust mdns-sd can't reliably receive (mDNSResponder owns 5353),
+        // so browse via native Bonjour instead.
+        hosts = await _discoverHostsNative();
+      }
       if (!mounted) return;
       setState(() {
         _lanHosts = hosts;
@@ -600,9 +676,119 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       await saveHostFromPayload(payload: normalized);
       _refreshSavedHost();
       if (!mounted) return;
+      if (!Platform.isAndroid) {
+        await _startDesktopPlayback(normalized);
+        return;
+      }
       await _play();
     } catch (e) {
       _reportError(e.toString());
+    }
+  }
+
+  /// Desktop watch: drive the Rust frame stream into the native VideoToolbox
+  /// decoder (macOS) and show its texture.
+  Future<void> _startDesktopPlayback(String payload) async {
+    await _stopDesktopPlayback();
+    setState(() {
+      _busy = true;
+      _status = 'Connecting…';
+      _statusIsError = false;
+    });
+    _attachDesktopStream(playStreamDesktop(payload: payload));
+  }
+
+  /// Watch a discovered/saved host by its pinned key (no QR needed; the host
+  /// prompts to approve on first contact).
+  Future<void> _startDesktopPlaybackKnown(DiscoveredHost host, String addr) async {
+    await _stopDesktopPlayback();
+    setState(() {
+      _busy = true;
+      _status = 'Connecting…';
+      _statusIsError = false;
+    });
+    _attachDesktopStream(playStreamDesktopKnown(
+      hostName: host.name,
+      hostPubkey: host.hostPubkey,
+      addr: addr,
+    ));
+  }
+
+  void _attachDesktopStream(Stream<DesktopStreamEvent> stream) {
+    _desktopSub = stream.listen(
+      (ev) async {
+        if (!mounted) return;
+        if (ev.isConfig) {
+          try {
+            final id = await _desktopVideoChannel.invokeMethod<int>(
+              'configure',
+              {'codecConfig': ev.codecConfig},
+            );
+            if (id != null && mounted) {
+              setState(() {
+                _desktopTextureId = id;
+                _desktopAspect = ev.height > 0 ? ev.width / ev.height : 16 / 9;
+                _desktopWidth = ev.width;
+                _desktopHeight = ev.height;
+                _status = 'Streaming…';
+                _showVideo = true;
+                _busy = false;
+              });
+              appImmersive.value = true;
+              unawaited(_applyUpscale());
+            }
+          } catch (e) {
+            _reportError(e.toString());
+          }
+        } else {
+          _desktopVideoChannel.invokeMethod('frame', {'data': ev.data});
+        }
+      },
+      onError: (e) {
+        _reportError(_humanizeError(e.toString()));
+        unawaited(_stopDesktopPlayback());
+      },
+      onDone: () => unawaited(_stopDesktopPlayback()),
+    );
+  }
+
+  /// Push the MetalFX preference to the native decoder; it answers whether
+  /// upscaling is actually running (false on unsupported hardware).
+  Future<void> _applyUpscale() async {
+    try {
+      final active = await _desktopVideoChannel.invokeMethod<bool>(
+        'setUpscale',
+        {'enabled': _upscaleEnabled},
+      );
+      if (!mounted) return;
+      setState(() {
+        _upscaleActive = active ?? false;
+        // Only an enabled request is evidence about hardware support.
+        if (_upscaleEnabled) _upscaleSupported = active ?? false;
+      });
+    } catch (_) {}
+  }
+
+  void _toggleUpscale() {
+    _upscaleEnabled = !_upscaleEnabled;
+    unawaited(_applyUpscale());
+  }
+
+  Future<void> _stopDesktopPlayback() async {
+    await _desktopSub?.cancel();
+    _desktopSub = null;
+    try {
+      await _desktopVideoChannel.invokeMethod('dispose');
+    } catch (_) {}
+    appImmersive.value = false;
+    if (mounted) {
+      setState(() {
+        _desktopTextureId = null;
+        _showVideo = false;
+        _busy = false;
+        _upscaleActive = false;
+        if (_status == 'Streaming…' || _status == 'Connecting…') _status = null;
+      });
     }
   }
 
@@ -636,10 +822,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   Future<void> _beginSession({required bool reconnect}) async {
     if (!Platform.isAndroid) {
-      _setStatus(
-        'Watching on this device is coming soon — use the StreamBeam app on '
-        'your phone to watch for now.',
-      );
+      // Desktop watch: connect to the tapped host by its pinned key.
+      final lanHost = _pendingLanHost;
+      final lanAddr = _pendingLanAddr;
+      _pendingLanHost = null;
+      _pendingLanAddr = null;
+      if (lanHost != null && lanAddr != null) {
+        await _startDesktopPlaybackKnown(lanHost, lanAddr);
+      } else {
+        _setStatus('Paste or scan the host\'s link to watch on this device.');
+      }
       return;
     }
     _cancelSurfaceTimeout();
@@ -974,6 +1166,36 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_desktopTextureId != null) {
+      // Desktop watch — same player UI as Android, with the platform texture
+      // injected and capabilities declared (no input back-channel yet).
+      return StreamPlayerScreen(
+        status: _status,
+        statusIsError: _statusIsError,
+        isStreaming: _status == 'Streaming…',
+        aspectRatio: _desktopAspect,
+        streamWidth: _desktopWidth,
+        streamHeight: _desktopHeight,
+        video: Texture(textureId: _desktopTextureId!),
+        touchControls: false,
+        upscaleSupported: _upscaleSupported ?? false,
+        upscaleActive: _upscaleActive,
+        onToggleUpscale: _toggleUpscale,
+        onStop: () => unawaited(_stopDesktopPlayback()),
+        streamMode: _streamMode,
+        // Desktop watch reconnects through a different path than Android's
+        // `_beginSession`/`_stopStreaming` (see `_stopDesktopPlayback` and
+        // its own connect flow) — `_reconnectForNewCaps` assumes the
+        // Android teardown, so only update the displayed state here rather
+        // than wiring it to trigger a reconnect. Applying a new mode/custom
+        // setting on desktop currently needs a manual stop + reconnect.
+        onStreamModeChanged: (mode) => setState(() => _streamMode = mode),
+        customSettings: _customSettings,
+        onCustomSettingsChanged: (settings) =>
+            setState(() => _customSettings = settings),
+        onCustomSettingsCommitted: () {},
+      );
+    }
     if (_showVideo && Platform.isAndroid) {
       return StreamPlayerScreen(
         status: _status,
@@ -982,6 +1204,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         aspectRatio: _streamAspectRatio,
         streamWidth: _streamWidth,
         streamHeight: _streamHeight,
+        video: const AndroidView(
+          viewType: 'streambeam/video',
+          layoutDirection: TextDirection.ltr,
+        ),
         onStop: _stopStreaming,
         streamMode: _streamMode,
         onStreamModeChanged: _changeStreamMode,

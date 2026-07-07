@@ -20,4 +20,6 @@ pub use enroll::{
 pub use error::{NetError, Result};
 pub use identity::Identity;
 pub use stream::{read_msg, write_msg};
+// Re-exported because the public API (write_msg & co) takes quinn types.
+pub use quinn;
 pub use verify::{PinHostVerifier, extract_ed25519_pubkey};

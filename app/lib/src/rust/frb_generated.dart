@@ -68,7 +68,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
                   String get codegenVersion => '2.11.1';
 
                   @override
-                  int get rustContentHash => -1029041783;
+                  int get rustContentHash => -1071701645;
 
                   static const kDefaultExternalLibraryLoaderConfig = ExternalLibraryLoaderConfig(
                     stem: 'rust_lib_streambeam',
@@ -107,6 +107,10 @@ Future<StreamStats> crateApiPlayDiscoveredHost({required String hostName , requi
 
 Future<StreamStats> crateApiPlayStream({required String payload , required PlatformInt64 nativeWindow , required int maxVideoFrames , required int maxWidth , required int maxHeight , required int maxFps });
 
+Stream<DesktopStreamEvent> crateApiPlayStreamDesktop({required String payload });
+
+Stream<DesktopStreamEvent> crateApiPlayStreamDesktopKnown({required String hostName , required List<int> hostPubkey , required String addr });
+
 PlaybackDiagnostics crateApiPlaybackDiagnostics();
 
 BigInt crateApiPlaybackFramesRendered();
@@ -123,6 +127,8 @@ void crateApiSendGamepadState({required int pad , required int buttons , require
 
 void crateApiSendMouseAbs({required int x , required int y , required int refW , required int refH });
 
+void crateApiSendMouseButton({required int button , required bool down });
+
 void crateApiSendMouseClick({required int button });
 
 void crateApiSendMouseMove({required int dx , required int dy });
@@ -130,6 +136,8 @@ void crateApiSendMouseMove({required int dx , required int dy });
 void crateApiSendMouseScroll({required int dx , required int dy });
 
 Future<void> crateApiSetAppDataDir({required String dir });
+
+void crateApiSetDeviceName({required String name });
 
 void crateApiStartHost({String? hostName , String? listen , required int fps , required int maxEncodeDim });
 
@@ -513,11 +521,73 @@ sse_encode_u_8(maxFps, serializer);
         );
         
 
+@override Stream<DesktopStreamEvent> crateApiPlayStreamDesktop({required String payload })  { 
+            final sink = RustStreamSink<DesktopStreamEvent>();
+            unawaited(handler.executeNormal(NormalTask(
+            callFfi: (port_) {
+              
+            final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_String(payload, serializer);
+sse_encode_StreamSink_desktop_stream_event_Sse(sink, serializer);
+            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15, port: port_);
+            
+            },
+            codec: 
+        SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        )
+        ,
+            constMeta: kCrateApiPlayStreamDesktopConstMeta,
+            argValues: [payload, sink],
+            apiImpl: this,
+        )));
+            return sink.stream;
+             }
+
+
+        TaskConstMeta get kCrateApiPlayStreamDesktopConstMeta => const TaskConstMeta(
+            debugName: "play_stream_desktop",
+            argNames: ["payload", "sink"],
+        );
+        
+
+@override Stream<DesktopStreamEvent> crateApiPlayStreamDesktopKnown({required String hostName , required List<int> hostPubkey , required String addr })  { 
+            final sink = RustStreamSink<DesktopStreamEvent>();
+            unawaited(handler.executeNormal(NormalTask(
+            callFfi: (port_) {
+              
+            final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_String(hostName, serializer);
+sse_encode_list_prim_u_8_loose(hostPubkey, serializer);
+sse_encode_String(addr, serializer);
+sse_encode_StreamSink_desktop_stream_event_Sse(sink, serializer);
+            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16, port: port_);
+            
+            },
+            codec: 
+        SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        )
+        ,
+            constMeta: kCrateApiPlayStreamDesktopKnownConstMeta,
+            argValues: [hostName, hostPubkey, addr, sink],
+            apiImpl: this,
+        )));
+            return sink.stream;
+             }
+
+
+        TaskConstMeta get kCrateApiPlayStreamDesktopKnownConstMeta => const TaskConstMeta(
+            debugName: "play_stream_desktop_known",
+            argNames: ["hostName", "hostPubkey", "addr", "sink"],
+        );
+        
+
 @override PlaybackDiagnostics crateApiPlaybackDiagnostics()  { return handler.executeSync(SyncTask(
             callFfi: () {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
             
             },
             codec: 
@@ -542,7 +612,7 @@ sse_encode_u_8(maxFps, serializer);
             callFfi: () {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
             
             },
             codec: 
@@ -571,7 +641,7 @@ sse_encode_u_32(maxVideoFrames, serializer);
 sse_encode_u_16(maxWidth, serializer);
 sse_encode_u_16(maxHeight, serializer);
 sse_encode_u_8(maxFps, serializer);
-            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17, port: port_);
+            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19, port: port_);
             
             },
             codec: 
@@ -596,7 +666,7 @@ sse_encode_u_8(maxFps, serializer);
             callFfi: (port_) {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_String(payload, serializer);
-            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18, port: port_);
+            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20, port: port_);
             
             },
             codec: 
@@ -621,7 +691,7 @@ sse_encode_u_8(maxFps, serializer);
             callFfi: () {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
             
             },
             codec: 
@@ -647,7 +717,7 @@ sse_encode_u_8(maxFps, serializer);
               
             final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_u_8(pad, serializer);
 sse_encode_bool(connected, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
             
             },
             codec: 
@@ -679,7 +749,7 @@ sse_encode_i_16(lx, serializer);
 sse_encode_i_16(ly, serializer);
 sse_encode_i_16(rx, serializer);
 sse_encode_i_16(ry, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
             
             },
             codec: 
@@ -707,7 +777,7 @@ sse_encode_i_16(ry, serializer);
 sse_encode_u_16(y, serializer);
 sse_encode_u_16(refW, serializer);
 sse_encode_u_16(refH, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
             
             },
             codec: 
@@ -728,11 +798,37 @@ sse_encode_u_16(refH, serializer);
         );
         
 
+@override void crateApiSendMouseButton({required int button , required bool down })  { return handler.executeSync(SyncTask(
+            callFfi: () {
+              
+            final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_u_8(button, serializer);
+sse_encode_bool(down, serializer);
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+            
+            },
+            codec: 
+        SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        )
+        ,
+            constMeta: kCrateApiSendMouseButtonConstMeta,
+            argValues: [button, down],
+            apiImpl: this,
+        )); }
+
+
+        TaskConstMeta get kCrateApiSendMouseButtonConstMeta => const TaskConstMeta(
+            debugName: "send_mouse_button",
+            argNames: ["button", "down"],
+        );
+        
+
 @override void crateApiSendMouseClick({required int button })  { return handler.executeSync(SyncTask(
             callFfi: () {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_u_8(button, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
             
             },
             codec: 
@@ -758,7 +854,7 @@ sse_encode_u_16(refH, serializer);
               
             final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_i_16(dx, serializer);
 sse_encode_i_16(dy, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
             
             },
             codec: 
@@ -784,7 +880,7 @@ sse_encode_i_16(dy, serializer);
               
             final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_i_16(dx, serializer);
 sse_encode_i_16(dy, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
             
             },
             codec: 
@@ -809,7 +905,7 @@ sse_encode_i_16(dy, serializer);
             callFfi: (port_) {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_String(dir, serializer);
-            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26, port: port_);
+            pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29, port: port_);
             
             },
             codec: 
@@ -830,6 +926,31 @@ sse_encode_i_16(dy, serializer);
         );
         
 
+@override void crateApiSetDeviceName({required String name })  { return handler.executeSync(SyncTask(
+            callFfi: () {
+              
+            final serializer = SseSerializer(generalizedFrbRustBinding);sse_encode_String(name, serializer);
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+            
+            },
+            codec: 
+        SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        )
+        ,
+            constMeta: kCrateApiSetDeviceNameConstMeta,
+            argValues: [name],
+            apiImpl: this,
+        )); }
+
+
+        TaskConstMeta get kCrateApiSetDeviceNameConstMeta => const TaskConstMeta(
+            debugName: "set_device_name",
+            argNames: ["name"],
+        );
+        
+
 @override void crateApiStartHost({String? hostName , String? listen , required int fps , required int maxEncodeDim })  { return handler.executeSync(SyncTask(
             callFfi: () {
               
@@ -837,7 +958,7 @@ sse_encode_i_16(dy, serializer);
 sse_encode_opt_String(listen, serializer);
 sse_encode_u_32(fps, serializer);
 sse_encode_u_32(maxEncodeDim, serializer);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
             
             },
             codec: 
@@ -862,7 +983,7 @@ sse_encode_u_32(maxEncodeDim, serializer);
             callFfi: () {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
             
             },
             codec: 
@@ -887,7 +1008,7 @@ sse_encode_u_32(maxEncodeDim, serializer);
             callFfi: () {
               
             final serializer = SseSerializer(generalizedFrbRustBinding);
-            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+            return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
             
             },
             codec: 
@@ -910,7 +1031,13 @@ sse_encode_u_32(maxEncodeDim, serializer);
 
 
 
-                  @protected String dco_decode_String(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
+                  @protected AnyhowException dco_decode_AnyhowException(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
+return AnyhowException(raw as String); }
+
+@protected RustStreamSink<DesktopStreamEvent> dco_decode_StreamSink_desktop_stream_event_Sse(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
+throw UnimplementedError(); }
+
+@protected String dco_decode_String(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
 return raw as String; }
 
 @protected bool dco_decode_bool(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -921,6 +1048,17 @@ return dco_decode_host_pair_request(raw); }
 
 @protected SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
 return dco_decode_saved_host_info(raw); }
+
+@protected DesktopStreamEvent dco_decode_desktop_stream_event(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
+final arr = raw as List<dynamic>;
+                if (arr.length != 7) throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+                return DesktopStreamEvent(isConfig: dco_decode_bool(arr[0]),
+codecConfig: dco_decode_list_prim_u_8_strict(arr[1]),
+width: dco_decode_u_32(arr[2]),
+height: dco_decode_u_32(arr[3]),
+fps: dco_decode_u_8(arr[4]),
+data: dco_decode_list_prim_u_8_strict(arr[5]),
+keyframe: dco_decode_bool(arr[6]),); }
 
 @protected DiscoveredHost dco_decode_discovered_host(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
 final arr = raw as List<dynamic>;
@@ -1031,6 +1169,13 @@ return raw as int; }
 @protected void dco_decode_unit(dynamic raw){ // Codec=Dco (DartCObject based), see doc to use other codecs
 return; }
 
+@protected AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
+var inner = sse_decode_String(deserializer);
+        return AnyhowException(inner); }
+
+@protected RustStreamSink<DesktopStreamEvent> sse_decode_StreamSink_desktop_stream_event_Sse(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
+throw UnimplementedError('Unreachable ()'); }
+
 @protected String sse_decode_String(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 var inner = sse_decode_list_prim_u_8_strict(deserializer);
         return utf8.decoder.convert(inner); }
@@ -1043,6 +1188,16 @@ return (sse_decode_host_pair_request(deserializer)); }
 
 @protected SavedHostInfo sse_decode_box_autoadd_saved_host_info(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 return (sse_decode_saved_host_info(deserializer)); }
+
+@protected DesktopStreamEvent sse_decode_desktop_stream_event(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
+var var_isConfig = sse_decode_bool(deserializer);
+var var_codecConfig = sse_decode_list_prim_u_8_strict(deserializer);
+var var_width = sse_decode_u_32(deserializer);
+var var_height = sse_decode_u_32(deserializer);
+var var_fps = sse_decode_u_8(deserializer);
+var var_data = sse_decode_list_prim_u_8_strict(deserializer);
+var var_keyframe = sse_decode_bool(deserializer);
+return DesktopStreamEvent(isConfig: var_isConfig, codecConfig: var_codecConfig, width: var_width, height: var_height, fps: var_fps, data: var_data, keyframe: var_keyframe); }
 
 @protected DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 var var_name = sse_decode_String(deserializer);
@@ -1184,6 +1339,15 @@ return deserializer.buffer.getUint8(); }
 @protected int sse_decode_i_32(SseDeserializer deserializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 return deserializer.buffer.getInt32(); }
 
+@protected void sse_encode_AnyhowException(AnyhowException self, SseSerializer serializer){ // Codec=Sse (Serialization based), see doc to use other codecs
+sse_encode_String(self.message, serializer); }
+
+@protected void sse_encode_StreamSink_desktop_stream_event_Sse(RustStreamSink<DesktopStreamEvent> self, SseSerializer serializer){ // Codec=Sse (Serialization based), see doc to use other codecs
+sse_encode_String(self.setupAndSerialize(codec: SseCodec(
+            decodeSuccessData: sse_decode_desktop_stream_event,
+            decodeErrorData: sse_decode_AnyhowException,
+        )), serializer); }
+
 @protected void sse_encode_String(String self, SseSerializer serializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer); }
 
@@ -1195,6 +1359,16 @@ sse_encode_host_pair_request(self, serializer); }
 
 @protected void sse_encode_box_autoadd_saved_host_info(SavedHostInfo self, SseSerializer serializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 sse_encode_saved_host_info(self, serializer); }
+
+@protected void sse_encode_desktop_stream_event(DesktopStreamEvent self, SseSerializer serializer){ // Codec=Sse (Serialization based), see doc to use other codecs
+sse_encode_bool(self.isConfig, serializer);
+sse_encode_list_prim_u_8_strict(self.codecConfig, serializer);
+sse_encode_u_32(self.width, serializer);
+sse_encode_u_32(self.height, serializer);
+sse_encode_u_8(self.fps, serializer);
+sse_encode_list_prim_u_8_strict(self.data, serializer);
+sse_encode_bool(self.keyframe, serializer);
+ }
 
 @protected void sse_encode_discovered_host(DiscoveredHost self, SseSerializer serializer){ // Codec=Sse (Serialization based), see doc to use other codecs
 sse_encode_String(self.name, serializer);

@@ -23,13 +23,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 
                   
 
-                  @protected String dco_decode_String(dynamic raw);
+                  @protected AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+@protected RustStreamSink<DesktopStreamEvent> dco_decode_StreamSink_desktop_stream_event_Sse(dynamic raw);
+
+@protected String dco_decode_String(dynamic raw);
 
 @protected bool dco_decode_bool(dynamic raw);
 
 @protected HostPairRequest dco_decode_box_autoadd_host_pair_request(dynamic raw);
 
 @protected SavedHostInfo dco_decode_box_autoadd_saved_host_info(dynamic raw);
+
+@protected DesktopStreamEvent dco_decode_desktop_stream_event(dynamic raw);
 
 @protected DiscoveredHost dco_decode_discovered_host(dynamic raw);
 
@@ -75,6 +81,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 
 @protected void dco_decode_unit(dynamic raw);
 
+@protected AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+@protected RustStreamSink<DesktopStreamEvent> sse_decode_StreamSink_desktop_stream_event_Sse(SseDeserializer deserializer);
+
 @protected String sse_decode_String(SseDeserializer deserializer);
 
 @protected bool sse_decode_bool(SseDeserializer deserializer);
@@ -82,6 +92,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 @protected HostPairRequest sse_decode_box_autoadd_host_pair_request(SseDeserializer deserializer);
 
 @protected SavedHostInfo sse_decode_box_autoadd_saved_host_info(SseDeserializer deserializer);
+
+@protected DesktopStreamEvent sse_decode_desktop_stream_event(SseDeserializer deserializer);
 
 @protected DiscoveredHost sse_decode_discovered_host(SseDeserializer deserializer);
 
@@ -129,6 +141,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 
 @protected int sse_decode_i_32(SseDeserializer deserializer);
 
+@protected void sse_encode_AnyhowException(AnyhowException self, SseSerializer serializer);
+
+@protected void sse_encode_StreamSink_desktop_stream_event_Sse(RustStreamSink<DesktopStreamEvent> self, SseSerializer serializer);
+
 @protected void sse_encode_String(String self, SseSerializer serializer);
 
 @protected void sse_encode_bool(bool self, SseSerializer serializer);
@@ -136,6 +152,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 @protected void sse_encode_box_autoadd_host_pair_request(HostPairRequest self, SseSerializer serializer);
 
 @protected void sse_encode_box_autoadd_saved_host_info(SavedHostInfo self, SseSerializer serializer);
+
+@protected void sse_encode_desktop_stream_event(DesktopStreamEvent self, SseSerializer serializer);
 
 @protected void sse_encode_discovered_host(DiscoveredHost self, SseSerializer serializer);
 
