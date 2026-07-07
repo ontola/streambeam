@@ -537,6 +537,18 @@ async fn desktop_stream_loop(
     let _ = streambeam_core::request_idr(&mut session).await;
 
     let mut asm = FrameReassembler::default();
+    // A forced IDR or ref-frame invalidation costs the host a full NVENC
+    // session recreate (see `crates/host/src/capture.rs` — no live
+    // reconfigure path yet), which itself briefly disrupts the stream and
+    // can cause the very next loss report this loop would react to,
+    // otherwise turning one real loss event into a self-sustaining
+    // recreate storm (matches the Android client's own cooldown — see
+    // `IDR_REQUEST_COOLDOWN` in `app/rust/src/android/play.rs`). Unlike
+    // Android's, every report here comes from the reassembler's own gap
+    // detection (real loss), not a batch-size heuristic, so this cooldown
+    // is purely about not hammering recovery, not filtering false positives.
+    const RECOVERY_COOLDOWN: Duration = Duration::from_secs(3);
+    let mut last_recovery = None::<tokio::time::Instant>;
     loop {
         let datagram =
             tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
@@ -573,7 +585,11 @@ async fn desktop_stream_loop(
         }
 
         // Recover from unrecoverable loss the same way the other clients do.
-        if let Some(report) = asm.take_loss_report() {
+        let cooled_down = last_recovery
+            .map(|t| t.elapsed() >= RECOVERY_COOLDOWN)
+            .unwrap_or(true);
+        if cooled_down && let Some(report) = asm.take_loss_report() {
+            last_recovery = Some(tokio::time::Instant::now());
             match report {
                 streambeam_core::LossReport::Invalidate {
                     first_frame,
