@@ -630,20 +630,71 @@ async fn desktop_stream_loop(
     // is purely about not hammering recovery, not filtering false positives.
     const RECOVERY_COOLDOWN: Duration = Duration::from_secs(3);
     let mut last_recovery = None::<tokio::time::Instant>;
+    // How many decodable (non-keyframe) completions in a row have been
+    // skipped because the platform decoder was falling behind — see
+    // `IDR_RESYNC_THRESHOLD` below. Mirrors Android's `play.rs`, which this
+    // loop previously had no equivalent of: every completed frame used to be
+    // forwarded unconditionally, one datagram at a time, with no way to
+    // detect (let alone recover from) the decoder falling behind. At a high
+    // requested fps a slower decoder can't keep up with, frames would just
+    // queue up in the platform decoder's own internal buffer indefinitely
+    // and burst out once it caught up — exactly the "2fps, then 50fps, then
+    // 140fps" pattern this was built to fix.
+    let mut consecutive_skipped = 0u32;
+    const IDR_RESYNC_THRESHOLD: u32 = 40;
     loop {
-        let datagram =
-            tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
-                .await
-                .map_err(|_| "timed out waiting for media".to_string())?
-                .map_err(|e| e.to_string())?;
+        let first = tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
+            .await
+            .map_err(|_| "timed out waiting for media".to_string())?
+            .map_err(|e| e.to_string())?;
 
-        crate::playback::note_bytes_received(datagram.len() as u64);
-        let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
-        if header.channel != CHANNEL_VIDEO {
-            continue;
+        // Greedily grab anything already sitting in the receive queue too —
+        // more than one datagram back-to-back means decode fell behind real
+        // time since the last iteration (same reasoning as Android's batch
+        // read in `play.rs`).
+        let mut batch = vec![first];
+        while let Ok(Ok(next)) =
+            tokio::time::timeout(Duration::from_millis(2), session.conn.read_datagram()).await
+        {
+            batch.push(next);
         }
-        if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
-            let keyframe = header.is_keyframe();
+
+        let mut completions: Vec<(bool, Vec<u8>)> = Vec::new();
+        for datagram in batch {
+            crate::playback::note_bytes_received(datagram.len() as u64);
+            let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
+            if header.channel != CHANNEL_VIDEO {
+                continue;
+            }
+            if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
+                completions.push((header.is_keyframe(), frame));
+            }
+        }
+
+        // Several frames finishing in one greedy-drain window is common on a
+        // fast LAN at high fps (and right after a host-side NVENC session
+        // recreate, which briefly stalls then flushes a small burst) —
+        // treating that as "behind" would self-inflict resync requests with
+        // zero real loss. A real, growing backlog keeps piling up far more
+        // than a short burst, so require a much larger one to call it in
+        // (same threshold Android's play.rs settled on after real-device
+        // testing).
+        let behind = completions.len() > 5;
+        let mut dart_closed = false;
+
+        for (keyframe, frame) in completions {
+            // Always decode a keyframe (resets the reference chain and is
+            // worth showing even a little late). Otherwise, while behind,
+            // skip every non-keyframe completion — feeding a lone P-frame
+            // whose reference chain was just broken by skipped-ahead frames
+            // decodes "successfully" into garbage rather than erroring,
+            // indistinguishable from corrupted video (same failure mode
+            // Android's play.rs documents for MediaCodec).
+            if behind && !keyframe {
+                consecutive_skipped += 1;
+                continue;
+            }
+            consecutive_skipped = 0;
             // "Rendered" here means handed to the platform decoder — the
             // closest observable point on desktop, where decode happens in
             // the native layer past this crate.
@@ -697,11 +748,17 @@ async fn desktop_stream_loop(
                 .is_err()
             {
                 // Dart closed the stream (playback stopped).
+                dart_closed = true;
                 break;
             }
         }
+        if dart_closed {
+            break;
+        }
 
-        // Recover from unrecoverable loss the same way the other clients do.
+        // Recover from unrecoverable loss the same way the other clients do
+        // — sharing one cooldown clock with the skip-driven resync below so
+        // neither can spam the host even if both trip in the same tick.
         let cooled_down = last_recovery
             .map(|t| t.elapsed() >= RECOVERY_COOLDOWN)
             .unwrap_or(true);
@@ -723,6 +780,14 @@ async fn desktop_stream_loop(
                     let _ = streambeam_core::request_idr(&mut session).await;
                 }
             }
+        } else if consecutive_skipped >= IDR_RESYNC_THRESHOLD && cooled_down {
+            // We've been skipping non-keyframes for a while (they depend on
+            // a reference chain we're no longer decoding) — ask the host to
+            // recover so the picture stops degrading instead of staying
+            // corrupted until the next naturally-scheduled keyframe.
+            consecutive_skipped = 0;
+            last_recovery = Some(tokio::time::Instant::now());
+            let _ = streambeam_core::request_idr(&mut session).await;
         }
     }
 
