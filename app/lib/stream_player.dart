@@ -17,6 +17,9 @@ enum PointerMode {
   trackpad,
 }
 
+/// Corner the floating menu button snaps to on mouse-first platforms.
+enum _MenuCorner { topLeft, topRight, bottomLeft, bottomRight }
+
 /// Fullscreen stream viewer: pinch-zoom, two-finger pan, edge-drag menu.
 ///
 /// Shared by every platform — the caller injects the platform's [video]
@@ -83,6 +86,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   double get _menuWidth => _menuWidthFor(MediaQuery.sizeOf(context).width);
 
+  bool get _menuOnLeft =>
+      _menuCorner == _MenuCorner.topLeft || _menuCorner == _MenuCorner.bottomLeft;
+
   /// Width of the right-edge zone that opens the menu (~14% of screen, 64–96 logical px).
   double _edgeGrabFor(double screenW) =>
       (screenW * 0.14).clamp(64.0, 96.0);
@@ -93,6 +99,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   double _menuDrag = 0;
   bool _menuOpen = false;
+  /// Where the floating menu button lives (mouse-first platforms). Left
+  /// corners also anchor the slide-in panel to the left edge.
+  _MenuCorner _menuCorner = _MenuCorner.topRight;
+  /// Button position while it's being dragged between corners.
+  Offset? _buttonDragPos;
   bool _edgeDragActive = false;
   bool _hintPlayed = false;
   bool _keyboardOpen = false;
@@ -346,8 +357,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   void _onEdgeDragStart(DragStartDetails details) {
     final screenW = MediaQuery.sizeOf(context).width;
     final grab = _edgeGrabFor(screenW);
-    final fromRightEdge = details.globalPosition.dx >= screenW - grab;
-    if (fromRightEdge || _menuOpen || _menuDrag > 0) {
+    final fromMenuEdge = _menuOnLeft
+        ? details.globalPosition.dx <= grab
+        : details.globalPosition.dx >= screenW - grab;
+    if (fromMenuEdge || _menuOpen || _menuDrag > 0) {
       _hintController.stop();
       _edgeDragActive = true;
     }
@@ -357,7 +370,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (!_edgeDragActive) return;
     setState(() {
       final base = _menuOpen ? _menuWidth : _menuDrag;
-      _menuDrag = (base - details.delta.dx).clamp(0.0, _menuWidth);
+      // Dragging away from the anchored edge reveals the panel.
+      final towardOpen = _menuOnLeft ? details.delta.dx : -details.delta.dx;
+      _menuDrag = (base + towardOpen).clamp(0.0, _menuWidth);
       if (_menuOpen && _menuDrag < _menuWidth) {
         _menuOpen = false;
       }
@@ -368,8 +383,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (!_edgeDragActive) return;
     _edgeDragActive = false;
     final velocity = details.primaryVelocity ?? 0;
-    final flingOpen = velocity < -250;
-    final flingClose = velocity > 250;
+    final towardOpen = _menuOnLeft ? velocity : -velocity;
+    final flingOpen = towardOpen > 250;
+    final flingClose = towardOpen < -250;
     final shouldOpen =
         !flingClose && (_menuDrag > _openThreshold || flingOpen);
     setState(() {
@@ -397,6 +413,74 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool get _showMenuScrim =>
       (_menuVisibleWidth > 20 || _edgeDragActive) &&
       !_hintController.isAnimating;
+
+  /// Floating menu button (mouse-first platforms): tap opens the panel,
+  /// drag snaps it to any corner — a left corner also moves the panel to
+  /// the left edge. One stable Positioned so the drag gesture survives
+  /// position updates.
+  Widget _buildMenuButton(Size viewport) {
+    const buttonSize = 48.0;
+    const inset = 10.0;
+    final pad = MediaQuery.paddingOf(context);
+    final drag = _buttonDragPos;
+
+    final double left;
+    final double top;
+    if (drag != null) {
+      left = (drag.dx - buttonSize / 2)
+          .clamp(0.0, viewport.width - buttonSize);
+      top = (drag.dy - buttonSize / 2)
+          .clamp(0.0, viewport.height - buttonSize);
+    } else {
+      left = _menuOnLeft
+          ? inset + pad.left
+          : viewport.width - buttonSize - inset - pad.right;
+      top = (_menuCorner == _MenuCorner.topLeft ||
+              _menuCorner == _MenuCorner.topRight)
+          ? inset + pad.top
+          : viewport.height - buttonSize - inset - pad.bottom;
+    }
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: buttonSize,
+      height: buttonSize,
+      child: GestureDetector(
+        onPanStart: (d) => setState(() => _buttonDragPos = d.globalPosition),
+        onPanUpdate: (d) => setState(() => _buttonDragPos = d.globalPosition),
+        onPanEnd: (_) => _snapMenuButton(viewport),
+        onPanCancel: () => _snapMenuButton(viewport),
+        child: Opacity(
+          opacity: drag != null ? 1.0 : 0.75,
+          child: IconButton.filledTonal(
+            tooltip: 'Menu (drag to move)',
+            icon: const Icon(Icons.menu),
+            onPressed: () {
+              setState(() {
+                _menuOpen = true;
+                _menuDrag = 0;
+              });
+              _syncDiagnosticsPoll();
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _snapMenuButton(Size viewport) {
+    final pos = _buttonDragPos;
+    if (pos == null) return;
+    final onLeft = pos.dx < viewport.width / 2;
+    final onTop = pos.dy < viewport.height / 2;
+    setState(() {
+      _menuCorner = onTop
+          ? (onLeft ? _MenuCorner.topLeft : _MenuCorner.topRight)
+          : (onLeft ? _MenuCorner.bottomLeft : _MenuCorner.bottomRight);
+      _buttonDragPos = null;
+    });
+  }
 
   Size _fitVideoSize(Size viewport) {
     final ratio = widget.aspectRatio;
@@ -604,45 +688,49 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           Positioned(
             top: 0,
             bottom: 0,
-            right: 0,
+            left: _menuOnLeft ? 0 : null,
+            right: _menuOnLeft ? null : 0,
             width: _menuWidth,
             child: Transform.translate(
-              offset: Offset(menuSlide, 0),
-              child: Row(
-                children: [
-                  // Drag handle only — don't wrap the whole menu or taps won't reach it.
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onHorizontalDragStart: _onEdgeDragStart,
-                    onHorizontalDragUpdate: _onEdgeDragUpdate,
-                    onHorizontalDragEnd: _onEdgeDragEnd,
-                    child: const SizedBox(width: 20),
-                  ),
-                  Expanded(
-                    child: ValueListenableBuilder<_LiveDiagnostics>(
-                      valueListenable: _liveDiagListenable,
-                      builder: (context, liveDiag, _) => _StreamMenu(
-                        diagnostics: liveDiag,
-                        showDiagnostics: widget.isStreaming,
-                        touchControls: widget.inputSupported && widget.touchControls,
-                        pointerMode: _pointerMode,
-                        onPointerModeChanged: (mode) {
-                          setState(() {
-                            _pointerMode = mode;
-                            _blockViewerGestures = false;
-                            _multiTouchSession = false;
-                          });
-                        },
-                        upscaleSupported: widget.upscaleSupported,
-                        upscaleActive: widget.upscaleActive,
-                        onToggleUpscale: widget.onToggleUpscale,
-                        onStop: _handleStop,
-                        onKeyboard: _openKeyboard,
-                      ),
+              offset: Offset(_menuOnLeft ? -menuSlide : menuSlide, 0),
+              child: Builder(builder: (context) {
+                // Drag handle only — don't wrap the whole menu or taps won't reach it.
+                final handle = GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragStart: _onEdgeDragStart,
+                  onHorizontalDragUpdate: _onEdgeDragUpdate,
+                  onHorizontalDragEnd: _onEdgeDragEnd,
+                  child: const SizedBox(width: 20),
+                );
+                final menu = Expanded(
+                  child: ValueListenableBuilder<_LiveDiagnostics>(
+                    valueListenable: _liveDiagListenable,
+                    builder: (context, liveDiag, _) => _StreamMenu(
+                      diagnostics: liveDiag,
+                      showDiagnostics: widget.isStreaming,
+                      touchControls: widget.inputSupported && widget.touchControls,
+                      anchorLeft: _menuOnLeft,
+                      pointerMode: _pointerMode,
+                      onPointerModeChanged: (mode) {
+                        setState(() {
+                          _pointerMode = mode;
+                          _blockViewerGestures = false;
+                          _multiTouchSession = false;
+                        });
+                      },
+                      upscaleSupported: widget.upscaleSupported,
+                      upscaleActive: widget.upscaleActive,
+                      onToggleUpscale: widget.onToggleUpscale,
+                      onStop: _handleStop,
+                      onKeyboard: _openKeyboard,
                     ),
                   ),
-                ],
-              ),
+                );
+                return Row(
+                  children:
+                      _menuOnLeft ? [menu, handle] : [handle, menu],
+                );
+              }),
             ),
           ),
           if (widget.touchControls)
@@ -660,26 +748,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
               ),
             )
           else if (!_menuOpen)
-            Positioned(
-              top: 10,
-              right: 10,
-              child: SafeArea(
-                child: Opacity(
-                  opacity: 0.75,
-                  child: IconButton.filledTonal(
-                    tooltip: 'Menu',
-                    icon: const Icon(Icons.menu),
-                    onPressed: () {
-                      setState(() {
-                        _menuOpen = true;
-                        _menuDrag = 0;
-                      });
-                      _syncDiagnosticsPoll();
-                    },
-                  ),
-                ),
-              ),
-            ),
+            _buildMenuButton(viewport),
           if (_keyboardOpen) ...[
             GestureDetector(
               onTap: _closeKeyboard,
@@ -1243,6 +1312,7 @@ class _StreamMenu extends StatelessWidget {
     required this.diagnostics,
     required this.showDiagnostics,
     required this.touchControls,
+    this.anchorLeft = false,
     required this.pointerMode,
     required this.onPointerModeChanged,
     required this.upscaleSupported,
@@ -1255,6 +1325,8 @@ class _StreamMenu extends StatelessWidget {
   final _LiveDiagnostics diagnostics;
   final bool showDiagnostics;
   final bool touchControls;
+  /// True when the panel is anchored to the left screen edge.
+  final bool anchorLeft;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
   final bool upscaleSupported;
@@ -1278,14 +1350,16 @@ class _StreamMenu extends StatelessWidget {
       vertical: compact ? 0 : 2,
     );
 
+    const edgeSide = BorderSide(color: Color(0x33000000), width: 1);
     return Material(
       color: theme.colorScheme.surface.withValues(alpha: 0.96),
       elevation: 0,
-      shape: const Border(
-        left: BorderSide(color: Color(0x33000000), width: 1),
-      ),
+      shape: anchorLeft
+          ? const Border(right: edgeSide)
+          : const Border(left: edgeSide),
       child: SafeArea(
-        left: false,
+        left: anchorLeft,
+        right: !anchorLeft,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
