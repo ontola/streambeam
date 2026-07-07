@@ -775,11 +775,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   Future<void> _stopDesktopPlayback() async {
-    await _desktopSub?.cancel();
+    // Leave the player screen immediately; the actual teardown (stream
+    // cancel + native decoder dispose) continues in the background — the
+    // dispose call queues behind any backlog of in-flight 'frame' messages
+    // on the platform channel and can take a moment.
+    final sub = _desktopSub;
     _desktopSub = null;
-    try {
-      await _desktopVideoChannel.invokeMethod('dispose');
-    } catch (_) {}
     appImmersive.value = false;
     if (mounted) {
       setState(() {
@@ -790,6 +791,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         if (_status == 'Streaming…' || _status == 'Connecting…') _status = null;
       });
     }
+    await sub?.cancel();
+    try {
+      await _desktopVideoChannel.invokeMethod('dispose');
+    } catch (_) {}
   }
 
   Future<String?> _payloadFromClipboard() async {
