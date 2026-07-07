@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -16,6 +17,11 @@ enum PointerMode {
 }
 
 /// Fullscreen stream viewer: pinch-zoom, two-finger pan, edge-drag menu.
+///
+/// Shared by every platform — the caller injects the platform's [video]
+/// widget (AndroidView on Android, a Flutter [Texture] on desktop) and
+/// declares its capabilities; everything else (menu, diagnostics, gestures,
+/// overlays) is one implementation. Don't fork this per platform.
 class StreamPlayerScreen extends StatefulWidget {
   const StreamPlayerScreen({
     required this.status,
@@ -24,7 +30,12 @@ class StreamPlayerScreen extends StatefulWidget {
     required this.aspectRatio,
     required this.streamWidth,
     required this.streamHeight,
+    required this.video,
     required this.onStop,
+    this.inputSupported = true,
+    this.upscaleSupported = false,
+    this.upscaleActive = false,
+    this.onToggleUpscale,
     super.key,
   });
 
@@ -34,7 +45,19 @@ class StreamPlayerScreen extends StatefulWidget {
   final double aspectRatio;
   final int streamWidth;
   final int streamHeight;
+
+  /// The platform's video surface, sized/positioned by this screen.
+  final Widget video;
   final VoidCallback onStop;
+
+  /// Whether this build can capture & send input to the host (touch/gamepad).
+  /// False hides the pointer-mode/keyboard UI and skips the input layers.
+  final bool inputSupported;
+
+  /// GPU upscaling (MetalFX on macOS): shown in the menu when supported.
+  final bool upscaleSupported;
+  final bool upscaleActive;
+  final VoidCallback? onToggleUpscale;
 
   @override
   State<StreamPlayerScreen> createState() => _StreamPlayerScreenState();
@@ -87,7 +110,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   @override
   void initState() {
     super.initState();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    if (Platform.isAndroid) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
     _transformController.addListener(_onTransformChanged);
     _hintController = AnimationController(
       vsync: this,
@@ -107,6 +132,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     ]).animate(_hintController);
     _hintController.addListener(_onHintTick);
     _hintController.addStatusListener(_onHintStatus);
+    // The screen can mount with the stream already live (desktop connects
+    // before showing the player) — didUpdateWidget won't fire for that.
+    if (widget.isStreaming) {
+      _hintPlayed = true;
+      _hintController.forward(from: 0);
+      _beginVideoWatch();
+      _beginDiagnostics();
+    }
   }
 
   void _onHintStatus(AnimationStatus status) {
@@ -261,10 +294,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _hintController.dispose();
     _transformController.removeListener(_onTransformChanged);
     // Restore the system bars (back/home) when leaving the fullscreen player.
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.manual,
-      overlays: SystemUiOverlay.values,
-    );
+    if (Platform.isAndroid) {
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+    }
     _transformController.dispose();
     _liveDiagListenable.dispose();
     _keyboardFocus.dispose();
@@ -401,7 +436,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
             );
             final menuSlide = _menuSlideOff;
             final edgeGrab = _edgeGrabFor(constraints.maxWidth);
-            final showStreamInput = widget.isStreaming &&
+            final showStreamInput = widget.inputSupported &&
+                widget.isStreaming &&
                 _hasVideo &&
                 !_menuBlocksPointer &&
                 !_keyboardOpen;
@@ -426,10 +462,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         child: SizedBox(
                           width: videoSize.width,
                           height: videoSize.height,
-                          child: const AndroidView(
-                            viewType: 'streambeam/video',
-                            layoutDirection: TextDirection.ltr,
-                          ),
+                          child: widget.video,
                         ),
                       ),
                     ),
@@ -579,6 +612,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                       builder: (context, liveDiag, _) => _StreamMenu(
                         diagnostics: liveDiag,
                         showDiagnostics: widget.isStreaming,
+                        inputSupported: widget.inputSupported,
                         pointerMode: _pointerMode,
                         onPointerModeChanged: (mode) {
                           setState(() {
@@ -587,6 +621,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             _multiTouchSession = false;
                           });
                         },
+                        upscaleSupported: widget.upscaleSupported,
+                        upscaleActive: widget.upscaleActive,
+                        onToggleUpscale: widget.onToggleUpscale,
                         onStop: _handleStop,
                         onKeyboard: _openKeyboard,
                       ),
@@ -1063,16 +1100,24 @@ class _StreamMenu extends StatelessWidget {
   const _StreamMenu({
     required this.diagnostics,
     required this.showDiagnostics,
+    required this.inputSupported,
     required this.pointerMode,
     required this.onPointerModeChanged,
+    required this.upscaleSupported,
+    required this.upscaleActive,
+    required this.onToggleUpscale,
     required this.onStop,
     required this.onKeyboard,
   });
 
   final _LiveDiagnostics diagnostics;
   final bool showDiagnostics;
+  final bool inputSupported;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
+  final bool upscaleSupported;
+  final bool upscaleActive;
+  final VoidCallback? onToggleUpscale;
   final VoidCallback onStop;
   final VoidCallback onKeyboard;
 
@@ -1148,61 +1193,91 @@ class _StreamMenu extends StatelessWidget {
                     ),
                     const Divider(height: 1),
                   ],
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      metrics.horizontal + 4,
-                      compact ? 4 : 8,
-                      metrics.horizontal + 4,
-                      compact ? 2 : 4,
-                    ),
-                    child: Text(
-                      'Pointer mode',
-                      style: theme.textTheme.titleSmall,
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
-                    child: SegmentedButton<PointerMode>(
-                      segments: [
-                        ButtonSegment(
-                          value: PointerMode.direct,
-                          icon: Icon(Icons.touch_app, size: compact ? 18 : 20),
-                          label: compact ? null : const Text('Direct'),
-                          tooltip: 'Direct touch — finger maps to screen',
-                        ),
-                        ButtonSegment(
-                          value: PointerMode.trackpad,
-                          icon: Icon(Icons.swipe, size: compact ? 18 : 20),
-                          label: compact ? null : const Text('Trackpad'),
-                          tooltip: 'Trackpad — drag moves cursor',
-                        ),
-                      ],
-                      selected: {pointerMode},
-                      emptySelectionAllowed: false,
-                      showSelectedIcon: false,
-                      onSelectionChanged: (selected) {
-                        if (selected.isNotEmpty) {
-                          onPointerModeChanged(selected.first);
-                        }
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      metrics.horizontal + 4,
-                      compact ? 2 : 6,
-                      metrics.horizontal + 4,
-                      compact ? 4 : 8,
-                    ),
-                    child: Text(
-                      trackpad
-                          ? 'Drag to move the cursor · tap to left-click'
-                          : 'Your finger position maps to the PC screen · tap to click',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                  if (upscaleSupported) ...[
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        metrics.horizontal + 4,
+                        compact ? 4 : 8,
+                        metrics.horizontal + 4,
+                        compact ? 2 : 4,
+                      ),
+                      child: Text(
+                        'Video',
+                        style: theme.textTheme.titleSmall,
                       ),
                     ),
-                  ),
+                    SwitchListTile(
+                      value: upscaleActive,
+                      onChanged: onToggleUpscale == null
+                          ? null
+                          : (_) => onToggleUpscale!(),
+                      title: const Text('Upscaling'),
+                      subtitle: Text(
+                        'Sharper image via GPU (MetalFX)',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      dense: compact,
+                      contentPadding: tilePadding,
+                    ),
+                    const Divider(height: 1),
+                  ],
+                  if (inputSupported) ...[
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        metrics.horizontal + 4,
+                        compact ? 4 : 8,
+                        metrics.horizontal + 4,
+                        compact ? 2 : 4,
+                      ),
+                      child: Text(
+                        'Pointer mode',
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                      child: SegmentedButton<PointerMode>(
+                        segments: [
+                          ButtonSegment(
+                            value: PointerMode.direct,
+                            icon: Icon(Icons.touch_app, size: compact ? 18 : 20),
+                            label: compact ? null : const Text('Direct'),
+                            tooltip: 'Direct touch — finger maps to screen',
+                          ),
+                          ButtonSegment(
+                            value: PointerMode.trackpad,
+                            icon: Icon(Icons.swipe, size: compact ? 18 : 20),
+                            label: compact ? null : const Text('Trackpad'),
+                            tooltip: 'Trackpad — drag moves cursor',
+                          ),
+                        ],
+                        selected: {pointerMode},
+                        emptySelectionAllowed: false,
+                        showSelectedIcon: false,
+                        onSelectionChanged: (selected) {
+                          if (selected.isNotEmpty) {
+                            onPointerModeChanged(selected.first);
+                          }
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        metrics.horizontal + 4,
+                        compact ? 2 : 6,
+                        metrics.horizontal + 4,
+                        compact ? 4 : 8,
+                      ),
+                      child: Text(
+                        trackpad
+                            ? 'Drag to move the cursor · tap to left-click'
+                            : 'Your finger position maps to the PC screen · tap to click',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
                   const Divider(height: 1),
                   ListTile(
                     leading: Icon(
@@ -1214,20 +1289,21 @@ class _StreamMenu extends StatelessWidget {
                     contentPadding: tilePadding,
                     onTap: onStop,
                   ),
-                  ListTile(
-                    leading: Icon(
-                      Icons.keyboard_outlined,
-                      size: compact ? 22 : 24,
+                  if (inputSupported)
+                    ListTile(
+                      leading: Icon(
+                        Icons.keyboard_outlined,
+                        size: compact ? 22 : 24,
+                      ),
+                      title: const Text('Keyboard'),
+                      subtitle: Text(
+                        'Send text to your PC',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      visualDensity: tileDensity,
+                      contentPadding: tilePadding,
+                      onTap: onKeyboard,
                     ),
-                    title: const Text('Keyboard'),
-                    subtitle: Text(
-                      'Send text to your PC',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                    visualDensity: tileDensity,
-                    contentPadding: tilePadding,
-                    onTap: onKeyboard,
-                  ),
                   Padding(
                     padding: EdgeInsets.fromLTRB(
                       metrics.horizontal + 4,
@@ -1236,10 +1312,13 @@ class _StreamMenu extends StatelessWidget {
                       compact ? 4 : 8,
                     ),
                     child: Text(
-                      'Drag from the right edge for menu\n'
-                      '1 finger: move cursor · tap: left click\n'
-                      '2 fingers: pinch zoom / pan (local only)\n'
-                      'Quick 2-finger tap: right click',
+                      inputSupported
+                          ? 'Drag from the right edge for menu\n'
+                              '1 finger: move cursor · tap: left click\n'
+                              '2 fingers: pinch zoom / pan (local only)\n'
+                              'Quick 2-finger tap: right click'
+                          : 'Drag from the right edge for menu\n'
+                              'Pinch or scroll to zoom (local only)',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: compact ? 1.25 : 1.35,

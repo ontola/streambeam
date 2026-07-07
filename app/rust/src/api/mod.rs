@@ -425,6 +425,17 @@ async fn desktop_stream_loop(
 ) -> Result<(), String> {
     use streambeam_proto::media::CHANNEL_VIDEO;
 
+    // Feed the shared playback counters so `playback_diagnostics()` /
+    // `playback_frames_rendered()` work identically to the Android path
+    // (the player UI polls them regardless of platform).
+    crate::playback::reset();
+    crate::playback::set_session(
+        session.width,
+        session.height,
+        session.fps,
+        session.codec.clone(),
+    );
+
     let codec_config = session
         .codec_config
         .clone()
@@ -451,12 +462,17 @@ async fn desktop_stream_loop(
                 .map_err(|_| "timed out waiting for media".to_string())?
                 .map_err(|e| e.to_string())?;
 
+        crate::playback::note_bytes_received(datagram.len() as u64);
         let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
         if header.channel != CHANNEL_VIDEO {
             continue;
         }
         if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {
             let keyframe = header.is_keyframe();
+            // "Rendered" here means handed to the platform decoder — the
+            // closest observable point on desktop, where decode happens in
+            // the native layer past this crate.
+            crate::playback::note_frame_rendered();
             if sink
                 .add(DesktopStreamEvent {
                     is_config: false,

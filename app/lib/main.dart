@@ -196,6 +196,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   static const _desktopVideoChannel = MethodChannel('streambeam/video_desktop');
   int? _desktopTextureId;
   double _desktopAspect = 16 / 9;
+  int _desktopWidth = 0;
+  int _desktopHeight = 0;
   StreamSubscription<DesktopStreamEvent>? _desktopSub;
   // MetalFX upscaling (macOS): on by default; the native side reports back
   // whether it's actually available on this machine.
@@ -671,6 +673,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               setState(() {
                 _desktopTextureId = id;
                 _desktopAspect = ev.height > 0 ? ev.width / ev.height : 16 / 9;
+                _desktopWidth = ev.width;
+                _desktopHeight = ev.height;
                 _status = 'Streaming…';
                 _showVideo = true;
                 _busy = false;
@@ -982,11 +986,19 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     if (_desktopTextureId != null) {
-      return _DesktopPlayer(
-        textureId: _desktopTextureId!,
-        aspect: _desktopAspect,
-        upscaleActive: _upscaleActive,
+      // Desktop watch — same player UI as Android, with the platform texture
+      // injected and capabilities declared (no input back-channel yet).
+      return StreamPlayerScreen(
+        status: _status,
+        statusIsError: _statusIsError,
+        isStreaming: _status == 'Streaming…',
+        aspectRatio: _desktopAspect,
+        streamWidth: _desktopWidth,
+        streamHeight: _desktopHeight,
+        video: Texture(textureId: _desktopTextureId!),
+        inputSupported: false,
         upscaleSupported: _upscaleSupported ?? false,
+        upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
         onStop: () => unawaited(_stopDesktopPlayback()),
       );
@@ -999,6 +1011,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         aspectRatio: _streamAspectRatio,
         streamWidth: _streamWidth,
         streamHeight: _streamHeight,
+        video: const AndroidView(
+          viewType: 'streambeam/video',
+          layoutDirection: TextDirection.ltr,
+        ),
         onStop: _stopStreaming,
       );
     }
@@ -1100,72 +1116,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// Fullscreen desktop video, backed by the native VideoToolbox texture.
-class _DesktopPlayer extends StatelessWidget {
-  const _DesktopPlayer({
-    required this.textureId,
-    required this.aspect,
-    required this.upscaleActive,
-    required this.upscaleSupported,
-    required this.onToggleUpscale,
-    required this.onStop,
-  });
-
-  final int textureId;
-  final double aspect;
-  final bool upscaleActive;
-  final bool upscaleSupported;
-  final VoidCallback onToggleUpscale;
-  final VoidCallback onStop;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Center(
-            child: AspectRatio(
-              aspectRatio: aspect,
-              child: Texture(textureId: textureId),
-            ),
-          ),
-          Positioned(
-            top: 12,
-            right: 12,
-            child: SafeArea(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (upscaleSupported) ...[
-                    Tooltip(
-                      message: upscaleActive
-                          ? 'MetalFX upscaling on'
-                          : 'MetalFX upscaling off',
-                      child: IconButton.filledTonal(
-                        onPressed: onToggleUpscale,
-                        isSelected: upscaleActive,
-                        icon: const Icon(Icons.auto_awesome_outlined),
-                        selectedIcon: const Icon(Icons.auto_awesome),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  FilledButton.tonalIcon(
-                    onPressed: onStop,
-                    icon: const Icon(Icons.stop),
-                    label: const Text('Stop'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
