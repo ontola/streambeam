@@ -197,6 +197,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   int? _desktopTextureId;
   double _desktopAspect = 16 / 9;
   StreamSubscription<DesktopStreamEvent>? _desktopSub;
+  // MetalFX upscaling (macOS): on by default; the native side reports back
+  // whether it's actually available on this machine.
+  bool _upscaleEnabled = true;
+  bool _upscaleActive = false;
+  bool? _upscaleSupported;
 
   void _setStatus(String message, {bool error = false}) {
     if (!mounted) return;
@@ -665,6 +670,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 _busy = false;
               });
               appImmersive.value = true;
+              unawaited(_applyUpscale());
             }
           } catch (e) {
             _reportError(e.toString());
@@ -681,6 +687,28 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     );
   }
 
+  /// Push the MetalFX preference to the native decoder; it answers whether
+  /// upscaling is actually running (false on unsupported hardware).
+  Future<void> _applyUpscale() async {
+    try {
+      final active = await _desktopVideoChannel.invokeMethod<bool>(
+        'setUpscale',
+        {'enabled': _upscaleEnabled},
+      );
+      if (!mounted) return;
+      setState(() {
+        _upscaleActive = active ?? false;
+        // Only an enabled request is evidence about hardware support.
+        if (_upscaleEnabled) _upscaleSupported = active ?? false;
+      });
+    } catch (_) {}
+  }
+
+  void _toggleUpscale() {
+    _upscaleEnabled = !_upscaleEnabled;
+    unawaited(_applyUpscale());
+  }
+
   Future<void> _stopDesktopPlayback() async {
     await _desktopSub?.cancel();
     _desktopSub = null;
@@ -693,6 +721,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         _desktopTextureId = null;
         _showVideo = false;
         _busy = false;
+        _upscaleActive = false;
         if (_status == 'Streaming…' || _status == 'Connecting…') _status = null;
       });
     }
@@ -950,6 +979,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       return _DesktopPlayer(
         textureId: _desktopTextureId!,
         aspect: _desktopAspect,
+        upscaleActive: _upscaleActive,
+        upscaleSupported: _upscaleSupported ?? false,
+        onToggleUpscale: _toggleUpscale,
         onStop: () => unawaited(_stopDesktopPlayback()),
       );
     }
@@ -1072,11 +1104,17 @@ class _DesktopPlayer extends StatelessWidget {
   const _DesktopPlayer({
     required this.textureId,
     required this.aspect,
+    required this.upscaleActive,
+    required this.upscaleSupported,
+    required this.onToggleUpscale,
     required this.onStop,
   });
 
   final int textureId;
   final double aspect;
+  final bool upscaleActive;
+  final bool upscaleSupported;
+  final VoidCallback onToggleUpscale;
   final VoidCallback onStop;
 
   @override
@@ -1095,10 +1133,29 @@ class _DesktopPlayer extends StatelessWidget {
             top: 12,
             right: 12,
             child: SafeArea(
-              child: FilledButton.tonalIcon(
-                onPressed: onStop,
-                icon: const Icon(Icons.stop),
-                label: const Text('Stop'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (upscaleSupported) ...[
+                    Tooltip(
+                      message: upscaleActive
+                          ? 'MetalFX upscaling on'
+                          : 'MetalFX upscaling off',
+                      child: IconButton.filledTonal(
+                        onPressed: onToggleUpscale,
+                        isSelected: upscaleActive,
+                        icon: const Icon(Icons.auto_awesome_outlined),
+                        selectedIcon: const Icon(Icons.auto_awesome),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  FilledButton.tonalIcon(
+                    onPressed: onStop,
+                    icon: const Icon(Icons.stop),
+                    label: const Text('Stop'),
+                  ),
+                ],
               ),
             ),
           ),

@@ -72,6 +72,9 @@ class MainFlutterWindow: NSWindow {
           self.video?.decode(frame: data)
         }
         result(nil)
+      case "setUpscale":
+        let enabled = (args?["enabled"] as? Bool) ?? true
+        result(self.video?.setUpscaling(enabled) ?? false)
       case "dispose":
         self.video?.dispose()
         self.video = nil
