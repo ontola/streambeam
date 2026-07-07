@@ -164,7 +164,31 @@ fn load_client_identity(
     }
 }
 
+/// The QUIC connection stays alive on keep-alives even when the host never
+/// answers the handshake (wedged encoder, incompatible/older host build) —
+/// without a deadline the client would show "Connecting…" forever.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn finish_session(
+    endpoint: quinn::Endpoint,
+    conn: quinn::Connection,
+    client_name: &str,
+    pair_proof: Option<[u8; 32]>,
+    video_caps: VideoCaps,
+) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
+    tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        finish_session_inner(endpoint, conn, client_name, pair_proof, video_caps),
+    )
+    .await
+    .map_err(|_| {
+        "host accepted the connection but did not complete the session handshake — \
+         it may be busy starting its encoder or running an incompatible (older) \
+         version; restart or update the host app"
+    })?
+}
+
+async fn finish_session_inner(
     endpoint: quinn::Endpoint,
     conn: quinn::Connection,
     client_name: &str,
