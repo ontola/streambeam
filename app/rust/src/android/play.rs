@@ -148,48 +148,6 @@ fn encode_frame(mode: FeedMode, frame: &[u8]) -> Vec<u8> {
     }
 }
 
-fn coalesce_input_batch(first: InputEvent, rx: &mut tokio::sync::mpsc::UnboundedReceiver<InputEvent>) -> Vec<InputEvent> {
-    let mut batch = vec![first];
-    while let Ok(next) = rx.try_recv() {
-        batch.push(next);
-        if batch.len() >= 64 {
-            break;
-        }
-    }
-
-    let mut out = Vec::with_capacity(batch.len());
-    let mut i = 0;
-    while i < batch.len() {
-        match batch[i] {
-            InputEvent::MouseMove { dx, dy } => {
-                let mut sum_dx = i32::from(dx);
-                let mut sum_dy = i32::from(dy);
-                let mut j = i + 1;
-                while j < batch.len() {
-                    match batch[j] {
-                        InputEvent::MouseMove { dx, dy } => {
-                            sum_dx = sum_dx.saturating_add(i32::from(dx));
-                            sum_dy = sum_dy.saturating_add(i32::from(dy));
-                            j += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                out.push(InputEvent::MouseMove {
-                    dx: sum_dx.clamp(-32768, 32767) as i16,
-                    dy: sum_dy.clamp(-32768, 32767) as i16,
-                });
-                i = j;
-            }
-            ref other => {
-                out.push(other.clone());
-                i += 1;
-            }
-        }
-    }
-    out
-}
-
 pub async fn run(payload: String, native_window: i64, max_video_frames: u32) -> Result<StreamStats, String> {
     log::info!("streambeam connecting with pairing payload");
     let session = connect_as_identity(
@@ -280,19 +238,10 @@ async fn play_session(
         .input
         .take()
         .ok_or("input stream not open")?;
-    let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
     crate::input::set_sender(Some(input_tx));
 
-    let input_task = runtime.spawn(async move {
-        let mut input_send = input;
-        while let Some(first) = input_rx.recv().await {
-            for ev in coalesce_input_batch(first, &mut input_rx) {
-                if streambeam_net::write_msg(&mut input_send, &ev).await.is_err() {
-                    return;
-                }
-            }
-        }
-    });
+    let input_task = runtime.spawn(crate::input::pump(input, input_rx));
 
     let result = tokio::task::spawn_blocking(move || {
         play_session_blocking(session, native_window, max_video_frames, runtime)

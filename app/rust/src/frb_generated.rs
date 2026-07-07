@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 100350028;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1071701645;
 
 // Section: executor
 
@@ -880,6 +880,39 @@ fn wire__crate__api__send_mouse_abs_impl(
         },
     )
 }
+fn wire__crate__api__send_mouse_button_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "send_mouse_button",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_button = <u8>::sse_decode(&mut deserializer);
+            let api_down = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::send_mouse_button(api_button, api_down);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__send_mouse_click_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1480,7 +1513,7 @@ fn pde_ffi_dispatcher_primary_impl(
         16 => wire__crate__api__play_stream_desktop_known_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__reconnect_play_stream_impl(port, ptr, rust_vec_len, data_len),
         20 => wire__crate__api__save_host_from_payload_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1507,13 +1540,14 @@ fn pde_ffi_dispatcher_sync_impl(
         22 => wire__crate__api__send_gamepad_plug_impl(ptr, rust_vec_len, data_len),
         23 => wire__crate__api__send_gamepad_state_impl(ptr, rust_vec_len, data_len),
         24 => wire__crate__api__send_mouse_abs_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__set_device_name_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__start_host_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__stop_host_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__send_mouse_button_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__set_device_name_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__start_host_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__stop_host_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

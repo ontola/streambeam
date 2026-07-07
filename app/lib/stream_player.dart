@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -33,6 +34,7 @@ class StreamPlayerScreen extends StatefulWidget {
     required this.video,
     required this.onStop,
     this.inputSupported = true,
+    this.touchControls = true,
     this.upscaleSupported = false,
     this.upscaleActive = false,
     this.onToggleUpscale,
@@ -50,9 +52,15 @@ class StreamPlayerScreen extends StatefulWidget {
   final Widget video;
   final VoidCallback onStop;
 
-  /// Whether this build can capture & send input to the host (touch/gamepad).
-  /// False hides the pointer-mode/keyboard UI and skips the input layers.
+  /// Whether this build can capture & send input to the host at all.
+  /// False skips the input layers entirely.
   final bool inputSupported;
+
+  /// Whether the primary pointer is touch (phone). False (desktop mouse)
+  /// hides the touch-only UI (pointer-mode picker, keyboard, edge-drag
+  /// zone) and shows a menu button instead; mouse events always map
+  /// directly (hover moves, real button press/release, wheel scroll).
+  final bool touchControls;
 
   /// GPU upscaling (MetalFX on macOS): shown in the menu when supported.
   final bool upscaleSupported;
@@ -435,7 +443,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
               videoSize.height,
             );
             final menuSlide = _menuSlideOff;
-            final edgeGrab = _edgeGrabFor(constraints.maxWidth);
+            // Mouse-first platforms get a menu button instead of the
+            // right-edge drag zone (which would swallow clicks near it).
+            final edgeGrab =
+                widget.touchControls ? _edgeGrabFor(constraints.maxWidth) : 0.0;
             final showStreamInput = widget.inputSupported &&
                 widget.isStreaming &&
                 _hasVideo &&
@@ -468,7 +479,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                     ),
                   ),
                 ),
-                if (showStreamInput)
+                if (showStreamInput && widget.touchControls)
+                  // Android-only EventChannel; no native side elsewhere yet.
                   GamepadForwarder(enabled: showStreamInput),
                 if (showStreamInput)
                   _StreamInputLayer(
@@ -612,7 +624,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                       builder: (context, liveDiag, _) => _StreamMenu(
                         diagnostics: liveDiag,
                         showDiagnostics: widget.isStreaming,
-                        inputSupported: widget.inputSupported,
+                        touchControls: widget.inputSupported && widget.touchControls,
                         pointerMode: _pointerMode,
                         onPointerModeChanged: (mode) {
                           setState(() {
@@ -633,19 +645,41 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
               ),
             ),
           ),
-          Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            width: edgeGrab,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: _onEdgeDragStart,
-              onHorizontalDragUpdate: _onEdgeDragUpdate,
-              onHorizontalDragEnd: _onEdgeDragEnd,
-              child: const SizedBox.expand(),
+          if (widget.touchControls)
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: edgeGrab,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: _onEdgeDragStart,
+                onHorizontalDragUpdate: _onEdgeDragUpdate,
+                onHorizontalDragEnd: _onEdgeDragEnd,
+                child: const SizedBox.expand(),
+              ),
+            )
+          else if (!_menuOpen)
+            Positioned(
+              top: 10,
+              right: 10,
+              child: SafeArea(
+                child: Opacity(
+                  opacity: 0.75,
+                  child: IconButton.filledTonal(
+                    tooltip: 'Menu',
+                    icon: const Icon(Icons.menu),
+                    onPressed: () {
+                      setState(() {
+                        _menuOpen = true;
+                        _menuDrag = 0;
+                      });
+                      _syncDiagnosticsPoll();
+                    },
+                  ),
+                ),
+              ),
             ),
-          ),
           if (_keyboardOpen) ...[
             GestureDetector(
               onTap: _closeKeyboard,
@@ -735,6 +769,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   final _activePointers = <int>{};
   final _pointers = <int, Offset>{};
+  /// Currently-pressed mouse buttons (Flutter bitmask), for real
+  /// press/release semantics (drag & select) on mouse-driven platforms.
+  int _mouseButtons = 0;
+  double _scrollAccumX = 0;
+  double _scrollAccumY = 0;
   Offset? _singleOrigin;
   DateTime? _singleDownAt;
   double _singleTravel = 0;
@@ -765,12 +804,16 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (!widget.mouseControlEnabled || widget.multiTouchSession) {
       _setCapturing(false);
     }
+    if (!widget.mouseControlEnabled && _mouseButtons != 0) {
+      _syncMouseButtons(0);
+    }
   }
 
   @override
   void dispose() {
     _cancelRelFlush();
     _flushRel();
+    if (_mouseButtons != 0) _syncMouseButtons(0);
     _setCapturing(false);
     super.dispose();
   }
@@ -858,8 +901,88 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   bool _isInMenuEdgeZone(Offset global) {
+    if (widget.screenEdgeGrab <= 0) return false;
     final screenW = MediaQuery.sizeOf(context).width;
     return global.dx >= screenW - widget.screenEdgeGrab;
+  }
+
+  // ---- Mouse path (desktop, or a mouse attached to a phone) ----
+  // Touch gestures synthesize taps/drags; a real mouse maps 1:1 instead:
+  // hover/move → absolute position, buttons → press/release, wheel → scroll.
+
+  static bool _isMouse(PointerEvent e) =>
+      e.kind == PointerDeviceKind.mouse || e.kind == PointerDeviceKind.trackpad;
+
+  /// Diff [next] against the held bitmask and send press/release events.
+  void _syncMouseButtons(int next) {
+    const mapping = [
+      [kPrimaryMouseButton, 0],
+      [kSecondaryMouseButton, 1],
+      [kMiddleMouseButton, 2],
+    ];
+    for (final m in mapping) {
+      final wasDown = _mouseButtons & m[0] != 0;
+      final isDown = next & m[0] != 0;
+      if (wasDown != isDown) {
+        sendMouseButton(button: m[1], down: isDown);
+      }
+    }
+    _mouseButtons = next & (kPrimaryMouseButton | kSecondaryMouseButton | kMiddleMouseButton);
+  }
+
+  void _onMouseDown(PointerDownEvent event) {
+    if (!widget.mouseControlEnabled) return;
+    final local = _videoLocal(event.localPosition);
+    if (local == null) return; // clicks on the letterbox stay local
+    _sendAbs(local);
+    _syncMouseButtons(event.buttons);
+  }
+
+  void _onMouseMove(PointerMoveEvent event) {
+    if (!widget.mouseControlEnabled) {
+      _syncMouseButtons(0);
+      return;
+    }
+    // Mid-drag the pointer may leave the video; clamp so drags keep tracking.
+    final local = _videoLocal(event.localPosition, clamp: _mouseButtons != 0);
+    if (local != null) _sendAbs(local);
+    _syncMouseButtons(event.buttons);
+  }
+
+  void _onMouseUp(PointerEvent event) {
+    _syncMouseButtons(event.buttons);
+  }
+
+  void _onPointerHover(PointerHoverEvent event) {
+    if (!_isMouse(event) || !widget.mouseControlEnabled) return;
+    final local = _videoLocal(event.localPosition);
+    if (local != null) _sendAbs(local);
+  }
+
+  /// Accumulate pixel deltas into whole scroll lines (host expects lines).
+  void _sendScrollPixels(double dxPixels, double dyPixels) {
+    const pixelsPerLine = 40.0;
+    _scrollAccumX += dxPixels / pixelsPerLine;
+    _scrollAccumY += dyPixels / pixelsPerLine;
+    final sx = _scrollAccumX.truncate();
+    final sy = _scrollAccumY.truncate();
+    if (sx == 0 && sy == 0) return;
+    _scrollAccumX -= sx;
+    _scrollAccumY -= sy;
+    sendMouseScroll(dx: sx.clamp(-32768, 32767), dy: sy.clamp(-32768, 32767));
+  }
+
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent || !widget.mouseControlEnabled) return;
+    // Wheel-down (positive dy) = scroll down = negative wheel lines.
+    _sendScrollPixels(-event.scrollDelta.dx, -event.scrollDelta.dy);
+  }
+
+  void _onPointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (!widget.mouseControlEnabled) return;
+    // Trackpad two-finger pan (natural scrolling: sign is already inverted
+    // relative to wheel deltas).
+    _sendScrollPixels(event.panDelta.dx, event.panDelta.dy);
   }
 
   bool get _canSendMouse =>
@@ -912,6 +1035,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    if (_isMouse(event)) {
+      _onMouseDown(event);
+      return;
+    }
     if (_isInMenuEdgeZone(event.position)) return;
 
     final local = _videoLocal(event.localPosition);
@@ -944,6 +1071,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
+    if (_isMouse(event)) {
+      _onMouseMove(event);
+      return;
+    }
     if (!_activePointers.contains(event.pointer)) return;
 
     final local = _videoLocal(event.localPosition, clamp: true);
@@ -981,6 +1112,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    if (_isMouse(event)) {
+      _onMouseUp(event);
+      return;
+    }
     final countBefore = _pointers.length;
     final activeBefore = _activePointers.length;
     final pendingTwo = _pendingTwoFinger;
@@ -1033,6 +1168,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
+    if (_isMouse(event)) {
+      _syncMouseButtons(0);
+      return;
+    }
     _removePointer(event.pointer);
     if (_activePointers.isEmpty) {
       _resetMouseState();
@@ -1049,6 +1188,9 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
         onPointerMove: _onPointerMove,
         onPointerUp: _onPointerUp,
         onPointerCancel: _onPointerCancel,
+        onPointerHover: _onPointerHover,
+        onPointerSignal: _onPointerSignal,
+        onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
         child: const SizedBox.expand(),
       ),
     );
@@ -1100,7 +1242,7 @@ class _StreamMenu extends StatelessWidget {
   const _StreamMenu({
     required this.diagnostics,
     required this.showDiagnostics,
-    required this.inputSupported,
+    required this.touchControls,
     required this.pointerMode,
     required this.onPointerModeChanged,
     required this.upscaleSupported,
@@ -1112,7 +1254,7 @@ class _StreamMenu extends StatelessWidget {
 
   final _LiveDiagnostics diagnostics;
   final bool showDiagnostics;
-  final bool inputSupported;
+  final bool touchControls;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
   final bool upscaleSupported;
@@ -1221,7 +1363,7 @@ class _StreamMenu extends StatelessWidget {
                     ),
                     const Divider(height: 1),
                   ],
-                  if (inputSupported) ...[
+                  if (touchControls) ...[
                     Padding(
                       padding: EdgeInsets.fromLTRB(
                         metrics.horizontal + 4,
@@ -1289,7 +1431,7 @@ class _StreamMenu extends StatelessWidget {
                     contentPadding: tilePadding,
                     onTap: onStop,
                   ),
-                  if (inputSupported)
+                  if (touchControls)
                     ListTile(
                       leading: Icon(
                         Icons.keyboard_outlined,
@@ -1312,13 +1454,13 @@ class _StreamMenu extends StatelessWidget {
                       compact ? 4 : 8,
                     ),
                     child: Text(
-                      inputSupported
+                      touchControls
                           ? 'Drag from the right edge for menu\n'
                               '1 finger: move cursor · tap: left click\n'
                               '2 fingers: pinch zoom / pan (local only)\n'
                               'Quick 2-finger tap: right click'
-                          : 'Drag from the right edge for menu\n'
-                              'Pinch or scroll to zoom (local only)',
+                          : 'Mouse controls the remote device directly:\n'
+                              'click · drag · right-click · scroll',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: compact ? 1.25 : 1.35,

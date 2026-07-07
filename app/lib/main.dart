@@ -996,7 +996,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         streamWidth: _desktopWidth,
         streamHeight: _desktopHeight,
         video: Texture(textureId: _desktopTextureId!),
-        inputSupported: false,
+        touchControls: false,
         upscaleSupported: _upscaleSupported ?? false,
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,

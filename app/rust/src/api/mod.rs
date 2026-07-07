@@ -35,21 +35,22 @@ pub fn playback_diagnostics() -> PlaybackDiagnostics {
     }
 }
 
+// The send_* input functions are platform-generic: they enqueue on the
+// active session's input pump (`crate::input`) and silently no-op when no
+// session is streaming.
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_move(dx: i16, dy: i16) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::MouseMove { dx, dy });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_scroll(dx: i16, dy: i16) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::Scroll { dx, dy });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::MouseAbs {
         x,
         y,
@@ -60,23 +61,19 @@ pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_click(button: u8) {
-    #[cfg(target_os = "android")]
-    {
-        use streambeam_proto::input::InputEvent;
-        crate::input::send(InputEvent::MouseButton {
-            button,
-            down: true,
-        });
-        crate::input::send(InputEvent::MouseButton {
-            button,
-            down: false,
-        });
-    }
+    send_mouse_button(button, true);
+    send_mouse_button(button, false);
+}
+
+/// Separate press/release — needed for drag & text selection with a real
+/// mouse (desktop watch); [`send_mouse_click`] stays for tap semantics.
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_mouse_button(button: u8, down: bool) {
+    crate::input::send(streambeam_proto::input::InputEvent::MouseButton { button, down });
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_gamepad_plug(pad: u8, connected: bool) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::GamepadPlug {
         pad: pad.min(3),
         connected,
@@ -94,7 +91,6 @@ pub fn send_gamepad_state(
     rx: i16,
     ry: i16,
 ) {
-    #[cfg(target_os = "android")]
     crate::input::send(streambeam_proto::input::InputEvent::GamepadState {
         pad: pad.min(3),
         buttons,
@@ -435,6 +431,21 @@ async fn desktop_stream_loop(
         session.fps,
         session.codec.clone(),
     );
+
+    // Wire mouse/gamepad control: pump `crate::input::send` onto the
+    // session's input stream, torn down whichever way this function exits.
+    struct InputPumpGuard(tokio::task::JoinHandle<()>);
+    impl Drop for InputPumpGuard {
+        fn drop(&mut self) {
+            crate::input::set_sender(None);
+            self.0.abort();
+        }
+    }
+    let _input_guard = session.input.take().map(|input_send| {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::input::set_sender(Some(tx));
+        InputPumpGuard(tokio::spawn(crate::input::pump(input_send, rx)))
+    });
 
     let codec_config = session
         .codec_config

@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `receive_stats`
+// These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `play_stream_desktop_inner`, `play_stream_desktop_known_inner`, `receive_stats`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
@@ -35,6 +35,13 @@ void sendMouseAbs({
 
 void sendMouseClick({required int button}) =>
     StreambeamFfi.instance.api.crateApiSendMouseClick(button: button);
+
+/// Separate press/release — needed for drag & text selection with a real
+/// mouse (desktop watch); [`send_mouse_click`] stays for tap semantics.
+void sendMouseButton({required int button, required bool down}) => StreambeamFfi
+    .instance
+    .api
+    .crateApiSendMouseButton(button: button, down: down);
 
 void sendGamepadPlug({required int pad, required bool connected}) =>
     StreambeamFfi.instance.api.crateApiSendGamepadPlug(
@@ -137,11 +144,17 @@ Future<StreamStats> reconnectPlayStream({
 /// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
 /// and stream H.264 access units to the platform decoder (VideoToolbox on
 /// macOS). Video-only for now; input/control is a separate path.
+///
+/// Errors go through `sink.add_error` (→ the Dart stream's `onError`), never
+/// the function's own `Result`: the generated binding fires that future
+/// `unawaited`, so a returned `Err` becomes an unhandled Dart exception the
+/// UI never sees.
 Stream<DesktopStreamEvent> playStreamDesktop({required String payload}) =>
     StreambeamFfi.instance.api.crateApiPlayStreamDesktop(payload: payload);
 
 /// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
 /// uses the pinned key; the host prompts to approve on first contact).
+/// Errors go through the sink — see [`play_stream_desktop`].
 Stream<DesktopStreamEvent> playStreamDesktopKnown({
   required String hostName,
   required List<int> hostPubkey,

@@ -26,7 +26,7 @@ receives. "Control my phone from my PC" needs the host half on the target.
 |---|---|---|
 | **Windows** | ➖ (no desktop watch yet) | ✅ mouse (SendInput) · ✅ gamepad (VIIPER virtual pad) · ⬜ keyboard (`Key` events currently dropped) |
 | **Android** | ✅ mouse (touch + trackpad) · ✅ gamepad · ⬜ keyboard | ⬜ needs an AccessibilityService / Shizuku — no unrestricted inject API (this is why PC→phone control isn't wired) |
-| **macOS** | ➖ (desktop watch in progress) | ⬜ CGEvent (needs the Accessibility permission) |
+| **macOS** | ✅ mouse (hover/click/drag/scroll map 1:1 while watching) · ⬜ keyboard | ⬜ CGEvent (needs the Accessibility permission) |
 | **Linux** | ➖ | ⬜ uinput / XTest |
 | **iOS** | ⬜ later | ➖ |
 
