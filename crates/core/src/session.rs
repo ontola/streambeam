@@ -37,7 +37,7 @@ fn describe_connect_failure(e: &quinn::ConnectionError) -> String {
         // No response at all within the idle timeout — the single most
         // common real-world cause isn't "host is off", it's a firewall (or a
         // network profile change re-scoping an existing firewall rule —
-        // see docs/PROGRESS.md's 2026-07-06 entry) silently dropping every
+        // see docs/PROGRESS.md's 2026-07-07 entry) silently dropping every
         // packet with no rejection, which looks identical to the host not
         // running from the client's point of view.
         ConnectionError::TimedOut => {
