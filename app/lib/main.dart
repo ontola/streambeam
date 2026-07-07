@@ -43,29 +43,33 @@ Future<void> openOntola() async {
   await launchUrl(_ontolaUrl, mode: LaunchMode.externalApplication);
 }
 
+Widget _appBarTitle() => Row(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
+    ),
+    const SizedBox(width: 10),
+    const Text('StreamBeam'),
+  ],
+);
+
+List<Widget> _appBarActions() => [
+  TextButton.icon(
+    onPressed: openGithubRepo,
+    icon: const Icon(Icons.open_in_new, size: 18),
+    label: const Text('GitHub'),
+  ),
+];
+
 /// The shared top bar (logo + "StreamBeam" + GitHub link), identical on every
 /// tab so the header doesn't change as you switch between Watch and Beam.
 AppBar streamBeamAppBar() {
   return AppBar(
     backgroundColor: _appBarColor,
-    title: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: SvgPicture.asset(_logoAsset, width: 28, height: 28),
-        ),
-        const SizedBox(width: 10),
-        const Text('StreamBeam'),
-      ],
-    ),
-    actions: [
-      TextButton.icon(
-        onPressed: openGithubRepo,
-        icon: const Icon(Icons.open_in_new, size: 18),
-        label: const Text('GitHub'),
-      ),
-    ],
+    title: _appBarTitle(),
+    actions: _appBarActions(),
   );
 }
 
@@ -987,16 +991,23 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       );
     }
 
-    return Scaffold(
-      appBar: streamBeamAppBar(),
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: () async {
-            await Future.wait([_discoverHosts(), _refreshClipboard()]);
-          },
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16),
+    // The header eats a big chunk of the (already scarce, especially in
+    // landscape) vertical space if pinned, so it floats away on scroll down
+    // and reappears on scroll up instead — see AppShell in beam_page.dart for
+    // the Watch/Beam tab bar's own landscape-rail treatment.
+    final scrollView = CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
+        SliverAppBar(
+          backgroundColor: _appBarColor,
+          title: _appBarTitle(),
+          actions: _appBarActions(),
+          floating: true,
+          snap: true,
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.all(16),
+          sliver: SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1083,6 +1094,18 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               ],
             ),
           ),
+        ),
+      ],
+    );
+
+    return Scaffold(
+      body: SafeArea(
+        top: false,
+        child: RefreshIndicator(
+          onRefresh: () async {
+            await Future.wait([_discoverHosts(), _refreshClipboard()]);
+          },
+          child: scrollView,
         ),
       ),
     );

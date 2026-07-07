@@ -15,7 +15,6 @@ use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::OnceCell;
 use tokio::sync::oneshot;
 
 use crate::active_stream::{ActiveStreamTracker, CloseableConn};
@@ -416,7 +415,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     // connection, also means that client's requested resolution/fps is what
     // actually builds the encoder, instead of always falling back to the
     // CLI/env defaults.
-    let encoder_cell: Arc<SharedEncoderCell> = Arc::new(OnceCell::new());
+    let encoder_cell: Arc<SharedEncoderCell> = Arc::new(AsyncMutex::new(None));
 
     let identity = Identity::load_or_generate(&config.identity_path)?;
     let paired_path = config.paired_store.clone();
@@ -590,12 +589,20 @@ fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
     }
 }
 
-type SharedEncoderCell = OnceCell<(
-    Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
-    u16,
-    u16,
-    Option<Vec<u8>>,
-)>;
+/// The shared encoder plus the request it was actually built for — so a
+/// later `SessionRequest` asking for different dimensions/fps (e.g. a client
+/// reconnecting after changing `StreamMode`) can tell it needs a rebuild
+/// instead of silently keeping whatever the first-ever request produced.
+struct CachedEncoder {
+    encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
+    width: u16,
+    height: u16,
+    codec_config: Option<Vec<u8>>,
+    build_fps: u32,
+    build_dim: u32,
+}
+
+type SharedEncoderCell = AsyncMutex<Option<CachedEncoder>>;
 
 /// Longest side a client's `SessionRequest.video.{max_width,max_height}` can
 /// push the encoder to, and the fastest `max_fps` it can request — independent
@@ -762,12 +769,9 @@ async fn handle_client(
 
         match msg {
             ClientMsg::SessionRequest { video, .. } => {
-                // First `SessionRequest` ever (across the host's whole
-                // lifetime, not just this connection) is what actually
-                // builds the shared encoder — see `encoder_cell`'s doc.
                 // Honor this client's real display caps, clamped to a sanity
                 // ceiling independent of the CLI/env admin defaults (which
-                // now only apply when a client sends degenerate/zero caps —
+                // only apply when a client sends degenerate/zero caps —
                 // shouldn't happen with a real device, but devtools/older
                 // clients might).
                 let want_dim = u32::from(video.max_width.max(video.max_height));
@@ -782,27 +786,59 @@ async fn handle_client(
                 } else {
                     default_fps
                 };
-                let (encoder, width, height, codec_config) = encoder_cell
-                    .get_or_init(|| async {
-                        let encoder = build_encoder(build_fps, build_dim);
-                        let (width, height) = encoder.dimensions();
-                        let codec_config = encoder.codec_config();
-                        log!(
-                            "encoder ready — {width}x{height} @ {build_fps}fps (requested by {client_name}: {}x{} @ {}fps), {} opus packets",
-                            video.max_width,
-                            video.max_height,
-                            video.max_fps,
-                            OpusCatalog::bundled().len()
-                        );
-                        (
-                            Arc::new(AsyncMutex::new(encoder)),
-                            width as u16,
-                            height as u16,
-                            codec_config,
-                        )
-                    })
-                    .await
-                    .clone();
+
+                // Claim the shared encoder *before* deciding whether to
+                // rebuild it — this waits for a still-live previous
+                // connection's `stream_video` task to fully exit first (see
+                // `ActiveStreamTracker::start_streaming`), so we never
+                // rebuild out from under a task that's still mid-iteration
+                // on the old one. Idempotent for a repeat `SessionRequest` on
+                // the same connection.
+                controls.start_streaming(conn.remote_address(), &conn).await;
+
+                let mut cell = encoder_cell.lock().await;
+                let needs_rebuild = !matches!(
+                    cell.as_ref(),
+                    Some(c) if c.build_fps == build_fps && c.build_dim == build_dim
+                );
+                if needs_rebuild {
+                    // Rebuilding mid-connection (a client re-sending
+                    // `SessionRequest` with new caps on an already-streaming
+                    // connection, rather than reconnecting) would leave the
+                    // already-spawned `stream_video` task holding a clone of
+                    // the *old* encoder Arc — it won't pick up the new one.
+                    // Not a real scenario today: every client here only ever
+                    // sends `SessionRequest` once, right after connecting,
+                    // and changes caps by fully reconnecting (see
+                    // `_reconnectForNewCaps` in the Flutter app).
+                    let encoder = build_encoder(build_fps, build_dim);
+                    let (width, height) = encoder.dimensions();
+                    let codec_config = encoder.codec_config();
+                    log!(
+                        "encoder {} — {width}x{height} @ {build_fps}fps (requested by {client_name}: {}x{} @ {}fps), {} opus packets",
+                        if cell.is_some() { "rebuilt" } else { "ready" },
+                        video.max_width,
+                        video.max_height,
+                        video.max_fps,
+                        OpusCatalog::bundled().len()
+                    );
+                    *cell = Some(CachedEncoder {
+                        encoder: Arc::new(AsyncMutex::new(encoder)),
+                        width: width as u16,
+                        height: height as u16,
+                        codec_config,
+                        build_fps,
+                        build_dim,
+                    });
+                }
+                let cached = cell.as_ref().expect("just populated above if empty");
+                let (encoder, width, height, codec_config) = (
+                    cached.encoder.clone(),
+                    cached.width,
+                    cached.height,
+                    cached.codec_config.clone(),
+                );
+                drop(cell);
                 resolved = Some((encoder.clone(), width, height));
 
                 // Don't rely solely on the value captured when the encoder
@@ -822,7 +858,6 @@ async fn handle_client(
                 // hardware encoder — worse than the bug it was meant to fix.
                 if !streaming {
                     streaming = true;
-                    controls.start_streaming(conn.remote_address(), &conn).await;
                     stream_ctl.request_idr();
                     let media_conn = conn.clone();
                     let ctl = stream_ctl.clone();

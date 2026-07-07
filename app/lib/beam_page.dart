@@ -556,19 +556,56 @@ class _AppShellState extends State<AppShell> {
     // fills the screen (and the immersive player isn't framed by chrome).
     return ValueListenableBuilder<bool>(
       valueListenable: appImmersive,
-      builder: (context, immersive, _) => Scaffold(
-        body: IndexedStack(
+      builder: (context, immersive, _) {
+        final content = IndexedStack(
           index: _index.clamp(0, pages.length - 1),
           children: pages,
-        ),
-        bottomNavigationBar: immersive
-            ? null
-            : NavigationBar(
-                selectedIndex: _index.clamp(0, destinations.length - 1),
-                onDestinationSelected: (i) => setState(() => _index = i),
-                destinations: destinations,
-              ),
-      ),
+        );
+        if (immersive) {
+          return Scaffold(body: content);
+        }
+
+        // In landscape on a phone, a bottom bar eats a horizontal band out of
+        // an already-short screen — a labeled side rail gives the same two
+        // destinations without that cost.
+        final media = MediaQuery.of(context);
+        final isPhoneLandscape =
+            media.orientation == Orientation.landscape &&
+            media.size.shortestSide < 600;
+
+        if (isPhoneLandscape) {
+          return Scaffold(
+            body: Row(
+              children: [
+                Expanded(child: content),
+                const VerticalDivider(width: 1),
+                NavigationRail(
+                  selectedIndex: _index.clamp(0, destinations.length - 1),
+                  onDestinationSelected: (i) => setState(() => _index = i),
+                  labelType: NavigationRailLabelType.all,
+                  destinations: [
+                    for (final d in destinations)
+                      NavigationRailDestination(
+                        icon: d.icon,
+                        selectedIcon: d.selectedIcon,
+                        label: Text(d.label),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Scaffold(
+          body: content,
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _index.clamp(0, destinations.length - 1),
+            onDestinationSelected: (i) => setState(() => _index = i),
+            destinations: destinations,
+          ),
+        );
+      },
     );
   }
 }
