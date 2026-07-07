@@ -56,10 +56,15 @@ class MainFlutterWindow: NSWindow {
       guard let self = self else { return }
       let args = call.arguments as? [String: Any]
       switch call.method {
+      case "canDecodeAV1":
+        result(StreamBeamVideo.canDecodeAV1())
       case "configure":
         let config = (args?["codecConfig"] as? FlutterStandardTypedData)?.data ?? Data()
+        let codec = (args?["codec"] as? String) ?? "h264"
+        let width = Int32((args?["width"] as? Int) ?? 0)
+        let height = Int32((args?["height"] as? Int) ?? 0)
         let v = StreamBeamVideo(registry: registrar.textures)
-        if v.configure(codecConfig: config) {
+        if v.configure(codecConfig: config, codec: codec, width: width, height: height) {
           self.video?.dispose()
           self.video = v
           result(Int(v.textureId))

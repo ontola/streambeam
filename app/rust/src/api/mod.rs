@@ -393,6 +393,10 @@ pub async fn reconnect_play_stream(
 #[derive(Debug, Clone)]
 pub struct DesktopStreamEvent {
     pub is_config: bool,
+    /// Negotiated codec id on the config event: `"h264"` (codec_config =
+    /// Annex-B SPS/PPS) or `"av01"` (codec_config = ISO-BMFF `av1C` record,
+    /// ready for the platform decoder's format description).
+    pub codec: String,
     pub codec_config: Vec<u8>,
     pub width: u32,
     pub height: u32,
@@ -412,23 +416,34 @@ pub struct DesktopStreamEvent {
 #[flutter_rust_bridge::frb]
 pub async fn play_stream_desktop(
     payload: String,
+    allow_av1: bool,
     sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
-    if let Err(e) = play_stream_desktop_inner(payload, &sink).await {
+    if let Err(e) = play_stream_desktop_inner(payload, allow_av1, &sink).await {
         let _ = sink.add_error(e);
     }
     Ok(())
 }
 
+/// `allow_av1` comes from the platform decoder probe (VideoToolbox hardware
+/// AV1 exists on Apple silicon M3+ only) — advertising it blindly would make
+/// the host encode a stream the client can't decode.
+fn desktop_video_caps(allow_av1: bool) -> streambeam_proto::control::VideoCaps {
+    let mut caps = streambeam_core::fallback_video_caps();
+    caps.av1 = allow_av1;
+    caps
+}
+
 async fn play_stream_desktop_inner(
     payload: String,
+    allow_av1: bool,
     sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     let session = connect_as_identity(
         &payload,
         &crate::store::client_name(),
         Some(&client_identity_path()),
-        streambeam_core::fallback_video_caps(),
+        desktop_video_caps(allow_av1),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -444,9 +459,12 @@ pub async fn play_stream_desktop_known(
     host_name: String,
     host_pubkey: Vec<u8>,
     addr: String,
+    allow_av1: bool,
     sink: crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
-    if let Err(e) = play_stream_desktop_known_inner(host_name, host_pubkey, addr, &sink).await {
+    if let Err(e) =
+        play_stream_desktop_known_inner(host_name, host_pubkey, addr, allow_av1, &sink).await
+    {
         let _ = sink.add_error(e);
     }
     Ok(())
@@ -456,6 +474,7 @@ async fn play_stream_desktop_known_inner(
     host_name: String,
     host_pubkey: Vec<u8>,
     addr: String,
+    allow_av1: bool,
     sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
     let pubkey: [u8; 32] = host_pubkey
@@ -469,7 +488,7 @@ async fn play_stream_desktop_known_inner(
         addr,
         &crate::store::client_name(),
         &client_identity_path(),
-        streambeam_core::fallback_video_caps(),
+        desktop_video_caps(allow_av1),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -522,8 +541,21 @@ async fn desktop_stream_loop(
         .codec_config
         .clone()
         .ok_or("Host did not send video configuration (CodecConfig).")?;
+    let is_av1 = session.codec == "av01";
+    // H.264 config passes through as Annex-B SPS/PPS; for AV1 the platform
+    // decoder wants an `av1C` record, built here from the sequence header in
+    // the host's config (same extraction the Android decoder does).
+    let codec_config = if is_av1 {
+        let seq = streambeam_core::av1_extract_sequence_header(&codec_config)
+            .ok_or("Host AV1 config is missing a sequence header.")?;
+        streambeam_core::av1c_from_sequence_header(&seq)
+            .ok_or("Could not parse the host's AV1 sequence header.")?
+    } else {
+        codec_config
+    };
     sink.add(DesktopStreamEvent {
         is_config: true,
+        codec: session.codec.clone(),
         codec_config,
         width: u32::from(session.width),
         height: u32::from(session.height),
@@ -567,14 +599,22 @@ async fn desktop_stream_loop(
             // closest observable point on desktop, where decode happens in
             // the native layer past this crate.
             crate::playback::note_frame_rendered();
+            // Same per-frame cleanup as the Android AV1 path — some decoders
+            // choke on the redundant frame headers NVENC emits.
+            let data = if is_av1 {
+                streambeam_core::av1_access_unit_without_redundant_headers(&frame)
+            } else {
+                frame
+            };
             if sink
                 .add(DesktopStreamEvent {
                     is_config: false,
+                    codec: String::new(),
                     codec_config: Vec::new(),
                     width: 0,
                     height: 0,
                     fps: 0,
-                    data: frame,
+                    data,
                     keyframe,
                 })
                 .is_err()

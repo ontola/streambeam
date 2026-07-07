@@ -132,12 +132,14 @@ abstract class StreambeamFfiApi extends BaseApi {
 
   Stream<DesktopStreamEvent> crateApiPlayStreamDesktop({
     required String payload,
+    required bool allowAv1,
   });
 
   Stream<DesktopStreamEvent> crateApiPlayStreamDesktopKnown({
     required String hostName,
     required List<int> hostPubkey,
     required String addr,
+    required bool allowAv1,
   });
 
   PlaybackDiagnostics crateApiPlaybackDiagnostics();
@@ -643,6 +645,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   @override
   Stream<DesktopStreamEvent> crateApiPlayStreamDesktop({
     required String payload,
+    required bool allowAv1,
   }) {
     final sink = RustStreamSink<DesktopStreamEvent>();
     unawaited(
@@ -651,6 +654,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
           callFfi: (port_) {
             final serializer = SseSerializer(generalizedFrbRustBinding);
             sse_encode_String(payload, serializer);
+            sse_encode_bool(allowAv1, serializer);
             sse_encode_StreamSink_desktop_stream_event_Sse(sink, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
@@ -664,7 +668,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             decodeErrorData: sse_decode_String,
           ),
           constMeta: kCrateApiPlayStreamDesktopConstMeta,
-          argValues: [payload, sink],
+          argValues: [payload, allowAv1, sink],
           apiImpl: this,
         ),
       ),
@@ -674,7 +678,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
 
   TaskConstMeta get kCrateApiPlayStreamDesktopConstMeta => const TaskConstMeta(
     debugName: "play_stream_desktop",
-    argNames: ["payload", "sink"],
+    argNames: ["payload", "allowAv1", "sink"],
   );
 
   @override
@@ -682,6 +686,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     required String hostName,
     required List<int> hostPubkey,
     required String addr,
+    required bool allowAv1,
   }) {
     final sink = RustStreamSink<DesktopStreamEvent>();
     unawaited(
@@ -692,6 +697,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             sse_encode_String(hostName, serializer);
             sse_encode_list_prim_u_8_loose(hostPubkey, serializer);
             sse_encode_String(addr, serializer);
+            sse_encode_bool(allowAv1, serializer);
             sse_encode_StreamSink_desktop_stream_event_Sse(sink, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
@@ -705,7 +711,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
             decodeErrorData: sse_decode_String,
           ),
           constMeta: kCrateApiPlayStreamDesktopKnownConstMeta,
-          argValues: [hostName, hostPubkey, addr, sink],
+          argValues: [hostName, hostPubkey, addr, allowAv1, sink],
           apiImpl: this,
         ),
       ),
@@ -716,7 +722,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   TaskConstMeta get kCrateApiPlayStreamDesktopKnownConstMeta =>
       const TaskConstMeta(
         debugName: "play_stream_desktop_known",
-        argNames: ["hostName", "hostPubkey", "addr", "sink"],
+        argNames: ["hostName", "hostPubkey", "addr", "allowAv1", "sink"],
       );
 
   @override
@@ -1255,16 +1261,17 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   DesktopStreamEvent dco_decode_desktop_stream_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return DesktopStreamEvent(
       isConfig: dco_decode_bool(arr[0]),
-      codecConfig: dco_decode_list_prim_u_8_strict(arr[1]),
-      width: dco_decode_u_32(arr[2]),
-      height: dco_decode_u_32(arr[3]),
-      fps: dco_decode_u_8(arr[4]),
-      data: dco_decode_list_prim_u_8_strict(arr[5]),
-      keyframe: dco_decode_bool(arr[6]),
+      codec: dco_decode_String(arr[1]),
+      codecConfig: dco_decode_list_prim_u_8_strict(arr[2]),
+      width: dco_decode_u_32(arr[3]),
+      height: dco_decode_u_32(arr[4]),
+      fps: dco_decode_u_8(arr[5]),
+      data: dco_decode_list_prim_u_8_strict(arr[6]),
+      keyframe: dco_decode_bool(arr[7]),
     );
   }
 
@@ -1513,6 +1520,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_isConfig = sse_decode_bool(deserializer);
+    var var_codec = sse_decode_String(deserializer);
     var var_codecConfig = sse_decode_list_prim_u_8_strict(deserializer);
     var var_width = sse_decode_u_32(deserializer);
     var var_height = sse_decode_u_32(deserializer);
@@ -1521,6 +1529,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     var var_keyframe = sse_decode_bool(deserializer);
     return DesktopStreamEvent(
       isConfig: var_isConfig,
+      codec: var_codec,
       codecConfig: var_codecConfig,
       width: var_width,
       height: var_height,
@@ -1856,6 +1865,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self.isConfig, serializer);
+    sse_encode_String(self.codec, serializer);
     sse_encode_list_prim_u_8_strict(self.codecConfig, serializer);
     sse_encode_u_32(self.width, serializer);
     sse_encode_u_32(self.height, serializer);

@@ -14,7 +14,7 @@ pub use annex_b::{
 pub use obu::{
     access_unit_is_keyframe as av1_access_unit_is_keyframe,
     access_unit_without_redundant_headers as av1_access_unit_without_redundant_headers,
-    extract_sequence_header as av1_extract_sequence_header,
+    av1c_from_sequence_header, extract_sequence_header as av1_extract_sequence_header,
 };
 pub use reassemble::{FrameReassembler, FrameStats, LossReport};
 pub use saved_host::{

@@ -686,6 +686,25 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Whether the platform decoder can hardware-decode AV1 (VideoToolbox on
+  /// Apple silicon M3+). Probed once; advertised to the host so it only
+  /// encodes AV1 for clients that can actually play it.
+  bool? _desktopAv1;
+
+  Future<bool> _desktopCanAv1() async {
+    final cached = _desktopAv1;
+    if (cached != null) return cached;
+    bool can;
+    try {
+      can = await _desktopVideoChannel.invokeMethod<bool>('canDecodeAV1') ??
+          false;
+    } catch (_) {
+      can = false;
+    }
+    _desktopAv1 = can;
+    return can;
+  }
+
   /// Desktop watch: drive the Rust frame stream into the native VideoToolbox
   /// decoder (macOS) and show its texture.
   Future<void> _startDesktopPlayback(String payload) async {
@@ -695,7 +714,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _status = 'Connecting…';
       _statusIsError = false;
     });
-    _attachDesktopStream(playStreamDesktop(payload: payload));
+    _attachDesktopStream(
+      playStreamDesktop(payload: payload, allowAv1: await _desktopCanAv1()),
+    );
   }
 
   /// Watch a discovered/saved host by its pinned key (no QR needed; the host
@@ -711,6 +732,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       hostName: host.name,
       hostPubkey: host.hostPubkey,
       addr: addr,
+      allowAv1: await _desktopCanAv1(),
     ));
   }
 
@@ -722,7 +744,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           try {
             final id = await _desktopVideoChannel.invokeMethod<int>(
               'configure',
-              {'codecConfig': ev.codecConfig},
+              {
+                'codecConfig': ev.codecConfig,
+                'codec': ev.codec,
+                'width': ev.width,
+                'height': ev.height,
+              },
             );
             if (id != null && mounted) {
               setState(() {

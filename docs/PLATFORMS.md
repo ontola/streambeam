@@ -13,7 +13,7 @@ Legend: ✅ working · 🔨 in progress · ⬜ not started · ➖ n/a / blocked 
 |---|---|---|
 | **Windows** | ✅ WGC/DXGI capture + Media Foundation H.264 (hardware NVENC / async-MFT in progress) | ✅ Media Foundation H.264 software decoder MFT → NV12→RGBA CPU convert → Flutter `PixelBufferTexture`, same `streambeam/video_desktop` channel contract as macOS (`app/windows/runner/streambeam_video.{h,cpp}`) — verified 2026-07-07 via self-loopback (this box hosting + watching itself); an initial reddish tint was a real bug (Flutter's `PixelBufferTexture` is hardcoded RGBA — no format field on the struct — while the code wrote BGRA order), fixed. **Shares the cross-platform keyframe/hover "flashing" bug** (see PROGRESS.md) — reproduces identically on this decoder too, confirming it's not decode-side |
 | **Android** | ✅ MediaProjection + MediaCodec H.264 — **video only** (host audio not wired) | ✅ MediaCodec → Surface |
-| **macOS** | ⬜ needs ScreenCaptureKit capture + VideoToolbox encode behind the `VideoEncoder` trait | ✅ VideoToolbox decode → Flutter texture, MetalFX spatial upscaling on by default ([UPSCALE.md](UPSCALE.md)) — verified 2026-07-07 vs fakehost and a real Windows host (paired via sbm1 paste, smooth LAN stream) |
+| **macOS** | ⬜ needs ScreenCaptureKit capture + VideoToolbox encode behind the `VideoEncoder` trait | ✅ VideoToolbox decode (H.264, + AV1 on M3+ via hw probe — AV1 not yet device-verified) → Flutter texture, MetalFX spatial upscaling on by default ([UPSCALE.md](UPSCALE.md)) — H.264 verified 2026-07-07 vs fakehost and a real Windows host |
 | **Linux** | ⬜ PipeWire portal + VAAPI | ⬜ VA-API / Vulkan decode → texture |
 | **iOS** | ➖ no background screen capture | ⬜ later |
 

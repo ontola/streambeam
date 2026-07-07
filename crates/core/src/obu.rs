@@ -122,6 +122,78 @@ pub fn extract_sequence_header(data: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// MSB-first bit reader for the handful of sequence-header fields
+/// `av1c_from_sequence_header` needs.
+struct BitReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    fn read(&mut self, bits: u32) -> Option<u32> {
+        let mut value = 0u32;
+        for _ in 0..bits {
+            let byte = *self.data.get(self.pos / 8)?;
+            let bit = (byte >> (7 - (self.pos % 8))) & 1;
+            value = (value << 1) | u32::from(bit);
+            self.pos += 1;
+        }
+        Some(value)
+    }
+}
+
+/// Build an ISO-BMFF `AV1CodecConfigurationRecord` (`av1C`) from a
+/// self-contained sequence-header OBU (as returned by
+/// [`extract_sequence_header`]) — what macOS VideoToolbox wants in the
+/// format description's sample-description extension atoms.
+///
+/// Only `seq_profile`/`seq_level_idx`/`seq_tier` are parsed from the header;
+/// the pixel-format summary bits are fixed to this pipeline's encoder output
+/// (8-bit 4:2:0, not monochrome — NVENC/MediaCodec AV1 as configured in
+/// `crates/host`). Revisit if a 10-bit profile ever ships. When the level
+/// sits behind `timing_info` (which needs much deeper parsing), it falls
+/// back to level 4.0/tier 0 — decoders read the real values from the
+/// embedded `configOBUs` anyway.
+pub fn av1c_from_sequence_header(seq_header_obu: &[u8]) -> Option<Vec<u8>> {
+    let payload = split_obus(seq_header_obu)
+        .into_iter()
+        .find(|obu| obu.obu_type == OBU_TYPE_SEQUENCE_HEADER)?
+        .payload
+        .to_vec();
+
+    let mut r = BitReader::new(&payload);
+    let seq_profile = r.read(3)?;
+    let _still_picture = r.read(1)?;
+    let reduced = r.read(1)? == 1;
+    let (level, tier) = if reduced {
+        (r.read(5)?, 0)
+    } else if r.read(1)? == 1 {
+        // timing_info_present — skipping it needs full header-state parsing.
+        (8, 0) // level 4.0, tier main
+    } else {
+        let _initial_display_delay_present = r.read(1)?;
+        let _operating_points_cnt_minus_1 = r.read(5)?;
+        let _operating_point_idc = r.read(12)?;
+        let level = r.read(5)?;
+        let tier = if level > 7 { r.read(1)? } else { 0 };
+        (level, tier)
+    };
+
+    let mut out = Vec::with_capacity(4 + seq_header_obu.len());
+    out.push(0x81); // marker=1, version=1
+    out.push(((seq_profile as u8) << 5) | (level as u8 & 0x1f));
+    // tier + high_bitdepth=0, twelve_bit=0, monochrome=0,
+    // chroma_subsampling_x=1, chroma_subsampling_y=1, chroma_sample_position=0.
+    out.push(((tier as u8) << 7) | 0x0c);
+    out.push(0x00); // no initial_presentation_delay
+    out.extend_from_slice(seq_header_obu);
+    Some(out)
+}
+
 /// Drop OBU_FRAME_HEADER / OBU_REDUNDANT_FRAME_HEADER units that duplicate a
 /// preceding OBU_FRAME's header — mirrors `annex_b::access_unit_without_sei`
 /// stripping SEI: some decoders choke on the redundant copy some encoders
@@ -208,5 +280,37 @@ mod tests {
         let (value, len) = read_leb128(&out).expect("decode");
         assert_eq!(value, 300);
         assert_eq!(len, out.len());
+    }
+
+    #[test]
+    fn av1c_reduced_still_picture_header() {
+        // profile 0 (000), still_picture 0, reduced 1, seq_level_idx 12
+        // (01100) → MSB-first payload bytes [0b0000_1011, 0b0000_0000].
+        let seq = obu(OBU_TYPE_SEQUENCE_HEADER, &[0x0b, 0x00]);
+        let av1c = av1c_from_sequence_header(&seq).expect("av1C");
+        assert_eq!(av1c[0], 0x81); // marker + version
+        assert_eq!(av1c[1], 0x0c); // profile 0, level 12 (5.0)
+        assert_eq!(av1c[2], 0x0c); // tier 0, 8-bit 4:2:0
+        assert_eq!(av1c[3], 0x00);
+        assert_eq!(&av1c[4..], &seq[..]); // configOBUs = the header itself
+    }
+
+    #[test]
+    fn av1c_full_header_first_operating_point() {
+        // profile 0, still 0, reduced 0, timing_info_present 0,
+        // initial_display_delay_present 0, operating_points_cnt_minus_1 0,
+        // operating_point_idc 0 (12 bits), seq_level_idx 8 (01000), then
+        // seq_tier 0: bits 000 0 0 0 0 00000 000000000000 01000 0 → the
+        // level starts at bit 24, so byte 3 is 0b0100_0000.
+        let seq = obu(OBU_TYPE_SEQUENCE_HEADER, &[0x00, 0x00, 0x00, 0x40]);
+        let av1c = av1c_from_sequence_header(&seq).expect("av1C");
+        assert_eq!(av1c[1], 0x08); // profile 0, level 8 (4.0)
+        assert_eq!(av1c[2], 0x0c); // tier 0 (level ≤ 7 has no tier bit… level 8 does: parsed 0)
+    }
+
+    #[test]
+    fn av1c_rejects_non_sequence_obu() {
+        let frame = obu(OBU_TYPE_FRAME, &[1, 2, 3]);
+        assert!(av1c_from_sequence_header(&frame).is_none());
     }
 }

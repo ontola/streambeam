@@ -55,8 +55,56 @@ class StreamBeamVideo: NSObject, FlutterTexture {
 
     // MARK: Decode setup
 
+    /// `'av01'` — spelled as a literal so the 10.15 deployment target doesn't
+    /// trip over the newer `kCMVideoCodecType_AV1` constant.
+    private static let av1CodecType: CMVideoCodecType = 0x6176_3031
+    /// True when the negotiated stream is AV1 (frames are raw OBU temporal
+    /// units, not Annex-B).
+    private var isAV1 = false
+
+    /// Hardware AV1 decode exists on Apple silicon M3+ — the capability the
+    /// client advertises to the host during session negotiation.
+    static func canDecodeAV1() -> Bool {
+        VTIsHardwareDecodeSupported(av1CodecType)
+    }
+
+    /// Configure the decoder. `codec` is the negotiated wire id: `"h264"`
+    /// (codecConfig = Annex-B SPS/PPS) or `"av01"` (codecConfig = `av1C`
+    /// record built by the Rust side). Returns success.
+    func configure(codecConfig: Data, codec: String, width: Int32, height: Int32) -> Bool {
+        if codec == "av01" {
+            isAV1 = true
+            return configureAV1(av1c: codecConfig, width: width, height: height)
+        }
+        isAV1 = false
+        return configureH264(codecConfig: codecConfig)
+    }
+
+    private func configureAV1(av1c: Data, width: Int32, height: Int32) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        let atoms: [CFString: Any] = ["av1C" as CFString: av1c as CFData]
+        let extensions: [CFString: Any] = [
+            kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms:
+                atoms as CFDictionary,
+            // Same full-range story as H.264 below: desktop capture is
+            // full-range and the encoder doesn't tag it.
+            kCMFormatDescriptionExtension_FullRangeVideo: true,
+        ]
+        var fd: CMVideoFormatDescription?
+        let status = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: Self.av1CodecType,
+            width: width,
+            height: height,
+            extensions: extensions as CFDictionary,
+            formatDescriptionOut: &fd)
+        guard status == noErr, let fd = fd else { return false }
+        formatDesc = fd
+        return makeSession(formatDescription: fd)
+    }
+
     /// Configure from the Annex-B codec config (SPS + PPS). Returns success.
-    func configure(codecConfig: Data) -> Bool {
+    private func configureH264(codecConfig: Data) -> Bool {
         let nals = Self.annexBNALs(codecConfig)
         var sps: [UInt8]?
         var pps: [UInt8]?
@@ -118,7 +166,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             formatDescriptionOut: &fullRangeFd)
         let effectiveFd = (extStatus == noErr ? fullRangeFd : nil) ?? fd
         formatDesc = effectiveFd
+        return makeSession(formatDescription: effectiveFd)
+    }
 
+    private func makeSession(formatDescription: CMVideoFormatDescription) -> Bool {
         let attrs: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey: true,
@@ -135,7 +186,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         var sess: VTDecompressionSession?
         let s = VTDecompressionSessionCreate(
             allocator: kCFAllocatorDefault,
-            formatDescription: effectiveFd,
+            formatDescription: formatDescription,
             decoderSpecification: nil,
             imageBufferAttributes: attrs as CFDictionary,
             outputCallback: &callback,
@@ -145,35 +196,36 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         return true
     }
 
-    /// Decode one Annex-B access unit.
+    /// Decode one access unit — an Annex-B AU for H.264, a raw OBU temporal
+    /// unit for AV1 (which needs no repackaging).
     func decode(frame: Data) {
         guard let session = session, let fd = formatDesc else { return }
-        guard let avcc = Self.annexBToAVCC(frame) else { return }
+        guard let sample = isAV1 ? frame : Self.annexBToAVCC(frame) else { return }
 
         var blockBuffer: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault,
             memoryBlock: nil,
-            blockLength: avcc.count,
+            blockLength: sample.count,
             blockAllocator: kCFAllocatorDefault,
             customBlockSource: nil,
             offsetToData: 0,
-            dataLength: avcc.count,
+            dataLength: sample.count,
             flags: 0,
             blockBufferOut: &blockBuffer)
         guard status == kCMBlockBufferNoErr, let blockBuffer = blockBuffer else { return }
 
-        status = avcc.withUnsafeBytes { raw in
+        status = sample.withUnsafeBytes { raw in
             CMBlockBufferReplaceDataBytes(
                 with: raw.baseAddress!,
                 blockBuffer: blockBuffer,
                 offsetIntoDestination: 0,
-                dataLength: avcc.count)
+                dataLength: sample.count)
         }
         guard status == kCMBlockBufferNoErr else { return }
 
         var sampleBuffer: CMSampleBuffer?
-        var sampleSize = avcc.count
+        var sampleSize = sample.count
         status = CMSampleBufferCreateReady(
             allocator: kCFAllocatorDefault,
             dataBuffer: blockBuffer,

@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `play_stream_desktop_inner`, `play_stream_desktop_known_inner`, `receive_stats`
+// These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `desktop_video_caps`, `play_stream_desktop_inner`, `play_stream_desktop_known_inner`, `receive_stats`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
@@ -179,8 +179,13 @@ Future<StreamStats> reconnectPlayStream({
 /// the function's own `Result`: the generated binding fires that future
 /// `unawaited`, so a returned `Err` becomes an unhandled Dart exception the
 /// UI never sees.
-Stream<DesktopStreamEvent> playStreamDesktop({required String payload}) =>
-    StreambeamFfi.instance.api.crateApiPlayStreamDesktop(payload: payload);
+Stream<DesktopStreamEvent> playStreamDesktop({
+  required String payload,
+  required bool allowAv1,
+}) => StreambeamFfi.instance.api.crateApiPlayStreamDesktop(
+  payload: payload,
+  allowAv1: allowAv1,
+);
 
 /// Like [`play_stream_desktop`] but for a discovered/saved host (no QR token —
 /// uses the pinned key; the host prompts to approve on first contact).
@@ -189,10 +194,12 @@ Stream<DesktopStreamEvent> playStreamDesktopKnown({
   required String hostName,
   required List<int> hostPubkey,
   required String addr,
+  required bool allowAv1,
 }) => StreambeamFfi.instance.api.crateApiPlayStreamDesktopKnown(
   hostName: hostName,
   hostPubkey: hostPubkey,
   addr: addr,
+  allowAv1: allowAv1,
 );
 
 bool hostPlatformSupported() =>
@@ -236,6 +243,11 @@ bool hostRespondPairing({required BigInt id, required bool allow}) =>
 /// (not an enum) so the Dart side needs no `freezed` codegen.
 class DesktopStreamEvent {
   final bool isConfig;
+
+  /// Negotiated codec id on the config event: `"h264"` (codec_config =
+  /// Annex-B SPS/PPS) or `"av01"` (codec_config = ISO-BMFF `av1C` record,
+  /// ready for the platform decoder's format description).
+  final String codec;
   final Uint8List codecConfig;
   final int width;
   final int height;
@@ -245,6 +257,7 @@ class DesktopStreamEvent {
 
   const DesktopStreamEvent({
     required this.isConfig,
+    required this.codec,
     required this.codecConfig,
     required this.width,
     required this.height,
@@ -256,6 +269,7 @@ class DesktopStreamEvent {
   @override
   int get hashCode =>
       isConfig.hashCode ^
+      codec.hashCode ^
       codecConfig.hashCode ^
       width.hashCode ^
       height.hashCode ^
@@ -269,6 +283,7 @@ class DesktopStreamEvent {
       other is DesktopStreamEvent &&
           runtimeType == other.runtimeType &&
           isConfig == other.isConfig &&
+          codec == other.codec &&
           codecConfig == other.codecConfig &&
           width == other.width &&
           height == other.height &&
