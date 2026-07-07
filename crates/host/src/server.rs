@@ -1202,7 +1202,26 @@ async fn stream_video(
         shard_us += t_shard.elapsed().as_micros();
 
         let t_send = std::time::Instant::now();
-        for shard in shards {
+        // A keyframe is a dozens-of-shards burst (a 40-90KB I-frame at
+        // ~1200 bytes/shard is 30-80 datagrams) — `send_datagram_wait` only
+        // blocks on quinn's own send buffer, which is generous enough that
+        // the whole burst leaves this loop in well under a millisecond. On
+        // WiFi specifically that's a real problem even on an otherwise-good
+        // link: the AP's own transmit queue/channel-access arbitration has
+        // nowhere near that instantaneous throughput, so the tail of the
+        // burst gets dropped locally, independent of the path's steady-state
+        // bandwidth — observed correlating almost every large keyframe with
+        // a spike of 100-250+ lost packets that then triggers an adaptive
+        // bitrate backoff, even on a strong/wired link. Spreading a large
+        // burst over a few milliseconds (still far below one frame interval
+        // even at 60fps) costs negligible latency but gives the local link
+        // room to actually drain between chunks.
+        const PACE_CHUNK: usize = 8;
+        const PACE_DELAY: Duration = Duration::from_micros(200);
+        for (i, shard) in shards.into_iter().enumerate() {
+            if i > 0 && i % PACE_CHUNK == 0 {
+                tokio::time::sleep(PACE_DELAY).await;
+            }
             let mut dg = shard.header.encode().to_vec();
             dg.extend_from_slice(&shard.payload);
             window_datagrams += 1;
