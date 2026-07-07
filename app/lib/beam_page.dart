@@ -557,59 +557,75 @@ class _AppShellState extends State<AppShell> {
     return ValueListenableBuilder<bool>(
       valueListenable: appImmersive,
       builder: (context, immersive, _) {
+        // `content` (and the WatchPage/BeamPage State it keeps alive via
+        // IndexedStack) must stay at the *same position* in the tree across
+        // every branch below — Flutter can't reconcile a widget that moves
+        // to a different parent/depth between rebuilds (no matching
+        // ancestor to diff against), so it tears down and rebuilds the
+        // whole subtree's State instead of preserving it. That previously
+        // happened here: tapping a device to connect flips `appImmersive`
+        // true, which used to make this builder return a *differently
+        // shaped* tree in landscape (dropping the Row/NavigationRail
+        // wrapper) — destroying WatchPage's State (and the connection
+        // attempt it had just started) the instant the tap set it in
+        // motion. Second tap "worked" only because by then `appImmersive`
+        // was already true, so this builder didn't rebuild at all. Always
+        // building the same Row/Expanded/NavigationRail shape and only
+        // toggling which parts are *visible* keeps one stable position for
+        // `content` no matter what changes.
         final content = IndexedStack(
           index: _index.clamp(0, pages.length - 1),
           children: pages,
         );
-        if (immersive) {
-          return Scaffold(body: content);
-        }
 
-        // In landscape on a phone, a bottom bar eats a horizontal band out of
-        // an already-short screen — a labeled side rail gives the same two
-        // destinations without that cost.
         final media = MediaQuery.of(context);
         final isPhoneLandscape =
             media.orientation == Orientation.landscape &&
             media.size.shortestSide < 600;
+        final showChrome = !immersive;
+        final showRail = showChrome && isPhoneLandscape;
+        final showBottomBar = showChrome && !isPhoneLandscape;
 
-        if (isPhoneLandscape) {
-          return Scaffold(
-            // The on-screen system nav bar (back/home/recents) sits along
-            // whichever edge is physically "down" in landscape — often the
-            // same right edge the rail lives on — so without a SafeArea the
-            // rail's destinations render right underneath/behind it.
-            body: SafeArea(
-              child: Row(
-                children: [
-                  Expanded(child: content),
-                  const VerticalDivider(width: 1),
-                  NavigationRail(
-                    selectedIndex: _index.clamp(0, destinations.length - 1),
-                    onDestinationSelected: (i) => setState(() => _index = i),
-                    labelType: NavigationRailLabelType.all,
-                    destinations: [
-                      for (final d in destinations)
-                        NavigationRailDestination(
-                          icon: d.icon,
-                          selectedIcon: d.selectedIcon,
-                          label: Text(d.label),
-                        ),
-                    ],
-                  ),
+        final body = Row(
+          children: [
+            Expanded(child: content),
+            if (showRail) ...[
+              const VerticalDivider(width: 1),
+              NavigationRail(
+                selectedIndex: _index.clamp(0, destinations.length - 1),
+                onDestinationSelected: (i) => setState(() => _index = i),
+                labelType: NavigationRailLabelType.all,
+                destinations: [
+                  for (final d in destinations)
+                    NavigationRailDestination(
+                      icon: d.icon,
+                      selectedIcon: d.selectedIcon,
+                      label: Text(d.label),
+                    ),
                 ],
               ),
-            ),
-          );
-        }
+            ],
+          ],
+        );
 
         return Scaffold(
-          body: content,
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _index.clamp(0, destinations.length - 1),
-            onDestinationSelected: (i) => setState(() => _index = i),
-            destinations: destinations,
-          ),
+          // The on-screen system nav bar (back/home/recents) sits along
+          // whichever edge is physically "down" in landscape — often the
+          // same right edge the rail lives on — so without a SafeArea the
+          // rail's destinations render right underneath/behind it. Applied
+          // unconditionally (not just when the rail shows) so this doesn't
+          // change `body`'s ancestry depth between states either. `top:
+          // false` — WatchPage's own SliverAppBar already reserves the
+          // status-bar inset itself (`primary: true`); doubling it here
+          // would push its header down an extra status-bar's worth.
+          body: SafeArea(top: false, child: body),
+          bottomNavigationBar: showBottomBar
+              ? NavigationBar(
+                  selectedIndex: _index.clamp(0, destinations.length - 1),
+                  onDestinationSelected: (i) => setState(() => _index = i),
+                  destinations: destinations,
+                )
+              : null,
         );
       },
     );

@@ -1251,7 +1251,14 @@ async fn stream_video(
                 current_bitrate_kbps = (current_bitrate_kbps * 3 / 4).max(floor);
             } else {
                 clean_windows += 1;
-                if clean_windows >= 5 {
+                // Widened from 5: at ~1 recreate per ease-up (see
+                // `MIN_RECREATE_INTERVAL`'s comment on why every apply costs
+                // a full NVENC session rebuild), ratcheting up every 5
+                // clean seconds meant an already-healthy connection kept
+                // recreating just to creep toward a ceiling it didn't need
+                // for the content on screen. 15s of sustained clean
+                // headroom is still responsive, just far less trigger-happy.
+                if clean_windows >= 15 {
                     clean_windows = 0;
                     current_bitrate_kbps = (current_bitrate_kbps * 11 / 10).min(max_bitrate_kbps);
                 }

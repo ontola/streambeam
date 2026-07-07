@@ -444,7 +444,18 @@ fn play_session_blocking(
     // How many decodable (non-keyframe) completions we've skipped in a row
     // because we were catching up on a backlog — see the loop body.
     let mut consecutive_skipped = 0u32;
-    const IDR_RESYNC_THRESHOLD: u32 = 8;
+    // Raised from 8 after real-device testing on a fast, clean LAN (RTT
+    // <20ms, host reporting 0 lost/congested packets) still showed a
+    // `RequestIdr`/`InvalidateRefFrames` every 2-4s at this threshold — each
+    // one forces a full NVENC session recreate host-side (`capture.rs` has
+    // no live-reconfigure path yet), and that recreate's own brief
+    // stall/burst produces exactly the multi-frame-per-batch bursts that
+    // trip `behind` detection, requesting another "recovery" that wasn't
+    // needed: a self-sustaining cycle capping fps well under 60 with no
+    // real loss anywhere. A real, growing backlog still hits even a much
+    // higher threshold within a couple of seconds; this just stops short,
+    // healthy bursts (e.g. right after a keyframe) from mistakenly counting.
+    const IDR_RESYNC_THRESHOLD: u32 = 40;
     // Don't hammer the host with repeated keyframe requests: a forced
     // keyframe is itself a large burst (150-300 KB even at 1080p) that can
     // cause the very backlog it's meant to fix if requested too often —
@@ -491,9 +502,7 @@ fn play_session_blocking(
         // that legitimately arrive back-to-back within this batch's 2ms
         // drain window. So `batch.len() > 1` is almost always true and isn't
         // a backlog signal at all; the real signal is how many *complete
-        // frames* this batch reassembled. More than one completed frame in
-        // a single poll iteration means decode/render didn't keep up with
-        // the last real-time tick — that's genuine backlog.
+        // frames* this batch reassembled.
         diag.datagrams += batch.len() as u64;
         diag.max_batch = diag.max_batch.max(batch.len() as u32);
         let mut completions: Vec<(bool, Vec<u8>)> = Vec::new();
@@ -523,7 +532,16 @@ fn play_session_blocking(
             }
         }
 
-        let behind = completions.len() > 1;
+        // On a fast, low-latency LAN at high fps (this is meant to sustain
+        // up to 60fps — ~16.7ms/frame), several frames legitimately
+        // finishing in the same ~2ms drain window is common — especially
+        // right after a host-side NVENC session recreate (see
+        // `IDR_RESYNC_THRESHOLD`'s comment), which briefly stalls then
+        // flushes a small burst once it resumes. Treating that as "behind"
+        // self-inflicted a resync-request cycle even with zero real network
+        // loss. A real, growing backlog keeps piling up far more than a
+        // short burst, so require a much larger one to call it in.
+        let behind = completions.len() > 5;
 
         for (is_keyframe, frame) in completions {
             // Always decode a keyframe (it resets the reference chain and is
