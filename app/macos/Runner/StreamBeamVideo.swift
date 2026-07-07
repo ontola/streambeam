@@ -88,7 +88,35 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             }
         }
         guard status == noErr, let fd = fd else { return false }
-        formatDesc = fd
+
+        // Desktop-capture content is genuinely full-range RGB (true black is
+        // 0, not 16) — but NVENC's H.264 output doesn't signal VUI
+        // color-range info (that lives inside the codec-specific config
+        // struct the host deliberately treats as opaque, see
+        // crates/host/src/nvenc.rs), so VideoToolbox's default assumption
+        // for untagged content (limited/16-235) stretches the full-range
+        // signal outward — crushing near-black values to true black and
+        // clipping near-white ones, most visible on a full keyframe repaint
+        // (e.g. a UI hover highlight). Force full range by overriding the
+        // format description's extensions, preserving everything else
+        // (including the SPS/PPS-derived parameter-set atom the decoder
+        // needs) via a dictionary copy rather than building one from
+        // scratch. Falls back to the untagged `fd` if the override fails —
+        // decodes the same either way, just without the color-range fix.
+        var extensions =
+            (CMFormatDescriptionGetExtensions(fd) as? [CFString: Any]) ?? [:]
+        extensions[kCMFormatDescriptionExtension_FullRangeVideo] = true
+        let dims = CMVideoFormatDescriptionGetDimensions(fd)
+        var fullRangeFd: CMVideoFormatDescription?
+        let extStatus = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: kCMVideoCodecType_H264,
+            width: dims.width,
+            height: dims.height,
+            extensions: extensions as CFDictionary,
+            formatDescriptionOut: &fullRangeFd)
+        let effectiveFd = (extStatus == noErr ? fullRangeFd : nil) ?? fd
+        formatDesc = effectiveFd
 
         let attrs: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
@@ -106,7 +134,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         var sess: VTDecompressionSession?
         let s = VTDecompressionSessionCreate(
             allocator: kCFAllocatorDefault,
-            formatDescription: fd,
+            formatDescription: effectiveFd,
             decoderSpecification: nil,
             imageBufferAttributes: attrs as CFDictionary,
             outputCallback: &callback,

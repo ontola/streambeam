@@ -80,6 +80,17 @@ fn try_configure_decoder(
     // is the same MediaFormat.KEY_LOW_LATENCY Moonlight's Android client
     // sets for exactly this reason. Ignored (not fatal) on API < 30.
     format.set_i32("low-latency", 1);
+    // Desktop-capture content is genuinely full-range RGB (true black is 0,
+    // not 16) — but NVENC's H.264 output doesn't signal VUI color-range info
+    // (that lives inside the codec-specific config struct we deliberately
+    // treat as opaque, see nvenc.rs), so a decoder falling back to the
+    // standard broadcast-video assumption (limited/16-235) stretches the
+    // full-range signal outward, crushing near-black values to true black
+    // and clipping near-white ones — most visible on a full keyframe
+    // repaint, e.g. a UI hover highlight. Force full range explicitly to
+    // match the actual source instead of guessing. `COLOR_RANGE_FULL = 1`
+    // per Android's MediaFormat docs; API 28+, harmlessly ignored below that.
+    format.set_i32("color-range", 1);
     set_csd(&mut format);
     codec.configure(&format, Some(window), MediaCodecDirection::Decoder)?;
     Ok(codec)
