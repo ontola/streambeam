@@ -433,21 +433,26 @@ impl Pipeline {
             r
         });
 
-        // Neither backend reliably exposes SPS/PPS ahead of the first real
-        // frame (the software MFT's `MF_MT_MPEG_SEQUENCE_HEADER` requires a
-        // frame to have gone through; NVENC's preset config doesn't carry it
-        // either) — pull SPS/PPS straight out of the first keyframe's
-        // Annex-B bytes instead, which works regardless of encoder vendor.
+        // Neither backend reliably exposes the codec config ahead of the
+        // first real frame (the software MFT's `MF_MT_MPEG_SEQUENCE_HEADER`
+        // requires a frame to have gone through; NVENC's preset config
+        // doesn't carry it either) — pull it straight out of the first
+        // keyframe's own bytes instead, which works regardless of encoder
+        // vendor. Format depends on the active codec: H.264's is SPS/PPS
+        // NALs, AV1's is the sequence header OBU (self-contained, no
+        // separate assembly needed).
         if self.codec_config.is_none() {
             if let Ok(Some(frame)) = &result {
                 if frame.keyframe {
-                    if let Some((sps, pps)) =
-                        streambeam_core::extract_avc_decoder_config(&frame.data)
-                    {
-                        let mut config = streambeam_core::nal_with_start_code(&sps);
-                        config.extend(streambeam_core::nal_with_start_code(&pps));
-                        self.codec_config = Some(config);
-                    }
+                    self.codec_config = match self.codec() {
+                        Codec::H264 => streambeam_core::extract_avc_decoder_config(&frame.data)
+                            .map(|(sps, pps)| {
+                                let mut config = streambeam_core::nal_with_start_code(&sps);
+                                config.extend(streambeam_core::nal_with_start_code(&pps));
+                                config
+                            }),
+                        Codec::Av1 => streambeam_core::av1_extract_sequence_header(&frame.data),
+                    };
                 }
             }
         }

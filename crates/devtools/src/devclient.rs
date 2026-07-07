@@ -60,6 +60,14 @@ struct Opt {
     /// client's own digest-based verification.
     #[arg(long)]
     dump: Option<PathBuf>,
+
+    /// Advertise AV1 decode support in `VideoCaps` — for manually verifying
+    /// the host actually switches to (and successfully initializes) its AV1
+    /// NVENC path, independent of any client that can actually decode AV1.
+    /// Implies `--no-verify` (the bundled reference clip's hashes are for
+    /// the H.264 bundled clip, not whatever the host encodes as AV1).
+    #[arg(long)]
+    av1: bool,
 }
 
 #[tokio::main]
@@ -69,7 +77,7 @@ async fn main() {
         .init();
 
     let opt = Opt::parse();
-    let verify = opt.verify && !opt.no_verify;
+    let verify = opt.verify && !opt.no_verify && !opt.av1;
     if let Err(e) = run(&opt, verify).await {
         eprintln!("devclient error: {e}");
         std::process::exit(1);
@@ -294,6 +302,12 @@ fn client_identity_path(dir: &Path) -> PathBuf {
     dir.join("client_identity.pkcs8")
 }
 
+fn requested_video_caps(opt: &Opt) -> streambeam_proto::control::VideoCaps {
+    let mut caps = fallback_video_caps();
+    caps.av1 = opt.av1;
+    caps
+}
+
 async fn open_session(
     opt: &Opt,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
@@ -308,7 +322,7 @@ async fn open_session(
             addr,
             "devclient",
             &client_identity_path(&dir),
-            fallback_video_caps(),
+            requested_video_caps(opt),
         )
         .await;
     }
@@ -318,7 +332,7 @@ async fn open_session(
         &opt.payload,
         "devclient",
         id_path.as_deref(),
-        fallback_video_caps(),
+        requested_video_caps(opt),
     )
     .await?;
     println!("paired ✓");
