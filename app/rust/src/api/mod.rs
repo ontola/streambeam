@@ -676,10 +676,17 @@ async fn desktop_stream_loop(
         // recreate, which briefly stalls then flushes a small burst) —
         // treating that as "behind" would self-inflict resync requests with
         // zero real loss. A real, growing backlog keeps piling up far more
-        // than a short burst, so require a much larger one to call it in
-        // (same threshold Android's play.rs settled on after real-device
-        // testing).
-        let behind = completions.len() > 5;
+        // than a short burst, so require a much larger one to call it in.
+        // Android's play.rs settled on a flat 5 after real-device testing,
+        // but that was tuned for a stream capped at 60fps — at double the
+        // frame rate, healthy bursts routinely land twice as many
+        // completions in the same 2ms drain window, so a flat threshold
+        // false-triggers "behind" on completely normal delivery. Scale it
+        // with the session's actual fps, floored at Android's original
+        // tuned value so a slower stream doesn't get *more* sensitive than
+        // what was proven reliable there.
+        let behind_threshold = (u32::from(session.fps) * 5 / 60).max(5);
+        let behind = completions.len() as u32 > behind_threshold;
         let mut dart_closed = false;
 
         for (keyframe, frame) in completions {
