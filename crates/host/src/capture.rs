@@ -683,7 +683,7 @@ impl Pipeline {
                             "NVENC: reconfiguring encoder session ({})",
                             reasons.join(", ")
                         ));
-                        match encoder.reconfigure(self.bitrate_bps) {
+                        match encoder.reconfigure(self.bitrate_bps, self.pending_force_idr) {
                             Ok(()) => {
                                 self.bitrate_dirty = false;
                                 self.pending_force_idr = false;

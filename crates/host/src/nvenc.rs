@@ -733,7 +733,15 @@ impl NvencEncoder {
     /// the old recreate-based approach relied on, without tearing anything
     /// down. Only resolution/fps/codec changes still go through a full
     /// `Pipeline` rebuild (a different, much rarer code path in capture.rs).
-    pub unsafe fn reconfigure(&mut self, bitrate_bps: u32) -> Result<(), String> {
+    ///
+    /// `force_idr` sets `resetEncoder` (see field doc above) — only when a
+    /// real keyframe is actually wanted. A pure bitrate nudge with no
+    /// recovery need shouldn't force one: NVENC natively supports adjusting
+    /// bitrate live with no keyframe at all, and every unnecessary forced
+    /// IDR both costs bandwidth (a keyframe access unit is many times a
+    /// P-frame's size) and is one more opportunity for whatever's still
+    /// unverified about this reconfigure path to go wrong.
+    pub unsafe fn reconfigure(&mut self, bitrate_bps: u32, force_idr: bool) -> Result<(), String> {
         let mut config = build_config(&self.functions, self.encoder, self.codec, self.fps, bitrate_bps)?;
 
         let mut init_params: InitializeParams = std::mem::zeroed();
@@ -757,7 +765,9 @@ impl NvencEncoder {
         let mut reconfigure_params: ReconfigureParams = std::mem::zeroed();
         reconfigure_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
         reconfigure_params.re_init_encode_params = init_params;
-        reconfigure_params.bit_fields = 1; // resetEncoder = bit 0; forceIDR (bit 1) not needed, see doc comment above
+        // resetEncoder = bit 0; forceIDR (bit 1) not needed on top of it since
+        // resetEncoder already forces IDR when enable_ptd=1 (see doc comment).
+        reconfigure_params.bit_fields = if force_idr { 1 } else { 0 };
 
         check(
             "NvEncReconfigureEncoder",
