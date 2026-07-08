@@ -229,6 +229,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   /// needing to plumb it through `main.dart`'s state.
   static MenuSide _lastMenuSide = MenuSide.right;
 
+  /// Whether touch platforms show the floating menu button. Static so the
+  /// choice sticks across streams for the app's lifetime (same pattern as
+  /// [_lastMenuSide]); mouse platforms ignore it — hiding their only way
+  /// into the menu would lock them out.
+  static bool _touchMenuButtonEnabled = true;
+
   double _menuDrag = 0;
   bool _menuOpen = false;
   /// Where the floating menu button lives (mouse-first platforms). Left
@@ -710,6 +716,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         touchControls: widget.inputSupported && widget.touchControls,
         anchorLeft: anchorLeft,
         onClose: onClose,
+        menuButtonEnabled: _touchMenuButtonEnabled,
+        // Only touch may hide the button — edge-swipe remains its way in.
+        onMenuButtonEnabledChanged: widget.touchControls
+            ? (on) => setState(() => _touchMenuButtonEnabled = on)
+            : null,
         pointerMode: _pointerMode,
         onPointerModeChanged: (mode) {
           setState(() {
@@ -1023,7 +1034,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                 child: const SizedBox.expand(),
               ),
             ),
-          ] else if (!_menuOpen)
+          ],
+          // Floating menu button: always on mouse platforms (their only way
+          // in — no edge-drag), optional on touch (the menu has a switch to
+          // hide it; edge-swipe remains as the fallback there).
+          if (!_menuOpen &&
+              !_keyboardOpen &&
+              (!widget.touchControls || _touchMenuButtonEnabled))
             _buildMenuButton(viewport),
           if (_keyboardOpen) ...[
             GestureDetector(
@@ -1650,6 +1667,8 @@ class _StreamMenu extends StatelessWidget {
     required this.touchControls,
     this.anchorLeft = false,
     this.onClose,
+    this.menuButtonEnabled = true,
+    this.onMenuButtonEnabledChanged,
     required this.pointerMode,
     required this.onPointerModeChanged,
     required this.streamMode,
@@ -1672,6 +1691,12 @@ class _StreamMenu extends StatelessWidget {
   /// Shown as a close button in the header (docked sidebar); overlay mode
   /// closes via scrim/edge-drag instead and passes null.
   final VoidCallback? onClose;
+
+  /// Floating menu button state + toggle. The toggle renders only when a
+  /// callback is provided (touch platforms) — mouse users must not be able
+  /// to hide their only way into this menu.
+  final bool menuButtonEnabled;
+  final ValueChanged<bool>? onMenuButtonEnabledChanged;
   final PointerMode pointerMode;
   final ValueChanged<PointerMode> onPointerModeChanged;
   final StreamMode streamMode;
@@ -1995,6 +2020,18 @@ class _StreamMenu extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (onMenuButtonEnabledChanged != null)
+                      SwitchListTile(
+                        value: menuButtonEnabled,
+                        onChanged: onMenuButtonEnabledChanged,
+                        title: const Text('Floating menu button'),
+                        subtitle: Text(
+                          'Drag it to any corner · edge-swipe always works',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        dense: compact,
+                        contentPadding: tilePadding,
+                      ),
                   ],
                   const Divider(height: 1),
                   ListTile(
