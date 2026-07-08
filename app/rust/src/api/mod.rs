@@ -618,30 +618,16 @@ async fn desktop_stream_loop(
     let _ = streambeam_core::request_idr(&mut session).await;
 
     let mut asm = FrameReassembler::default();
-    // A forced IDR or ref-frame invalidation costs the host a full NVENC
-    // session recreate (see `crates/host/src/capture.rs` — no live
-    // reconfigure path yet), which itself briefly disrupts the stream and
-    // can cause the very next loss report this loop would react to,
-    // otherwise turning one real loss event into a self-sustaining
-    // recreate storm (matches the Android client's own cooldown — see
-    // `IDR_REQUEST_COOLDOWN` in `app/rust/src/android/play.rs`). Unlike
-    // Android's, every report here comes from the reassembler's own gap
-    // detection (real loss), not a batch-size heuristic, so this cooldown
-    // is purely about not hammering recovery, not filtering false positives.
+    // A forced IDR or ref-frame invalidation costs the host a live NVENC
+    // reconfigure (see `crates/host/src/capture.rs`/`nvenc.rs` — no longer a
+    // full session recreate, but still real work and, per real-device
+    // testing, still worth not spamming), which itself briefly disrupts the
+    // stream and can cause the very next loss report this loop would react
+    // to, otherwise turning one real loss event into a self-sustaining
+    // recovery storm (matches the Android client's own cooldown — see
+    // `IDR_REQUEST_COOLDOWN` in `app/rust/src/android/play.rs`).
     const RECOVERY_COOLDOWN: Duration = Duration::from_secs(3);
     let mut last_recovery = None::<tokio::time::Instant>;
-    // How many decodable (non-keyframe) completions in a row have been
-    // skipped because the platform decoder was falling behind — see
-    // `IDR_RESYNC_THRESHOLD` below. Mirrors Android's `play.rs`, which this
-    // loop previously had no equivalent of: every completed frame used to be
-    // forwarded unconditionally, one datagram at a time, with no way to
-    // detect (let alone recover from) the decoder falling behind. At a high
-    // requested fps a slower decoder can't keep up with, frames would just
-    // queue up in the platform decoder's own internal buffer indefinitely
-    // and burst out once it caught up — exactly the "2fps, then 50fps, then
-    // 140fps" pattern this was built to fix.
-    let mut consecutive_skipped = 0u32;
-    const IDR_RESYNC_THRESHOLD: u32 = 40;
     loop {
         let first = tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
             .await
@@ -698,10 +684,8 @@ async fn desktop_stream_loop(
             // indistinguishable from corrupted video (same failure mode
             // Android's play.rs documents for MediaCodec).
             if behind && !keyframe {
-                consecutive_skipped += 1;
                 continue;
             }
-            consecutive_skipped = 0;
             // "Rendered" here means handed to the platform decoder — the
             // closest observable point on desktop, where decode happens in
             // the native layer past this crate.
@@ -787,14 +771,6 @@ async fn desktop_stream_loop(
                     let _ = streambeam_core::request_idr(&mut session).await;
                 }
             }
-        } else if consecutive_skipped >= IDR_RESYNC_THRESHOLD && cooled_down {
-            // We've been skipping non-keyframes for a while (they depend on
-            // a reference chain we're no longer decoding) — ask the host to
-            // recover so the picture stops degrading instead of staying
-            // corrupted until the next naturally-scheduled keyframe.
-            consecutive_skipped = 0;
-            last_recovery = Some(tokio::time::Instant::now());
-            let _ = streambeam_core::request_idr(&mut session).await;
         }
     }
 
