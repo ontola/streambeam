@@ -59,6 +59,7 @@ const NV_ENC_PIC_PARAMS_VER: u32 = struct_version(7) | (1 << 31);
 const NV_ENC_LOCK_BITSTREAM_VER: u32 = struct_version(2) | (1 << 31);
 const NV_ENC_EVENT_PARAMS_VER: u32 = struct_version(2);
 const NVENC_API_LIST_VERSION: u32 = struct_version(2);
+const NV_ENC_RECONFIGURE_PARAMS_VER: u32 = struct_version(1) | (1 << 31);
 
 const NV_ENC_CODEC_H264_GUID: GUID = GUID::from_values(
     0x6bc82762,
@@ -414,6 +415,19 @@ type UnlockBitstreamFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
 type RegisterAsyncEventFn = unsafe extern "C" fn(*mut c_void, *mut EventParams) -> i32;
 type UnregisterAsyncEventFn = unsafe extern "C" fn(*mut c_void, *mut EventParams) -> i32;
 type DestroyEncoderFn = unsafe extern "C" fn(*mut c_void) -> i32;
+type ReconfigureEncoderFn = unsafe extern "C" fn(*mut c_void, *mut ReconfigureParams) -> i32;
+
+// Layout cross-checked against the authoritative NVIDIA SDK header
+// (Samples/NvCodec/NvEncoder/nvEncodeAPI.h, `_NV_ENC_RECONFIGURE_PARAMS`):
+// version, then the full `NV_ENC_INITIALIZE_PARAMS` embedded *by value* (not
+// a pointer), then a packed bitfield `resetEncoder:1, forceIDR:1,
+// reserved:30` — LSB-first, matching this file's other bitfield reads.
+#[repr(C)]
+struct ReconfigureParams {
+    version: u32,
+    re_init_encode_params: InitializeParams,
+    bit_fields: u32,
+}
 
 #[repr(C)]
 struct FunctionList {
@@ -451,7 +465,7 @@ struct FunctionList {
     open_encode_session_ex: OpenEncodeSessionExFn,
     register_resource: RegisterResourceFn,
     unregister_resource: UnregisterResourceFn,
-    reconfigure_encoder: *mut c_void,
+    reconfigure_encoder: ReconfigureEncoderFn,
     rsvd1: *mut c_void,
     create_mv_buffer: *mut c_void,
     destroy_mv_buffer: *mut c_void,
@@ -490,6 +504,7 @@ pub struct NvencEncoder {
     completion_event: HANDLE,
     width: u32,
     height: u32,
+    fps: u32,
     frame_index: i64,
     codec: Codec,
 }
@@ -499,6 +514,88 @@ pub struct NvencEncoder {
 // from a single dedicated thread, which is how `capture.rs` already uses it
 // (same thread that owns the D3D11 device/context).
 unsafe impl Send for NvencEncoder {}
+
+/// Builds the codec config used both at session creation (`NvencEncoder::new`)
+/// and on a live bitrate/IDR reconfigure (`NvencEncoder::reconfigure`) —
+/// shared so the two paths can't drift apart on what "the same encoder,
+/// different bitrate" actually means.
+unsafe fn build_config(
+    functions: &FunctionList,
+    encoder: NonNull<c_void>,
+    codec: Codec,
+    fps: u32,
+    bitrate_bps: u32,
+) -> Result<Config, String> {
+    let mut preset_uninit: MaybeUninit<PresetConfig> = MaybeUninit::zeroed();
+    (*preset_uninit.as_mut_ptr()).version = NV_ENC_PRESET_CONFIG_VER;
+    (*preset_uninit.as_mut_ptr()).preset_cfg.version = NV_ENC_CONFIG_VER;
+    check(
+        "NvEncGetEncodePresetConfigEx",
+        (functions.get_encode_preset_config_ex)(
+            encoder.as_ptr(),
+            codec.encode_guid(),
+            NV_ENC_PRESET_P4_GUID,
+            NVENC_TUNING_INFO_ULTRA_LOW_LATENCY,
+            &mut preset_uninit,
+        ),
+    )?;
+    let mut config = preset_uninit.assume_init().preset_cfg;
+    // Override only what we care about; every other field (including
+    // the whole codec-specific H264/AV1 sub-config) stays exactly what
+    // the ultra-low-latency preset already set, which for H.264 already
+    // enables SPS/PPS repetition on every IDR — required since our
+    // client parses SPS/PPS straight out of each keyframe's Annex-B
+    // bytes. AV1's equivalent (repeating the sequence header OBU on
+    // every keyframe) is likewise a preset default we don't override.
+    config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
+    config.frame_interval_p = 1; // no B-frames — lowest latency
+    // Was forced to Baseline (no CABAC) to match the software encoder's
+    // known-good `eAVEncH264VProfile_Base` while debugging decode issues
+    // on real Android hardware decoders — that debugging need has passed
+    // and NVENC is now the primary path, so pay CABAC's real
+    // quality-per-bit cost back: at the same CBR bitrate, Baseline's
+    // CAVLC-only entropy coding visibly softens detail and produces more
+    // motion/text artifacts than High profile, which effectively every
+    // Android device since H.264 was relevant decodes fine. `frame_interval_p
+    // = 1` above already keeps it B-frame-free regardless of profile, so
+    // this doesn't reintroduce the extra reference-frame latency High
+    // profile can otherwise imply.
+    config.profile_guid = codec.profile_guid();
+    config.rc_params.rate_control_mode = NVENC_PARAMS_RC_MODE_CBR;
+    config.rc_params.average_bit_rate = bitrate_bps;
+    // `max_bit_rate`/`vbv_buffer_size` equal to the average left zero
+    // burst headroom: a sudden complexity spike (e.g. a UI hover
+    // highlight) had nowhere to borrow extra bits from and got
+    // hard-quantized instead, visible as a brief contrast crush even
+    // with spatial AQ on (AQ only reallocates bits *within* a frame's
+    // budget — it can't manufacture bits a zero-headroom VBV forbids).
+    // Giving 50% headroom on the ceiling and ~2x the buffer lets a
+    // one-off spike produce a bigger frame instead of getting crushed.
+    // This does NOT add glass-to-glass latency in this pipeline: there
+    // are no B-frames (frame_interval_p = 1) and no segment/jitter
+    // buffering downstream — every frame is still sent the instant
+    // it's encoded, over our own QUIC/FEC transport. VBV buffer size
+    // only bounds how large a single frame is allowed to get before the
+    // rate controller clamps it, not when frames are emitted.
+    config.rc_params.max_bit_rate = bitrate_bps + bitrate_bps / 2;
+    config.rc_params.vbv_buffer_size = bitrate_bps * 2;
+    config.rc_params.vbv_initial_delay = bitrate_bps * 2;
+    // Spatial AQ (`enableAQ`, bit 3 of `NV_ENC_RC_PARAMS`'s packed
+    // bitfield — layout cross-checked against the authoritative FFmpeg
+    // nv-codec-headers nvEncodeAPI.h, LSB-first matching declared field
+    // order: enableMinQP=0, enableMaxQP=1, enableInitialRCQP=2,
+    // enableAQ=3). Without it, single-pass CBR picks one QP for the
+    // *whole* frame from its aggregate complexity estimate — a small
+    // localized change (a button's hover-highlight) shifts that
+    // estimate enough to visibly shift the entire frame's quantization,
+    // seen as the whole screen flashing/breathing in brightness on
+    // every such change. Spatial AQ lets QP vary per macroblock instead,
+    // so the small complex region gets the extra bits it needs without
+    // forcing every other macroblock to re-quantize that frame. Aka why
+    // every screen-capture NVENC tool (Sunshine included) enables this.
+    config.rc_params.bit_fields |= 1 << 3;
+    Ok(config)
+}
 
 impl NvencEncoder {
     /// `texture` must be `D3D11_USAGE_DEFAULT` with `D3D11_BIND_RENDER_TARGET`,
@@ -546,74 +643,7 @@ impl NvencEncoder {
         )?;
         let encoder = NonNull::new(encoder_ptr).ok_or("NvEncOpenEncodeSessionEx: null encoder")?;
 
-        let mut preset_uninit: MaybeUninit<PresetConfig> = MaybeUninit::zeroed();
-        (*preset_uninit.as_mut_ptr()).version = NV_ENC_PRESET_CONFIG_VER;
-        (*preset_uninit.as_mut_ptr()).preset_cfg.version = NV_ENC_CONFIG_VER;
-        check(
-            "NvEncGetEncodePresetConfigEx",
-            (functions.get_encode_preset_config_ex)(
-                encoder.as_ptr(),
-                codec.encode_guid(),
-                NV_ENC_PRESET_P4_GUID,
-                NVENC_TUNING_INFO_ULTRA_LOW_LATENCY,
-                &mut preset_uninit,
-            ),
-        )?;
-        let mut config = preset_uninit.assume_init().preset_cfg;
-        // Override only what we care about; every other field (including
-        // the whole codec-specific H264/AV1 sub-config) stays exactly what
-        // the ultra-low-latency preset already set, which for H.264 already
-        // enables SPS/PPS repetition on every IDR — required since our
-        // client parses SPS/PPS straight out of each keyframe's Annex-B
-        // bytes. AV1's equivalent (repeating the sequence header OBU on
-        // every keyframe) is likewise a preset default we don't override.
-        config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
-        config.frame_interval_p = 1; // no B-frames — lowest latency
-        // Was forced to Baseline (no CABAC) to match the software encoder's
-        // known-good `eAVEncH264VProfile_Base` while debugging decode issues
-        // on real Android hardware decoders — that debugging need has passed
-        // and NVENC is now the primary path, so pay CABAC's real
-        // quality-per-bit cost back: at the same CBR bitrate, Baseline's
-        // CAVLC-only entropy coding visibly softens detail and produces more
-        // motion/text artifacts than High profile, which effectively every
-        // Android device since H.264 was relevant decodes fine. `frame_interval_p
-        // = 1` above already keeps it B-frame-free regardless of profile, so
-        // this doesn't reintroduce the extra reference-frame latency High
-        // profile can otherwise imply.
-        config.profile_guid = codec.profile_guid();
-        config.rc_params.rate_control_mode = NVENC_PARAMS_RC_MODE_CBR;
-        config.rc_params.average_bit_rate = bitrate_bps;
-        // `max_bit_rate`/`vbv_buffer_size` equal to the average left zero
-        // burst headroom: a sudden complexity spike (e.g. a UI hover
-        // highlight) had nowhere to borrow extra bits from and got
-        // hard-quantized instead, visible as a brief contrast crush even
-        // with spatial AQ on (AQ only reallocates bits *within* a frame's
-        // budget — it can't manufacture bits a zero-headroom VBV forbids).
-        // Giving 50% headroom on the ceiling and ~2x the buffer lets a
-        // one-off spike produce a bigger frame instead of getting crushed.
-        // This does NOT add glass-to-glass latency in this pipeline: there
-        // are no B-frames (frame_interval_p = 1) and no segment/jitter
-        // buffering downstream — every frame is still sent the instant
-        // it's encoded, over our own QUIC/FEC transport. VBV buffer size
-        // only bounds how large a single frame is allowed to get before the
-        // rate controller clamps it, not when frames are emitted.
-        config.rc_params.max_bit_rate = bitrate_bps + bitrate_bps / 2;
-        config.rc_params.vbv_buffer_size = bitrate_bps * 2;
-        config.rc_params.vbv_initial_delay = bitrate_bps * 2;
-        // Spatial AQ (`enableAQ`, bit 3 of `NV_ENC_RC_PARAMS`'s packed
-        // bitfield — layout cross-checked against the authoritative FFmpeg
-        // nv-codec-headers nvEncodeAPI.h, LSB-first matching declared field
-        // order: enableMinQP=0, enableMaxQP=1, enableInitialRCQP=2,
-        // enableAQ=3). Without it, single-pass CBR picks one QP for the
-        // *whole* frame from its aggregate complexity estimate — a small
-        // localized change (a button's hover-highlight) shifts that
-        // estimate enough to visibly shift the entire frame's quantization,
-        // seen as the whole screen flashing/breathing in brightness on
-        // every such change. Spatial AQ lets QP vary per macroblock instead,
-        // so the small complex region gets the extra bits it needs without
-        // forcing every other macroblock to re-quantize that frame. Aka why
-        // every screen-capture NVENC tool (Sunshine included) enables this.
-        config.rc_params.bit_fields |= 1 << 3;
+        let mut config = build_config(&functions, encoder, codec, fps, bitrate_bps)?;
 
         let mut init_params: InitializeParams = std::mem::zeroed();
         init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
@@ -675,6 +705,7 @@ impl NvencEncoder {
             completion_event,
             width,
             height,
+            fps,
             frame_index: 0,
             codec,
         })
@@ -682,6 +713,56 @@ impl NvencEncoder {
 
     pub fn codec(&self) -> Codec {
         self.codec
+    }
+
+    /// Live bitrate/IDR reconfigure of this *existing* NVENC session — no
+    /// `NvEncDestroyEncoder`/`NvEncOpenEncodeSessionEx` round trip, so no
+    /// window where the shared `encode_texture` is briefly unregistered from
+    /// any encoder, and no reference-frame-numbering discontinuity for the
+    /// decoder to trip over. Replaces the previous "destroy the whole
+    /// session and build a fresh one" approach for the two routine triggers
+    /// (bitrate change, forced-IDR/recovery request) — that approach worked,
+    /// but every recreate was itself disruptive (briefly stalls capture, and
+    /// user reports/repro sessions correlated it with visible decode
+    /// corruption/contrast flashes), and both triggers fire often enough on
+    /// real network conditions that the disruption was closer to constant
+    /// than occasional. `resetEncoder=1` resets NVENC's internal rate-control
+    /// state and — since `enable_ptd=1` was set at session creation — forces
+    /// the next picture to be a real IDR per NVIDIA's own documented
+    /// behavior for that flag, giving the same "clean keyframe" guarantee
+    /// the old recreate-based approach relied on, without tearing anything
+    /// down. Only resolution/fps/codec changes still go through a full
+    /// `Pipeline` rebuild (a different, much rarer code path in capture.rs).
+    pub unsafe fn reconfigure(&mut self, bitrate_bps: u32) -> Result<(), String> {
+        let mut config = build_config(&self.functions, self.encoder, self.codec, self.fps, bitrate_bps)?;
+
+        let mut init_params: InitializeParams = std::mem::zeroed();
+        init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
+        init_params.encode_guid = self.codec.encode_guid();
+        init_params.preset_guid = NV_ENC_PRESET_P4_GUID;
+        init_params.encode_width = self.width;
+        init_params.encode_height = self.height;
+        init_params.dar_width = self.width;
+        init_params.dar_height = self.height;
+        init_params.frame_rate_num = self.fps;
+        init_params.frame_rate_den = 1;
+        init_params.enable_encode_async = 1;
+        init_params.enable_ptd = 1;
+        init_params.encode_config = &mut config;
+        init_params.max_encode_width = self.width;
+        init_params.max_encode_height = self.height;
+        init_params.tuning_info = NVENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+        init_params.buffer_format = NVENC_BUFFER_FORMAT_ARGB;
+
+        let mut reconfigure_params: ReconfigureParams = std::mem::zeroed();
+        reconfigure_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+        reconfigure_params.re_init_encode_params = init_params;
+        reconfigure_params.bit_fields = 1; // resetEncoder = bit 0; forceIDR (bit 1) not needed, see doc comment above
+
+        check(
+            "NvEncReconfigureEncoder",
+            (self.functions.reconfigure_encoder)(self.encoder.as_ptr(), &mut reconfigure_params),
+        )
     }
 
     /// Encode whatever is currently in the registered texture. `force_idr`

@@ -279,21 +279,20 @@ struct Pipeline {
     fps: u32,
     /// Current NVENC target bitrate. Mutable at runtime (see
     /// `Pipeline::set_bitrate`/`server.rs`'s adaptive controller) — applied
-    /// by recreating the NVENC session, the same mechanism already used to
-    /// force a real IDR (see the long comment in `encode()`), since NVENC
-    /// has no cheaper live-reconfigure path wired up here yet.
+    /// via `NvencEncoder::reconfigure` (live, no session teardown).
     bitrate_bps: u32,
-    /// Set by `set_bitrate` when `bitrate_bps` changed since the last NVENC
-    /// session recreate; cleared once a recreate has actually applied it.
+    /// Set by `set_bitrate` when `bitrate_bps` changed since the last
+    /// reconfigure; cleared once a reconfigure has actually applied it.
     bitrate_dirty: bool,
-    /// A forced-IDR request that arrived while a recreate was already being
-    /// coalesced (see `last_recreate`) — kept pending rather than dropped so
-    /// a client's real recovery request always eventually gets a fresh
-    /// session, just possibly a little later than the call that requested it.
+    /// A forced-IDR request that arrived while a reconfigure was already
+    /// being coalesced (see `last_reconfigure`) — kept pending rather than
+    /// dropped so a client's real recovery request always eventually gets a
+    /// fresh keyframe, just possibly a little later than the call that
+    /// requested it.
     pending_force_idr: bool,
-    /// When the last NVENC session recreate happened, for `encode()`'s
-    /// recreate-coalescing window — see its comment.
-    last_recreate: Option<std::time::Instant>,
+    /// When the last live reconfigure happened, for `encode()`'s
+    /// reconfigure-coalescing window — see its comment.
+    last_reconfigure: Option<std::time::Instant>,
     codec_config: Option<Vec<u8>>,
     have_last: bool,
     frame_index: i64,
@@ -411,7 +410,7 @@ impl Pipeline {
                 bitrate_bps,
                 bitrate_dirty: false,
                 pending_force_idr: false,
-                last_recreate: None,
+                last_reconfigure: None,
                 codec_config,
                 have_last: false,
                 frame_index: 0,
@@ -621,7 +620,7 @@ impl Pipeline {
     }
 
     /// Queue a new target bitrate — applied on the next `encode()` call via
-    /// the same session-recreate mechanism `force_idr` uses (see its comment
+    /// the same live-reconfigure mechanism `force_idr` uses (see its comment
     /// in `encode()`). Called from `server.rs`'s adaptive bitrate controller
     /// and/or a client's explicit `SetBitrate` request.
     fn set_bitrate(&mut self, bps: u32) {
@@ -644,50 +643,35 @@ impl Pipeline {
     unsafe fn encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
         self.pending_force_idr |= force_idr;
         match &mut self.backend {
-            EncoderBackend::Nvenc {
-                encoder,
-                encode_texture,
-                ..
-            } => {
+            EncoderBackend::Nvenc { encoder, .. } => {
                 if self.pending_force_idr || self.bitrate_dirty {
                     // A single real network hiccup routinely fires two
-                    // *independent* recreate triggers a few hundred ms apart:
-                    // the client's own loss-driven recovery request (forced
-                    // IDR) and the host's adaptive bitrate controller backing
-                    // off on the same detected loss (bitrate_dirty) — neither
-                    // knows about the other, so one real event was costing
-                    // two back-to-back full session recreates. Each recreate
-                    // is itself disruptive (briefly stalls capture, and,
-                    // going by user reports, the frame(s) right after one can
-                    // show a transient contrast/quality glitch) — two of them
-                    // within a second compounds that for no benefit, since a
-                    // fresh session's first frame is always a real IDR
-                    // regardless of which trigger caused it. Coalesce: skip
-                    // the recreate if one just happened, but keep both flags
-                    // pending rather than dropping them, so a real request is
-                    // only ever delayed, never lost.
-                    const RECREATE_COALESCE_WINDOW: std::time::Duration =
+                    // *independent* reconfigure triggers a few hundred ms
+                    // apart: the client's own loss-driven recovery request
+                    // (forced IDR) and the host's adaptive bitrate controller
+                    // backing off on the same detected loss (bitrate_dirty) —
+                    // neither knows about the other. Both force a fresh
+                    // keyframe (see `NvencEncoder::reconfigure`'s
+                    // `resetEncoder` doc comment), so back-to-back triggers
+                    // just mean two unnecessary keyframes (bandwidth) instead
+                    // of one. Coalesce: skip the reconfigure if one just
+                    // happened, but keep both flags pending rather than
+                    // dropping them, so a real request is only ever delayed,
+                    // never lost.
+                    const RECONFIGURE_COALESCE_WINDOW: std::time::Duration =
                         std::time::Duration::from_millis(1000);
                     let coalescing = self
-                        .last_recreate
-                        .map(|t| t.elapsed() < RECREATE_COALESCE_WINDOW)
+                        .last_reconfigure
+                        .map(|t| t.elapsed() < RECONFIGURE_COALESCE_WINDOW)
                         .unwrap_or(false);
                     if !coalescing {
-                        // NVENC's per-picture NV_ENC_PIC_FLAG_FORCEIDR flag is
-                        // set correctly (see nvenc.rs) but empirically the
-                        // driver still doesn't produce a real IDR NAL from it —
-                        // almost certainly the UltraLowLatency preset's
-                        // codec-specific `idrPeriod` (a field inside the opaque
-                        // per-codec config union we deliberately never touch)
-                        // overriding it to "never auto-insert", and that
-                        // override apparently also swallows explicit force
-                        // requests on this driver. Rather than reach into that
-                        // union (real risk of another layout bug), use the one
-                        // IDR mechanism already proven 100% reliable: a brand
-                        // new NVENC session's first frame is always a real IDR.
-                        // Also the only bitrate-reconfigure path implemented so
-                        // far — no live `NvEncReconfigureEncoder` call, just a
-                        // fresh session built with the new target.
+                        // Live reconfigure (`NvEncReconfigureEncoder`) on the
+                        // *existing* session, not a destroy+recreate — see
+                        // `NvencEncoder::reconfigure`'s doc comment for why
+                        // that changed. `resetEncoder=1` there gives the same
+                        // "next frame is a real IDR" guarantee the old
+                        // recreate-based approach relied on, so both trigger
+                        // reasons are still satisfied by one call.
                         let mut reasons = Vec::new();
                         if self.pending_force_idr {
                             reasons.push("forced IDR".to_string());
@@ -696,26 +680,17 @@ impl Pipeline {
                             reasons.push(format!("bitrate -> {} kbps", self.bitrate_bps / 1000));
                         }
                         crate::logging::log(&format!(
-                            "NVENC: recreating encoder session ({})",
+                            "NVENC: reconfiguring encoder session ({})",
                             reasons.join(", ")
                         ));
-                        match NvencEncoder::new(
-                            &self.device,
-                            encode_texture,
-                            self.width,
-                            self.height,
-                            self.fps,
-                            self.bitrate_bps,
-                            encoder.codec(),
-                        ) {
-                            Ok(fresh) => {
-                                *encoder = fresh;
+                        match encoder.reconfigure(self.bitrate_bps) {
+                            Ok(()) => {
                                 self.bitrate_dirty = false;
                                 self.pending_force_idr = false;
-                                self.last_recreate = Some(std::time::Instant::now());
+                                self.last_reconfigure = Some(std::time::Instant::now());
                             }
                             Err(e) => crate::logging::log(&format!(
-                                "NVENC: session recreate failed, continuing with existing session: {e}"
+                                "NVENC: reconfigure failed, continuing with existing session: {e}"
                             )),
                         }
                     }
