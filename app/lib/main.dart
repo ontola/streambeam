@@ -198,7 +198,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   static const _deepLinkChannel = MethodChannel('streambeam/deeplink');
   static const _discoveryChannel = MethodChannel('streambeam/discovery');
   static const _discoveryInterval = Duration(seconds: 8);
-  static const _clipboardPollInterval = Duration(seconds: 2);
+  static const _clipboardPollInterval = Duration(milliseconds: 750);
 
   final _payloadCtrl = TextEditingController();
   bool _busy = false;
@@ -222,6 +222,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   bool _qrPreviewOpen = false;
   bool _clipboardReady = false;
   Timer? _clipboardTimer;
+  String? _lastSyncedClipboard;
   Timer? _surfaceTimeout;
   int _sessionId = 0;
   bool _playInFlight = false;
@@ -453,7 +454,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _refreshViewers();
     unawaited(_refreshClipboard());
     _clipboardTimer = Timer.periodic(_clipboardPollInterval, (_) {
-      if (!_busy && mounted) unawaited(_refreshClipboard());
+      if (mounted) unawaited(_refreshClipboard());
     });
     _discoveryTimer = Timer.periodic(_discoveryInterval, (_) {
       if (!_busy && mounted) {
@@ -532,7 +533,39 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshClipboard() async {
-    final payload = await _payloadFromClipboard();
+    final remote = takeRemoteClipboard() ?? hostTakeRemoteClipboard();
+    if (remote != null && remote != _lastSyncedClipboard) {
+      _lastSyncedClipboard = remote;
+      await Clipboard.setData(ClipboardData(text: remote));
+      debugPrint(
+        'StreamBeam clipboard: applied remote text (${remote.length} chars)',
+      );
+    }
+
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    final clientActive = _showVideo && _status == 'Streaming…';
+    final hostActive = _viewers.isNotEmpty;
+    if (text != null &&
+        text.length <= 60000 &&
+        text != _lastSyncedClipboard &&
+        (clientActive || hostActive)) {
+      _lastSyncedClipboard = text;
+      if (clientActive) {
+        sendClipboardText(text: text);
+        debugPrint(
+          'StreamBeam clipboard: sent client text (${text.length} chars)',
+        );
+      }
+      if (hostActive) {
+        hostPublishClipboard(text: text);
+        debugPrint(
+          'StreamBeam clipboard: sent host text (${text.length} chars)',
+        );
+      }
+    }
+
+    final payload = text == null ? null : _extractPayload(text);
     final ready = payload != null;
     if (!mounted || ready == _clipboardReady) return;
     setState(() => _clipboardReady = ready);

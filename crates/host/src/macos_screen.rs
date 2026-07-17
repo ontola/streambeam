@@ -15,7 +15,7 @@ use streambeam_proto::control::DisplayInfo;
 const MAX_PENDING: usize = 8;
 /// Must match `StreamBeamCapture.fps` in the macOS runner. Kept explicit until
 /// capture settings are passed across the native bridge dynamically.
-pub const CAPTURE_FPS: u32 = 60;
+pub const CAPTURE_FPS: u32 = 30;
 const NO_DISPLAY: u32 = u32::MAX;
 
 struct ScreenSource {

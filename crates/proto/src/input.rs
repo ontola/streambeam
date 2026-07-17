@@ -22,6 +22,10 @@ pub enum InputEvent {
         dx: i16,
         dy: i16,
     },
+    /// UTF-8 text clipboard update from the viewing client.
+    ClipboardText {
+        text: String,
+    },
     Key {
         vk: u16,
         down: bool,
@@ -62,5 +66,15 @@ mod tests {
         let bytes = frame::encode_frame(&ev).unwrap();
         let (decoded, _) = frame::decode_frame::<InputEvent>(&bytes).unwrap();
         assert_eq!(decoded, ev);
+    }
+
+    #[test]
+    fn clipboard_roundtrip() {
+        let event = InputEvent::ClipboardText {
+            text: "hello from phone 👋".into(),
+        };
+        let bytes = frame::encode_frame(&event).unwrap();
+        let (decoded, _) = frame::decode_frame::<InputEvent>(&bytes).unwrap();
+        assert_eq!(decoded, event);
     }
 }

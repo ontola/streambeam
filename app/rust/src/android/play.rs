@@ -363,6 +363,10 @@ async fn play_session(
     crate::input::set_sender(Some(input_tx));
 
     let input_task = runtime.spawn(crate::input::pump(input, input_rx));
+    let control_task = session
+        .recv
+        .take()
+        .map(|recv| runtime.spawn(crate::playback::receive_control(recv)));
 
     let result = tokio::task::spawn_blocking(move || {
         play_session_blocking(session, native_window, max_video_frames, runtime)
@@ -372,6 +376,9 @@ async fn play_session(
 
     crate::input::set_sender(None);
     input_task.abort();
+    if let Some(task) = control_task {
+        task.abort();
+    }
     result
 }
 

@@ -101,6 +101,11 @@ pub enum HostMsg {
         encode_us: u32,
         send_queue: u16,
     },
+    /// UTF-8 text clipboard update from the host. Only sent to an
+    /// authenticated viewer; clients de-duplicate echoes locally.
+    ClipboardText {
+        text: String,
+    },
     Pong {
         t_us: u64,
     },
@@ -156,6 +161,16 @@ mod tests {
                 primary: true,
             }],
             selected_id: 42,
+        };
+        let bytes = frame::encode_frame(&msg).unwrap();
+        let (decoded, _) = frame::decode_frame::<HostMsg>(&bytes).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn clipboard_roundtrip() {
+        let msg = HostMsg::ClipboardText {
+            text: "hello from host".into(),
         };
         let bytes = frame::encode_frame(&msg).unwrap();
         let (decoded, _) = frame::decode_frame::<HostMsg>(&bytes).unwrap();

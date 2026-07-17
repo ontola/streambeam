@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use streambeam_proto::control::DisplayInfo;
+use streambeam_proto::control::HostMsg;
 
 #[derive(Debug, Clone)]
 struct SessionInfo {
@@ -18,6 +19,7 @@ static BYTES_RECEIVED: AtomicU64 = AtomicU64::new(0);
 static NETWORK_RTT_US: AtomicU64 = AtomicU64::new(0);
 static SESSION: Mutex<Option<SessionInfo>> = Mutex::new(None);
 static DISPLAYS: Mutex<Vec<DisplayInfo>> = Mutex::new(Vec::new());
+static REMOTE_CLIPBOARD: Mutex<Option<String>> = Mutex::new(None);
 const NO_DISPLAY: u32 = u32::MAX;
 static REQUESTED_DISPLAY: AtomicU32 = AtomicU32::new(NO_DISPLAY);
 
@@ -56,6 +58,25 @@ pub fn requested_display_id() -> Option<u32> {
 
 pub fn request_display(id: u32) {
     REQUESTED_DISPLAY.store(id, Ordering::Relaxed);
+}
+
+pub fn receive_remote_clipboard(text: String) {
+    if text.len() <= 60_000 {
+        *REMOTE_CLIPBOARD.lock().unwrap() = Some(text);
+    }
+}
+
+pub fn take_remote_clipboard() -> Option<String> {
+    REMOTE_CLIPBOARD.lock().unwrap().take()
+}
+
+pub async fn receive_control(mut recv: quinn::RecvStream) {
+    let mut buf = Vec::new();
+    while let Ok(message) = streambeam_net::read_msg::<HostMsg>(&mut recv, &mut buf).await {
+        if let HostMsg::ClipboardText { text } = message {
+            receive_remote_clipboard(text);
+        }
+    }
 }
 
 pub fn session_width() -> u16 {

@@ -46,10 +46,10 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
   private var stopping = false
   private var width: Int32 = 0
   private var height: Int32 = 0
-  // The remote cursor is composited by ScreenCaptureKit, so its visible
-  // smoothness follows capture cadence even though input itself is sent at
-  // up to 125 Hz. Keep this at 60 to match a typical phone display.
-  private let fps: Int32 = 60
+  // Input is sent at up to 125 Hz, but this device-tested capture cadence is
+  // kept at 30 until the Qualcomm decoder failure seen with macOS 60 fps is
+  // understood (it accepted the stream, rendered a few frames, then aborted).
+  private let fps: Int32 = 30
 
   func start(maxDimension: Int = 1920) async throws {
     guard stream == nil else { return }

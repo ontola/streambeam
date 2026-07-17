@@ -205,6 +205,21 @@ pub fn public_key() -> Vec<u8> {
         .unwrap_or_default()
 }
 
+pub fn publish_clipboard(text: String) {
+    if let Ok(slot) = service_slot().lock()
+        && let Some(service) = slot.as_ref()
+    {
+        service.controls.publish_clipboard(text);
+    }
+}
+
+pub fn take_remote_clipboard() -> Option<String> {
+    service_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().and_then(|service| service.controls.take_remote_clipboard()))
+}
+
 pub fn stop() {
     // Take the service out (and release the slot lock) before joining, so a
     // concurrent start()/snapshot() doesn't block on the lock while we wind down.

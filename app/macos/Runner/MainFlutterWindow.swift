@@ -116,6 +116,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
             await capture.stop()
           }
         } catch {
+          NSLog("StreamBeam on-demand capture failed: \(error.localizedDescription)")
           self.screencastChannel?.invokeMethod(
             "captureState",
             arguments: ["active": false, "error": error.localizedDescription])

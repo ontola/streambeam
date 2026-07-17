@@ -156,7 +156,9 @@ fn apply_macos(event: InputEvent) {
                 event.post(CGEventTapLocation::HIDEventTap);
             }
         }
-        InputEvent::GamepadPlug { .. } | InputEvent::GamepadState { .. } => {}
+        InputEvent::GamepadPlug { .. }
+        | InputEvent::GamepadState { .. }
+        | InputEvent::ClipboardText { .. } => {}
     }
 }
 
@@ -306,6 +308,7 @@ fn apply_windows(event: InputEvent) {
             InputEvent::GamepadPlug { .. } | InputEvent::GamepadState { .. } => {
                 crate::gamepad_inject::apply(event);
             }
+            InputEvent::ClipboardText { .. } => {}
             _ => {}
         }
     }

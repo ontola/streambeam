@@ -30,6 +30,12 @@ void sendMouseMove({required int dx, required int dy}) =>
 void sendMouseScroll({required int dx, required int dy}) =>
     StreambeamFfi.instance.api.crateApiSendMouseScroll(dx: dx, dy: dy);
 
+void sendClipboardText({required String text}) =>
+    StreambeamFfi.instance.api.crateApiSendClipboardText(text: text);
+
+String? takeRemoteClipboard() =>
+    StreambeamFfi.instance.api.crateApiTakeRemoteClipboard();
+
 void sendMouseAbs({
   required int x,
   required int y,
@@ -230,6 +236,12 @@ bool hostPlatformSupported() =>
 /// this stable identity to hide our own mDNS advertisement without relying on
 /// potentially-colliding device names or IP addresses.
 Uint8List hostPublicKey() => StreambeamFfi.instance.api.crateApiHostPublicKey();
+
+void hostPublishClipboard({required String text}) =>
+    StreambeamFfi.instance.api.crateApiHostPublishClipboard(text: text);
+
+String? hostTakeRemoteClipboard() =>
+    StreambeamFfi.instance.api.crateApiHostTakeRemoteClipboard();
 
 void startHost({
   String? hostName,

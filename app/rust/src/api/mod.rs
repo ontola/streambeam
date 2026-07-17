@@ -87,6 +87,18 @@ pub fn send_mouse_scroll(dx: i16, dy: i16) {
 }
 
 #[flutter_rust_bridge::frb(sync)]
+pub fn send_clipboard_text(text: String) {
+    if text.len() <= 60_000 {
+        crate::input::send(streambeam_proto::input::InputEvent::ClipboardText { text });
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn take_remote_clipboard() -> Option<String> {
+    crate::playback::take_remote_clipboard()
+}
+
+#[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
     crate::input::send(streambeam_proto::input::InputEvent::MouseAbs { x, y, ref_w, ref_h });
 }
@@ -619,6 +631,10 @@ async fn desktop_stream_loop(
         crate::input::set_sender(Some(tx));
         InputPumpGuard(tokio::spawn(crate::input::pump(input_send, rx)))
     });
+    let _control_guard = session
+        .recv
+        .take()
+        .map(|recv| InputPumpGuard(tokio::spawn(crate::playback::receive_control(recv))));
 
     let codec_config = session
         .codec_config
@@ -914,6 +930,24 @@ pub fn host_public_key() -> Vec<u8> {
     }
     #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     Vec::new()
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_publish_clipboard(text: String) {
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
+    if text.len() <= 60_000 {
+        crate::host::publish_clipboard(text);
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_take_remote_clipboard() -> Option<String> {
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
+    {
+        return crate::host::take_remote_clipboard();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
+    None
 }
 
 #[flutter_rust_bridge::frb(sync)]

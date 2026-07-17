@@ -119,7 +119,7 @@ HostMsg   { PairAck, PairReject { reason },
             SessionAccept { session_id, codec, width,
             height, fps, audio: AudioParams }, CodecConfig { data },
             Rumble { pad, low, high }, HostStats { capture_us, encode_us, send_queue },
-            Pong { t_us }, Bye }
+            ClipboardText { text }, Pong { t_us }, Bye }
 ```
 
 `DisplayInfo` contains the host-platform display id, user-facing name, native
@@ -135,10 +135,16 @@ InputEvent { MouseMove { dx, dy },                       // coalesced ≤ 250 Hz
              MouseAbs { x, y, ref_w, ref_h },            // touch/mouse position; host scales
              MouseButton { button, down },               // 0 left · 1 right · 2 middle · 3 back · 4 forward
              Scroll { dx, dy },                          // wheel units: ±120 = one notch; fractions allowed (trackpads)
+             ClipboardText { text },                     // UTF-8 text, reliable, max 60 KB
              Key { vk, down },                           // Windows VK codes on the wire
              GamepadState { pad, buttons, lt, rt, lx, ly, rx, ry },  // full state, idempotent
              GamepadPlug { pad, connected } }
 ```
+
+Text clipboard sync is active only for the authenticated device currently in
+a stream session. Client→host updates use S1; host→client updates use S0. Both
+sides de-duplicate the last applied value to prevent echo loops. Images, files,
+and rich clipboard formats are not part of v2.
 
 ## Discovery
 

@@ -1,7 +1,7 @@
 //! QUIC host server — pairs clients and streams video + audio.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -133,6 +133,9 @@ pub struct HostControls {
     /// wakes it if it's currently parked on `endpoint.accept()`.
     shutdown_requested: AtomicBool,
     shutdown: tokio::sync::Notify,
+    clipboard_to_client: tokio::sync::watch::Sender<(u64, String)>,
+    clipboard_from_client: Mutex<Option<String>>,
+    clipboard_revision: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -152,6 +155,7 @@ impl Default for HostControls {
 impl HostControls {
     /// Both toggles start enabled.
     pub fn new() -> Self {
+        let (clipboard_to_client, _) = tokio::sync::watch::channel((0, String::new()));
         Self {
             discoverable: AtomicBool::new(true),
             accept_connections: AtomicBool::new(true),
@@ -162,6 +166,28 @@ impl HostControls {
             pairing: Mutex::new(None),
             shutdown_requested: AtomicBool::new(false),
             shutdown: tokio::sync::Notify::new(),
+            clipboard_to_client,
+            clipboard_from_client: Mutex::new(None),
+            clipboard_revision: AtomicU64::new(0),
+        }
+    }
+
+    /// Publish this host's current text clipboard to active viewers.
+    pub fn publish_clipboard(&self, text: String) {
+        if text.len() > 60_000 || self.clipboard_to_client.borrow().1 == text {
+            return;
+        }
+        let revision = self.clipboard_revision.fetch_add(1, Ordering::Relaxed) + 1;
+        self.clipboard_to_client.send_replace((revision, text));
+    }
+
+    pub fn take_remote_clipboard(&self) -> Option<String> {
+        self.clipboard_from_client.lock().unwrap().take()
+    }
+
+    fn receive_remote_clipboard(&self, text: String) {
+        if text.len() <= 60_000 {
+            *self.clipboard_from_client.lock().unwrap() = Some(text);
         }
     }
 
@@ -779,12 +805,13 @@ async fn handle_client(
     };
 
     let input_conn = conn.clone();
+    let input_controls = controls.clone();
     tokio::spawn(async move {
         loop {
             match input_conn.accept_uni().await {
                 Ok(recv) => {
                     log!("input stream opened");
-                    if let Err(e) = handle_input_stream(recv).await {
+                    if let Err(e) = handle_input_stream(recv, input_controls.clone()).await {
                         log!("input stream ended: {e}");
                     }
                 }
@@ -814,15 +841,27 @@ async fn handle_client(
     // reports. Gated the same as `RequestIdr` until NVENC gets a real cheap
     // invalidation path (`crates/host/src/capture.rs`'s own TODO).
     let mut last_invalidate = std::time::Instant::now();
+    let mut clipboard_rx = controls.clipboard_to_client.subscribe();
 
     loop {
-        let msg: ClientMsg = tokio::select! {
+        let msg: Option<ClientMsg> = tokio::select! {
             _ = conn.closed() => break,
             read = read_msg(&mut recv, &mut buf) => match read {
-                Ok(m) => m,
+                Ok(m) => Some(m),
                 Err(_) => break,
             },
+            changed = clipboard_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                if streaming {
+                    let text = clipboard_rx.borrow_and_update().1.clone();
+                    write_msg(&mut send, &HostMsg::ClipboardText { text }).await?;
+                }
+                None
+            }
         };
+        let Some(msg) = msg else { continue };
 
         match msg {
             ClientMsg::SessionRequest { video, .. } => {
@@ -846,8 +885,8 @@ async fn handle_client(
                     default_fps
                 };
                 // The native SCK/VideoToolbox producer currently runs at a
-                // fixed 60 fps. Do not advertise a client-requested 120 fps
-                // in SessionAccept while only supplying 60; that makes its
+                // fixed 30 fps. Do not advertise a client-requested 120 fps
+                // in SessionAccept while only supplying 30; that makes its
                 // pacing/backlog heuristics reason from false metadata.
                 #[cfg(target_os = "macos")]
                 let build_fps = build_fps.min(crate::macos_screen::CAPTURE_FPS);
@@ -1067,12 +1106,16 @@ async fn handle_client(
 
 async fn handle_input_stream(
     mut recv: quinn::RecvStream,
+    controls: Arc<HostControls>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = Vec::new();
     let result = async {
         loop {
             let event: InputEvent = read_msg(&mut recv, &mut buf).await?;
-            crate::input_inject::apply(event);
+            match event {
+                InputEvent::ClipboardText { text } => controls.receive_remote_clipboard(text),
+                other => crate::input_inject::apply(other),
+            }
         }
     }
     .await;
@@ -1453,4 +1496,45 @@ async fn stream_audio(
         tokio::time::sleep(packet_interval).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::HostControls;
+
+    #[tokio::test]
+    async fn host_clipboard_is_published_to_viewers() {
+        let controls = HostControls::new();
+        let mut receiver = controls.clipboard_to_client.subscribe();
+
+        controls.publish_clipboard("from host".into());
+
+        receiver.changed().await.unwrap();
+        assert_eq!(receiver.borrow_and_update().1, "from host");
+    }
+
+    #[test]
+    fn client_clipboard_can_be_taken_once() {
+        let controls = HostControls::new();
+
+        controls.receive_remote_clipboard("from client".into());
+
+        assert_eq!(
+            controls.take_remote_clipboard().as_deref(),
+            Some("from client")
+        );
+        assert_eq!(controls.take_remote_clipboard(), None);
+    }
+
+    #[test]
+    fn oversized_clipboards_are_rejected_in_both_directions() {
+        let controls = HostControls::new();
+        let oversized = "x".repeat(60_001);
+
+        controls.publish_clipboard(oversized.clone());
+        controls.receive_remote_clipboard(oversized);
+
+        assert_eq!(controls.clipboard_to_client.borrow().0, 0);
+        assert_eq!(controls.take_remote_clipboard(), None);
+    }
 }

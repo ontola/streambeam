@@ -896,7 +896,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                       clipBehavior: Clip.hardEdge,
                       fit: StackFit.expand,
                       children: [
-                        if (showStreamInput)
+                        // Keep the native Android video surface in the same
+                        // widget subtree before and after the first decoded
+                        // frame. Reparenting a PlatformView while MediaCodec
+                        // is rendering can invalidate its Surface and abort
+                        // the decoder with UNKNOWN_ERROR.
+                        if (widget.inputSupported)
                           _StreamInputLayer(
                             key: const ValueKey('stream-input'),
                             videoRect: videoRect,
@@ -930,11 +935,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                 child: SizedBox(
                                   width: videoSize.width,
                                   height: videoSize.height,
-                                  child: SizedBox(
-                                    width: videoSize.width,
-                                    height: videoSize.height,
-                                    child: widget.video,
-                                  ),
+                                  child: widget.video,
                                 ),
                               ),
                             ),
@@ -1267,7 +1268,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (oldWidget.mode != widget.mode) {
       _resetMouseState();
     }
-    if (!widget.mouseControlEnabled || widget.multiTouchSession) {}
     if (!widget.mouseControlEnabled && _mouseButtons != 0) {
       _syncMouseButtons(0);
     }
