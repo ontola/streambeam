@@ -115,7 +115,7 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let info = PairInfo {
-        version: 1,
+        version: PROTO_VERSION,
         host_name: "fakehost".into(),
         host_pubkey: identity.public_key(),
         addrs,

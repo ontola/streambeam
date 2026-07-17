@@ -1319,6 +1319,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         onCustomSettingsChanged: (settings) =>
             setState(() => _customSettings = settings),
         onCustomSettingsCommitted: () {},
+        onDisplayChanged: () {},
       );
     }
     if (_showVideo && Platform.isAndroid) {
@@ -1339,6 +1340,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         customSettings: _customSettings,
         onCustomSettingsChanged: _updateCustomSettings,
         onCustomSettingsCommitted: _commitCustomSettings,
+        onDisplayChanged: _reconnectForNewCaps,
       );
     }
 

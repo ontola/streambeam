@@ -251,6 +251,7 @@ fn video_caps(max_width: u16, max_height: u16, max_fps: u8) -> VideoCaps {
         } else {
             fallback.max_fps
         },
+        display_id: crate::playback::requested_display_id(),
     }
 }
 
@@ -355,6 +356,7 @@ async fn play_session(
     max_video_frames: u32,
 ) -> Result<StreamStats, String> {
     crate::playback::reset();
+    crate::playback::set_displays(session.displays.clone(), session.selected_display_id);
     let runtime = tokio::runtime::Handle::current();
     let input = session.input.take().ok_or("input stream not open")?;
     let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();

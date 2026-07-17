@@ -7,13 +7,22 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `desktop_stream_loop`, `desktop_video_caps`, `play_stream_desktop_inner`, `play_stream_desktop_known_inner`, `receive_stats`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 BigInt playbackFramesRendered() =>
     StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
 
 PlaybackDiagnostics playbackDiagnostics() =>
     StreambeamFfi.instance.api.crateApiPlaybackDiagnostics();
+
+List<PlaybackDisplay> playbackDisplays() =>
+    StreambeamFfi.instance.api.crateApiPlaybackDisplays();
+
+void selectPlaybackDisplay({required int id}) =>
+    StreambeamFfi.instance.api.crateApiSelectPlaybackDisplay(id: id);
+
+int? selectedPlaybackDisplay() =>
+    StreambeamFfi.instance.api.crateApiSelectedPlaybackDisplay();
 
 void sendMouseMove({required int dx, required int dy}) =>
     StreambeamFfi.instance.api.crateApiSendMouseMove(dx: dx, dy: dy);
@@ -493,6 +502,41 @@ class PlaybackDiagnostics {
           bytesReceived == other.bytesReceived &&
           framesRendered == other.framesRendered &&
           networkRttUs == other.networkRttUs;
+}
+
+class PlaybackDisplay {
+  final int id;
+  final String name;
+  final int width;
+  final int height;
+  final bool primary;
+
+  const PlaybackDisplay({
+    required this.id,
+    required this.name,
+    required this.width,
+    required this.height,
+    required this.primary,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      primary.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaybackDisplay &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          width == other.width &&
+          height == other.height &&
+          primary == other.primary;
 }
 
 /// Saved host details for the device list (shown even when offline).

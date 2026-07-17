@@ -542,7 +542,7 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     };
 
     let info = PairInfo {
-        version: 1,
+        version: PROTO_VERSION,
         host_name: config.host_name.clone(),
         host_pubkey: identity.public_key(),
         addrs,
@@ -826,6 +826,8 @@ async fn handle_client(
 
         match msg {
             ClientMsg::SessionRequest { video, .. } => {
+                #[cfg(target_os = "macos")]
+                crate::macos_screen::set_requested_display(video.display_id);
                 // Honor this client's real display caps, clamped to a sanity
                 // ceiling independent of the CLI/env admin defaults (which
                 // only apply when a client sends degenerate/zero caps —
@@ -844,8 +846,8 @@ async fn handle_client(
                     default_fps
                 };
                 // The native SCK/VideoToolbox producer currently runs at a
-                // fixed 30 fps. Do not advertise a client-requested 120 fps
-                // in SessionAccept while only supplying 30; that makes its
+                // fixed 60 fps. Do not advertise a client-requested 120 fps
+                // in SessionAccept while only supplying 60; that makes its
                 // pacing/backlog heuristics reason from false metadata.
                 #[cfg(target_os = "macos")]
                 let build_fps = build_fps.min(crate::macos_screen::CAPTURE_FPS);
@@ -986,6 +988,15 @@ async fn handle_client(
                     }
                 }
                 if let Some(data) = fresh_config.as_ref().or(codec_config.as_ref()) {
+                    #[cfg(target_os = "macos")]
+                    write_msg(
+                        &mut send,
+                        &HostMsg::DisplayList {
+                            displays: crate::macos_screen::displays(),
+                            selected_id: crate::macos_screen::selected_display(),
+                        },
+                    )
+                    .await?;
                     write_msg(&mut send, &HostMsg::CodecConfig { data: data.clone() }).await?;
                 }
                 write_msg(

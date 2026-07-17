@@ -10,11 +10,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::encode::{EncodeError, EncodedFrame, VideoEncoder};
+use streambeam_proto::control::DisplayInfo;
 
 const MAX_PENDING: usize = 8;
 /// Must match `StreamBeamCapture.fps` in the macOS runner. Kept explicit until
 /// capture settings are passed across the native bridge dynamically.
-pub const CAPTURE_FPS: u32 = 30;
+pub const CAPTURE_FPS: u32 = 60;
+const NO_DISPLAY: u32 = u32::MAX;
 
 struct ScreenSource {
     pending: Mutex<VecDeque<EncodedFrame>>,
@@ -26,6 +28,10 @@ struct ScreenSource {
     capture_wanted: AtomicBool,
     width: AtomicU32,
     height: AtomicU32,
+    requested_display: AtomicU32,
+    selected_display: AtomicU32,
+    displays: Mutex<Vec<DisplayInfo>>,
+    display_bounds: Mutex<(f64, f64, f64, f64)>,
 }
 
 static SOURCE: ScreenSource = ScreenSource {
@@ -36,15 +42,63 @@ static SOURCE: ScreenSource = ScreenSource {
     capture_wanted: AtomicBool::new(false),
     width: AtomicU32::new(0),
     height: AtomicU32::new(0),
+    requested_display: AtomicU32::new(NO_DISPLAY),
+    selected_display: AtomicU32::new(0),
+    displays: Mutex::new(Vec::new()),
+    display_bounds: Mutex::new((0.0, 0.0, 1.0, 1.0)),
 };
 
-pub fn begin_session(width: u32, height: u32) {
+pub fn begin_session(
+    width: u32,
+    height: u32,
+    display_id: u32,
+    origin_x: f64,
+    origin_y: f64,
+    display_width: f64,
+    display_height: f64,
+) {
     SOURCE.width.store(width, Ordering::Relaxed);
     SOURCE.height.store(height, Ordering::Relaxed);
+    SOURCE.selected_display.store(display_id, Ordering::Relaxed);
+    *SOURCE.display_bounds.lock().unwrap() = (
+        origin_x,
+        origin_y,
+        display_width.max(1.0),
+        display_height.max(1.0),
+    );
     SOURCE.pending.lock().unwrap().clear();
     *SOURCE.codec_config.lock().unwrap() = None;
     SOURCE.idr_requested.store(false, Ordering::Relaxed);
     SOURCE.active.store(true, Ordering::Relaxed);
+}
+
+pub fn set_requested_display(display_id: Option<u32>) {
+    SOURCE
+        .requested_display
+        .store(display_id.unwrap_or(NO_DISPLAY), Ordering::Release);
+}
+
+pub fn requested_display() -> Option<u32> {
+    match SOURCE.requested_display.load(Ordering::Acquire) {
+        NO_DISPLAY => None,
+        id => Some(id),
+    }
+}
+
+pub fn set_displays(displays: Vec<DisplayInfo>) {
+    *SOURCE.displays.lock().unwrap() = displays;
+}
+
+pub fn displays() -> Vec<DisplayInfo> {
+    SOURCE.displays.lock().unwrap().clone()
+}
+
+pub fn selected_display() -> u32 {
+    SOURCE.selected_display.load(Ordering::Relaxed)
+}
+
+pub fn selected_display_bounds() -> (f64, f64, f64, f64) {
+    *SOURCE.display_bounds.lock().unwrap()
 }
 
 pub fn end_session() {
@@ -126,7 +180,7 @@ mod tests {
         release_capture();
         request_capture();
         assert!(capture_wanted());
-        begin_session(1920, 1080);
+        begin_session(1920, 1080, 1, 0.0, 0.0, 1920.0, 1080.0);
         assert!(!is_ready());
         submit(vec![0, 0, 0, 1, 0x67], true, true);
         assert!(is_ready());

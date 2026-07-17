@@ -1654,6 +1654,7 @@ dependencies = [
  "ndk",
  "ndk-sys",
  "quinn",
+ "serde_json",
  "streambeam-core",
  "streambeam-host",
  "streambeam-net",

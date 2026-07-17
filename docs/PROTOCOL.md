@@ -1,7 +1,7 @@
-# StreamBeam protocol v1
+# StreamBeam protocol v2
 
 Everything runs over a single QUIC connection (client-initiated), mutual TLS with
-pinned Ed25519 keys. `PROTO_VERSION = 1`.
+pinned Ed25519 keys. `PROTO_VERSION = 2`.
 
 ## Identity & transport security
 
@@ -35,7 +35,7 @@ builds where the https link isn't verified.
 
 ```rust
 PairInfo {
-    version: u8,            // 1
+    version: u8,            // 2
     host_name: String,
     host_pubkey: [u8; 32],  // Ed25519
     addrs: Vec<SocketAddr>,
@@ -110,14 +110,23 @@ covers loss).
 
 ```rust
 ClientMsg { Hello { proto_version, client_name, pair_proof: Option<[u8;32]> },
-            SessionRequest { video: VideoCaps, audio: AudioCaps, bitrate_kbps },
+            SessionRequest { video: VideoCaps { ..., display_id: Option<u32> },
+                             audio: AudioCaps, bitrate_kbps },
             RequestIdr, InvalidateRefFrames { first_frame: u16, last_frame: u16 },
             SetBitrate { kbps }, Ping { t_us }, Bye }
-HostMsg   { PairAck, PairReject { reason }, SessionAccept { session_id, codec, width,
+HostMsg   { PairAck, PairReject { reason },
+            DisplayList { displays: Vec<DisplayInfo>, selected_id },
+            SessionAccept { session_id, codec, width,
             height, fps, audio: AudioParams }, CodecConfig { data },
             Rumble { pad, low, high }, HostStats { capture_us, encode_us, send_queue },
             Pong { t_us }, Bye }
 ```
+
+`DisplayInfo` contains the host-platform display id, user-facing name, native
+width/height and `primary` flag. A client uses `display_id = None` for the
+primary display. To change displays it reconnects with the chosen id; this
+keeps capture geometry, encoder configuration and absolute-input mapping on
+one session boundary.
 
 ## Input events (S1)
 
@@ -133,5 +142,5 @@ InputEvent { MouseMove { dx, dy },                       // coalesced ≤ 250 Hz
 
 ## Discovery
 
-mDNS `_streambeam._udp.local`, TXT: `v=1`, `name=...`, `fp=<b64 host pubkey>`, `port=...`.
+mDNS `_streambeam._udp.local`, TXT: `v=2`, `name=...`, `fp=<b64 host pubkey>`, `port=...`.
 QR is only needed for first pairing; paired hosts reconnect via mDNS + pinned key.

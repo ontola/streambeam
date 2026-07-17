@@ -23,6 +23,8 @@ pub struct ClientSession {
     pub fps: u8,
     pub codec: String,
     pub codec_config: Option<Vec<u8>>,
+    pub displays: Vec<streambeam_proto::control::DisplayInfo>,
+    pub selected_display_id: u32,
     pub input: Option<quinn::SendStream>,
 }
 
@@ -72,6 +74,7 @@ pub fn fallback_video_caps() -> VideoCaps {
         max_width: 1920,
         max_height: 1080,
         max_fps: 60,
+        display_id: None,
     }
 }
 
@@ -232,6 +235,8 @@ async fn finish_session_inner(
     .await?;
 
     let mut codec_config = None;
+    let mut displays = Vec::new();
+    let mut selected_display_id = 0;
     let (width, height, fps, codec) = loop {
         match read_msg::<HostMsg>(&mut recv, &mut buf).await? {
             HostMsg::SessionAccept {
@@ -243,6 +248,13 @@ async fn finish_session_inner(
             } => break (width, height, fps, codec),
             HostMsg::CodecConfig { data } => {
                 codec_config = Some(data);
+            }
+            HostMsg::DisplayList {
+                displays: available,
+                selected_id,
+            } => {
+                displays = available;
+                selected_display_id = selected_id;
             }
             other => return Err(format!("expected SessionAccept, got {other:?}").into()),
         }
@@ -260,6 +272,8 @@ async fn finish_session_inner(
         fps,
         codec,
         codec_config,
+        displays,
+        selected_display_id,
         input: Some(input),
     })
 }

@@ -24,7 +24,6 @@ pub fn apply(event: InputEvent) {
 #[cfg(target_os = "macos")]
 fn apply_macos(event: InputEvent) {
     use core_graphics2::{
-        display::CGDisplay,
         event::{CGEvent, CGEventSource},
         event_types::{
             CGEventSourceStateID, CGEventTapLocation, CGEventType, CGMouseButton, CGScrollEventUnit,
@@ -66,10 +65,11 @@ fn apply_macos(event: InputEvent) {
 
     match event {
         InputEvent::MouseAbs { x, y, ref_w, ref_h } => {
-            let bounds = CGDisplay::main().bounds();
+            let (origin_x, origin_y, width, height) =
+                crate::macos_screen::selected_display_bounds();
             let point = CGPoint::new(
-                bounds.origin.x + f64::from(x) * bounds.size.width / f64::from(ref_w.max(1)),
-                bounds.origin.y + f64::from(y) * bounds.size.height / f64::from(ref_h.max(1)),
+                origin_x + f64::from(x) * width / f64::from(ref_w.max(1)),
+                origin_y + f64::from(y) * height / f64::from(ref_h.max(1)),
             );
             let buttons = *BUTTONS.lock().expect("mouse button state poisoned");
             let (event_type, button) = motion_type(buttons);

@@ -3,11 +3,46 @@
 //! These symbols are called from Swift without routing encoded frame bytes
 //! through Dart or a Flutter method channel.
 
-use std::slice;
+use std::{slice, str};
 
 #[unsafe(no_mangle)]
-pub extern "C" fn streambeam_macos_capture_begin(width: u32, height: u32) {
-    streambeam_host::macos_screen::begin_session(width, height);
+pub extern "C" fn streambeam_macos_capture_begin(
+    width: u32,
+    height: u32,
+    display_id: u32,
+    origin_x: f64,
+    origin_y: f64,
+    display_width: f64,
+    display_height: f64,
+) {
+    streambeam_host::macos_screen::begin_session(
+        width,
+        height,
+        display_id,
+        origin_x,
+        origin_y,
+        display_width,
+        display_height,
+    );
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn streambeam_macos_capture_requested_display() -> u32 {
+    streambeam_host::macos_screen::requested_display().unwrap_or(u32::MAX)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn streambeam_macos_capture_set_displays(
+    json: *const u8,
+    len: usize,
+) {
+    if json.is_null() || len == 0 {
+        return;
+    }
+    let bytes = unsafe { slice::from_raw_parts(json, len) };
+    let Ok(text) = str::from_utf8(bytes) else { return };
+    let Ok(displays) = serde_json::from_str(text) else { return };
+    streambeam_host::macos_screen::set_displays(displays);
 }
 
 #[unsafe(no_mangle)]

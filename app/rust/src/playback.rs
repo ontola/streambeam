@@ -1,7 +1,9 @@
 //! Live playback counters polled from Dart while a stream session is active.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use streambeam_proto::control::DisplayInfo;
 
 #[derive(Debug, Clone)]
 struct SessionInfo {
@@ -15,6 +17,9 @@ static FRAMES_RENDERED: AtomicU64 = AtomicU64::new(0);
 static BYTES_RECEIVED: AtomicU64 = AtomicU64::new(0);
 static NETWORK_RTT_US: AtomicU64 = AtomicU64::new(0);
 static SESSION: Mutex<Option<SessionInfo>> = Mutex::new(None);
+static DISPLAYS: Mutex<Vec<DisplayInfo>> = Mutex::new(Vec::new());
+const NO_DISPLAY: u32 = u32::MAX;
+static REQUESTED_DISPLAY: AtomicU32 = AtomicU32::new(NO_DISPLAY);
 
 pub fn reset() {
     FRAMES_RENDERED.store(0, Ordering::Relaxed);
@@ -29,6 +34,28 @@ pub fn set_session(width: u16, height: u16, fps: u8, codec: String) {
         fps,
         codec,
     });
+}
+
+pub fn set_displays(displays: Vec<DisplayInfo>, selected_id: u32) {
+    *DISPLAYS.lock().unwrap() = displays;
+    if REQUESTED_DISPLAY.load(Ordering::Relaxed) == NO_DISPLAY {
+        REQUESTED_DISPLAY.store(selected_id, Ordering::Relaxed);
+    }
+}
+
+pub fn displays() -> Vec<DisplayInfo> {
+    DISPLAYS.lock().unwrap().clone()
+}
+
+pub fn requested_display_id() -> Option<u32> {
+    match REQUESTED_DISPLAY.load(Ordering::Relaxed) {
+        NO_DISPLAY => None,
+        id => Some(id),
+    }
+}
+
+pub fn request_display(id: u32) {
+    REQUESTED_DISPLAY.store(id, Ordering::Relaxed);
 }
 
 pub fn session_width() -> u16 {

@@ -14,6 +14,7 @@ import 'vk_keys.dart';
 enum PointerMode {
   /// Finger position maps to a point on the PC screen (absolute).
   direct,
+
   /// Drag moves the cursor by delta, like a laptop trackpad (relative).
   trackpad,
 }
@@ -37,12 +38,15 @@ enum StreamMode {
   /// ceiling — the responsiveness/frame-rate half of the trade-off matters
   /// more than resolution for interactive/game use.
   game,
+
   /// Native resolution (maximizes bits-per-frame — see the class doc), fps
   /// capped lower since a game's fast reaction time isn't the point here.
   quality,
+
   /// Both resolution and fps capped hard, for metered connections or
   /// battery-constrained sessions.
   dataSaver,
+
   /// User-chosen resolution scale + fps (see `CustomStreamSettings`) instead
   /// of a fixed preset.
   custom;
@@ -153,6 +157,7 @@ class StreamPlayerScreen extends StatefulWidget {
     required this.customSettings,
     required this.onCustomSettingsChanged,
     required this.onCustomSettingsCommitted,
+    required this.onDisplayChanged,
     this.inputSupported = true,
     this.touchControls = true,
     this.upscaleSupported = false,
@@ -177,6 +182,9 @@ class StreamPlayerScreen extends StatefulWidget {
   final ValueChanged<CustomStreamSettings> onCustomSettingsChanged;
   final VoidCallback onCustomSettingsCommitted;
 
+  /// Reconnect after [selectPlaybackDisplay] updates the next session request.
+  final VoidCallback onDisplayChanged;
+
   /// Whether this build can capture & send input to the host at all.
   /// False skips the input layers entirely.
   final bool inputSupported;
@@ -200,11 +208,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     with SingleTickerProviderStateMixin {
   static const _openThreshold = 48.0;
   static const _hintPeek = 72.0;
+
   /// Extra slide-off so shadows / sub-pixel rounding don't peek at the edge.
   static const _hideSlack = 32.0;
 
-  double _menuWidthFor(double screenW) =>
-      (screenW * 0.78).clamp(220.0, 300.0);
+  double _menuWidthFor(double screenW) => (screenW * 0.78).clamp(220.0, 300.0);
 
   double get _menuWidth => _menuWidthFor(MediaQuery.sizeOf(context).width);
 
@@ -215,8 +223,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool get _menuOnLeft => _panelSide == MenuSide.left;
 
   /// Width of the right-edge zone that opens the menu (~14% of screen, 64–96 logical px).
-  double _edgeGrabFor(double screenW) =>
-      (screenW * 0.14).clamp(64.0, 96.0);
+  double _edgeGrabFor(double screenW) => (screenW * 0.14).clamp(64.0, 96.0);
 
   final _transformController = TransformationController();
   late final AnimationController _hintController;
@@ -237,9 +244,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   double _menuDrag = 0;
   bool _menuOpen = false;
+
   /// Where the floating menu button lives (mouse-first platforms). Left
   /// corners also anchor the slide-in panel to the left edge.
   _MenuCorner _menuCorner = _MenuCorner.topRight;
+
   /// Button position while it's being dragged between corners.
   Offset? _buttonDragPos;
   bool _edgeDragActive = false;
@@ -252,7 +261,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   Timer? _videoPoll;
   Timer? _diagPoll;
   bool _panEnabled = false;
-  bool _blockViewerGestures = false;
   bool _multiTouchSession = false;
   PointerMode _pointerMode = PointerMode.trackpad;
   final _liveDiagListenable = ValueNotifier(const _LiveDiagnostics());
@@ -262,6 +270,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   final _keyboardFocus = FocusNode();
   final _keyboardCtrl = TextEditingController();
   String _keyboardText = '';
+
   /// Physical-keyboard forwarding (mouse-first platforms): focus node that
   /// captures keys while streaming, and the VKs currently held remotely so
   /// they can be released if capture stops mid-press (no stuck keys).
@@ -316,13 +325,17 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     );
     _hintPeekAnim = TweenSequence<double>([
       TweenSequenceItem(
-        tween: Tween(begin: 0.0, end: _hintPeek)
-            .chain(CurveTween(curve: Curves.easeOutCubic)),
+        tween: Tween(
+          begin: 0.0,
+          end: _hintPeek,
+        ).chain(CurveTween(curve: Curves.easeOutCubic)),
         weight: 38,
       ),
       TweenSequenceItem(
-        tween: Tween(begin: _hintPeek, end: 0.0)
-            .chain(CurveTween(curve: Curves.easeInCubic)),
+        tween: Tween(
+          begin: _hintPeek,
+          end: 0.0,
+        ).chain(CurveTween(curve: Curves.easeInCubic)),
         weight: 62,
       ),
     ]).animate(_hintController);
@@ -601,8 +614,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       final base = _menuOpen ? _menuWidth : _menuDrag;
       // A right-side panel opens by dragging left (negative dx); a
       // left-side panel is the mirror image — dragging right (positive dx).
-      final opening =
-          _panelSide == MenuSide.right ? -details.delta.dx : details.delta.dx;
+      final opening = _panelSide == MenuSide.right
+          ? -details.delta.dx
+          : details.delta.dx;
       _menuDrag = (base + opening).clamp(0.0, _menuWidth);
       if (_menuOpen && _menuDrag < _menuWidth) {
         _menuOpen = false;
@@ -614,12 +628,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     if (!_edgeDragActive) return;
     _edgeDragActive = false;
     final velocity = details.primaryVelocity ?? 0;
-    final flingOpen =
-        _panelSide == MenuSide.right ? velocity < -250 : velocity > 250;
-    final flingClose =
-        _panelSide == MenuSide.right ? velocity > 250 : velocity < -250;
-    final shouldOpen =
-        !flingClose && (_menuDrag > _openThreshold || flingOpen);
+    final flingOpen = _panelSide == MenuSide.right
+        ? velocity < -250
+        : velocity > 250;
+    final flingClose = _panelSide == MenuSide.right
+        ? velocity > 250
+        : velocity < -250;
+    final shouldOpen = !flingClose && (_menuDrag > _openThreshold || flingOpen);
     setState(() {
       _menuOpen = shouldOpen;
       _menuDrag = 0;
@@ -679,15 +694,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     final double left;
     final double top;
     if (drag != null) {
-      left = (drag.dx - buttonSize / 2)
-          .clamp(0.0, viewport.width - buttonSize);
-      top = (drag.dy - buttonSize / 2)
-          .clamp(0.0, viewport.height - buttonSize);
+      left = (drag.dx - buttonSize / 2).clamp(0.0, viewport.width - buttonSize);
+      top = (drag.dy - buttonSize / 2).clamp(0.0, viewport.height - buttonSize);
     } else {
       left = _menuOnLeft
           ? inset + pad.left
           : viewport.width - buttonSize - inset - pad.right;
-      top = (_menuCorner == _MenuCorner.topLeft ||
+      top =
+          (_menuCorner == _MenuCorner.topLeft ||
               _menuCorner == _MenuCorner.topRight)
           ? inset + pad.top
           : viewport.height - buttonSize - inset - pad.bottom;
@@ -761,7 +775,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         onPointerModeChanged: (mode) {
           setState(() {
             _pointerMode = mode;
-            _blockViewerGestures = false;
             _multiTouchSession = false;
           });
         },
@@ -770,6 +783,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         customSettings: widget.customSettings,
         onCustomSettingsChanged: widget.onCustomSettingsChanged,
         onCustomSettingsCommitted: widget.onCustomSettingsCommitted,
+        displays: playbackDisplays(),
+        selectedDisplayId: selectedPlaybackDisplay(),
+        onDisplayChanged: (id) {
+          selectPlaybackDisplay(id: id);
+          widget.onDisplayChanged();
+        },
         upscaleSupported: widget.upscaleSupported,
         upscaleActive: widget.upscaleActive,
         onToggleUpscale: widget.onToggleUpscale,
@@ -791,8 +810,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         child: OverflowBox(
           // Pin the panel to its screen-edge side so the width animation
           // reads as a slide-in.
-          alignment:
-              _menuOnLeft ? Alignment.centerRight : Alignment.centerLeft,
+          alignment: _menuOnLeft ? Alignment.centerRight : Alignment.centerLeft,
           minWidth: menuW,
           maxWidth: menuW,
           child: _buildMenuPanel(anchorLeft: _menuOnLeft, onClose: _closeMenu),
@@ -843,289 +861,329 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           onKeyEvent: _onStreamKeyEvent,
           // Mouse platforms dock the menu beside the video (it reflows);
           // touch keeps the slide-over overlay inside the Stack below.
-          child: Row(children: [
-            if (!widget.touchControls && _menuOnLeft) _buildDockedMenu(),
-            Expanded(
-              child: LayoutBuilder(
-          builder: (context, constraints) {
-            final viewport = Size(constraints.maxWidth, constraints.maxHeight);
-            final videoSize = _fitVideoSize(viewport);
-            final videoRect = Rect.fromLTWH(
-              (viewport.width - videoSize.width) / 2,
-              (viewport.height - videoSize.height) / 2,
-              videoSize.width,
-              videoSize.height,
-            );
-            final menuSlide = _menuSlideOff;
-            // Mouse-first platforms get a menu button instead of the
-            // right-edge drag zone (which would swallow clicks near it).
-            final edgeGrab =
-                widget.touchControls ? _edgeGrabFor(constraints.maxWidth) : 0.0;
-            final showStreamInput = widget.inputSupported &&
-                widget.isStreaming &&
-                _hasVideo &&
-                !_menuBlocksPointer &&
-                !_keyboardOpen;
-            final mouseControlEnabled = showStreamInput;
+          child: Row(
+            children: [
+              if (!widget.touchControls && _menuOnLeft) _buildDockedMenu(),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final viewport = Size(
+                      constraints.maxWidth,
+                      constraints.maxHeight,
+                    );
+                    final videoSize = _fitVideoSize(viewport);
+                    final videoRect = Rect.fromLTWH(
+                      (viewport.width - videoSize.width) / 2,
+                      (viewport.height - videoSize.height) / 2,
+                      videoSize.width,
+                      videoSize.height,
+                    );
+                    final menuSlide = _menuSlideOff;
+                    // Mouse-first platforms get a menu button instead of the
+                    // right-edge drag zone (which would swallow clicks near it).
+                    final edgeGrab = widget.touchControls
+                        ? _edgeGrabFor(constraints.maxWidth)
+                        : 0.0;
+                    final showStreamInput =
+                        widget.inputSupported &&
+                        widget.isStreaming &&
+                        _hasVideo &&
+                        !_menuBlocksPointer &&
+                        !_keyboardOpen;
+                    final mouseControlEnabled = showStreamInput;
 
-            return Stack(
-              clipBehavior: Clip.hardEdge,
-              fit: StackFit.expand,
-              children: [
-                Center(
-                  child: SizedBox(
-                    width: videoSize.width,
-                    height: videoSize.height,
-                    child: IgnorePointer(
-                      ignoring: _blockViewerGestures && !_multiTouchSession,
-                      child: InteractiveViewer(
-                        transformationController: _transformController,
-                        minScale: 1,
-                        maxScale: 4,
-                        // Local pinch-zoom is a touch affordance. On mouse
-                        // platforms InteractiveViewer would claim scroll
-                        // events for zooming — they must reach the input
-                        // layer as remote wheel input instead.
-                        scaleEnabled: widget.touchControls,
-                        panEnabled: _panEnabled && _multiTouchSession,
-                        clipBehavior: Clip.none,
-                        child: SizedBox(
-                          width: videoSize.width,
-                          height: videoSize.height,
-                          child: widget.video,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                if (showStreamInput && widget.touchControls)
-                  // Android-only EventChannel; no native side elsewhere yet.
-                  GamepadForwarder(enabled: showStreamInput),
-                if (showStreamInput)
-                  _StreamInputLayer(
-                    key: const ValueKey('stream-input'),
-                    videoRect: videoRect,
-                    videoSize: videoSize,
-                    refWidth: widget.streamWidth,
-                    refHeight: widget.streamHeight,
-                    mode: _pointerMode,
-                    screenEdgeGrab: edgeGrab,
-                    mouseControlEnabled: mouseControlEnabled,
-                    multiTouchSession: _multiTouchSession,
-                    onCaptureChanged: (capturing) {
-                      if (_blockViewerGestures != capturing) {
-                        setState(() => _blockViewerGestures = capturing);
-                      }
-                    },
-                    onMultiTouchSessionChanged: (active) {
-                      if (_multiTouchSession != active) {
-                        setState(() {
-                          _multiTouchSession = active;
-                          if (active) {
-                            _blockViewerGestures = false;
-                          }
-                        });
-                      }
-                    },
-                  ),
-          if (_showStatusOverlay)
-            ColoredBox(
-              color: Colors.black87,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (!widget.statusIsError)
-                        const CircularProgressIndicator(color: Colors.white),
-                      if (!widget.statusIsError) const SizedBox(height: 16),
-                      if (widget.statusIsError)
-                        const Icon(
-                          Icons.error_outline,
-                          color: Colors.white,
-                          size: 40,
-                        ),
-                      if (widget.statusIsError) const SizedBox(height: 16),
-                      Text(
-                        widget.status ?? 'Connecting…',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (widget.isStreaming && !_hasVideo)
-            ColoredBox(
-              color: Colors.black,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _videoTimedOut
-                            ? Icons.videocam_off_outlined
-                            : Icons.hourglass_top,
-                        color: Colors.white70,
-                        size: 48,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _videoTimedOut
-                            ? 'No video from your PC'
-                            : 'Waiting for video…',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _videoTimedOut
-                            ? 'Check that streambeam-host is running on your PC and both devices are on the same Wi‑Fi. The host may still be using a test clip — if this persists, restart the host app.'
-                            : 'Connected to your PC. The first video frame has not arrived yet.',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: Colors.white60,
-                        ),
-                      ),
-                      if (!_videoTimedOut) ...[
-                        const SizedBox(height: 20),
-                        const SizedBox(
-                          width: 28,
-                          height: 28,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white54,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (_showMenuScrim)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _closeMenu,
-              onHorizontalDragStart: _onEdgeDragStart,
-              onHorizontalDragUpdate: _onEdgeDragUpdate,
-              onHorizontalDragEnd: _onEdgeDragEnd,
-              child: Container(color: Colors.black54.withValues(alpha: 0.35)),
-            ),
-          // Touch: slide-over overlay panel. Mouse platforms dock the panel
-          // beside the video instead (see the Row wrapping this Stack).
-          if (widget.touchControls)
-            Positioned(
-              top: 0,
-              bottom: 0,
-              left: _panelSide == MenuSide.left ? 0 : null,
-              right: _panelSide == MenuSide.right ? 0 : null,
-              width: _menuWidth,
-              child: Transform.translate(
-                // Right-side panel slides off to the right (positive X);
-                // left-side is the mirror image, off to the left (negative X).
-                offset: Offset(
-                  _panelSide == MenuSide.right ? menuSlide : -menuSlide,
-                  0,
-                ),
-                child: Row(
-                  children: _panelSide == MenuSide.right
-                      ? [_menuDragHandle(), Expanded(child: _menuContent())]
-                      : [Expanded(child: _menuContent()), _menuDragHandle()],
-                ),
-              ),
-            ),
-          if (widget.touchControls) ...[
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: edgeGrab,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragStart: _onEdgeDragStart,
-                onHorizontalDragUpdate: _onEdgeDragUpdate,
-                onHorizontalDragEnd: _onEdgeDragEnd,
-                child: const SizedBox.expand(),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: edgeGrab,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragStart: _onEdgeDragStart,
-                onHorizontalDragUpdate: _onEdgeDragUpdate,
-                onHorizontalDragEnd: _onEdgeDragEnd,
-                child: const SizedBox.expand(),
-              ),
-            ),
-          ],
-          // Floating menu button: always on mouse platforms (their only way
-          // in — no edge-drag), optional on touch (the menu has a switch to
-          // hide it; edge-swipe remains as the fallback there).
-          if (!_menuOpen &&
-              !_keyboardOpen &&
-              (!widget.touchControls || _touchMenuButtonEnabled))
-            _buildMenuButton(viewport),
-          if (_keyboardOpen) ...[
-            GestureDetector(
-              onTap: _closeKeyboard,
-              child: Container(color: Colors.black54),
-            ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Material(
-                color: theme.colorScheme.surface,
-                elevation: 8,
-                child: SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                    child: Row(
+                    return Stack(
+                      clipBehavior: Clip.hardEdge,
+                      fit: StackFit.expand,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _keyboardCtrl,
-                            focusNode: _keyboardFocus,
-                            autofocus: true,
-                            decoration: InputDecoration(
-                              hintText: 'Type to send keys to PC…',
-                              border: const OutlineInputBorder(),
-                              isDense: true,
-                              suffixIcon: IconButton(
-                                icon: const Icon(Icons.close),
-                                onPressed: _closeKeyboard,
+                        if (showStreamInput)
+                          _StreamInputLayer(
+                            key: const ValueKey('stream-input'),
+                            videoRect: videoRect,
+                            videoSize: videoSize,
+                            refWidth: widget.streamWidth,
+                            refHeight: widget.streamHeight,
+                            mode: _pointerMode,
+                            screenEdgeGrab: edgeGrab,
+                            mouseControlEnabled: mouseControlEnabled,
+                            multiTouchSession: _multiTouchSession,
+                            onMultiTouchSessionChanged: (active) {
+                              if (_multiTouchSession != active) {
+                                setState(() => _multiTouchSession = active);
+                              }
+                            },
+                            // Being an ancestor (instead of a transparent sibling
+                            // above the video) lets InteractiveViewer receive the
+                            // very first pointer too, making pinch recognition
+                            // reliable while the raw listener still forwards
+                            // one-finger input.
+                            child: InteractiveViewer(
+                              transformationController: _transformController,
+                              minScale: 1,
+                              maxScale: 4,
+                              scaleEnabled: widget.touchControls,
+                              panEnabled: _panEnabled && _multiTouchSession,
+                              clipBehavior: Clip.none,
+                              // Fill the viewport so a pinch can begin in
+                              // letterbox space above or below the video.
+                              child: Center(
+                                child: SizedBox(
+                                  width: videoSize.width,
+                                  height: videoSize.height,
+                                  child: SizedBox(
+                                    width: videoSize.width,
+                                    height: videoSize.height,
+                                    child: widget.video,
+                                  ),
+                                ),
                               ),
                             ),
-                            onChanged: _onKeyboardTextChanged,
-                            onSubmitted: _submitKeyboardText,
+                          )
+                        else
+                          Center(
+                            child: SizedBox(
+                              width: videoSize.width,
+                              height: videoSize.height,
+                              child: InteractiveViewer(
+                                transformationController: _transformController,
+                                minScale: 1,
+                                maxScale: 4,
+                                // Local pinch-zoom is a touch affordance. On mouse
+                                // platforms InteractiveViewer would claim scroll
+                                // events for zooming — they must reach the input
+                                // layer as remote wheel input instead.
+                                scaleEnabled: widget.touchControls,
+                                panEnabled: _panEnabled && _multiTouchSession,
+                                clipBehavior: Clip.none,
+                                child: SizedBox(
+                                  width: videoSize.width,
+                                  height: videoSize.height,
+                                  child: widget.video,
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
+                        if (showStreamInput && widget.touchControls)
+                          // Android-only EventChannel; no native side elsewhere yet.
+                          GamepadForwarder(enabled: showStreamInput),
+                        if (_showStatusOverlay)
+                          ColoredBox(
+                            color: Colors.black87,
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (!widget.statusIsError)
+                                      const CircularProgressIndicator(
+                                        color: Colors.white,
+                                      ),
+                                    if (!widget.statusIsError)
+                                      const SizedBox(height: 16),
+                                    if (widget.statusIsError)
+                                      const Icon(
+                                        Icons.error_outline,
+                                        color: Colors.white,
+                                        size: 40,
+                                      ),
+                                    if (widget.statusIsError)
+                                      const SizedBox(height: 16),
+                                    Text(
+                                      widget.status ?? 'Connecting…',
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.bodyLarge
+                                          ?.copyWith(color: Colors.white),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (widget.isStreaming && !_hasVideo)
+                          ColoredBox(
+                            color: Colors.black,
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 32,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _videoTimedOut
+                                          ? Icons.videocam_off_outlined
+                                          : Icons.hourglass_top,
+                                      color: Colors.white70,
+                                      size: 48,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      _videoTimedOut
+                                          ? 'No video from your PC'
+                                          : 'Waiting for video…',
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.titleMedium
+                                          ?.copyWith(color: Colors.white),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      _videoTimedOut
+                                          ? 'Check that streambeam-host is running on your PC and both devices are on the same Wi‑Fi. The host may still be using a test clip — if this persists, restart the host app.'
+                                          : 'Connected to your PC. The first video frame has not arrived yet.',
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(color: Colors.white60),
+                                    ),
+                                    if (!_videoTimedOut) ...[
+                                      const SizedBox(height: 20),
+                                      const SizedBox(
+                                        width: 28,
+                                        height: 28,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white54,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (_showMenuScrim)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _closeMenu,
+                            onHorizontalDragStart: _onEdgeDragStart,
+                            onHorizontalDragUpdate: _onEdgeDragUpdate,
+                            onHorizontalDragEnd: _onEdgeDragEnd,
+                            child: Container(
+                              color: Colors.black54.withValues(alpha: 0.35),
+                            ),
+                          ),
+                        // Touch: slide-over overlay panel. Mouse platforms dock the panel
+                        // beside the video instead (see the Row wrapping this Stack).
+                        if (widget.touchControls)
+                          Positioned(
+                            top: 0,
+                            bottom: 0,
+                            left: _panelSide == MenuSide.left ? 0 : null,
+                            right: _panelSide == MenuSide.right ? 0 : null,
+                            width: _menuWidth,
+                            child: Transform.translate(
+                              // Right-side panel slides off to the right (positive X);
+                              // left-side is the mirror image, off to the left (negative X).
+                              offset: Offset(
+                                _panelSide == MenuSide.right
+                                    ? menuSlide
+                                    : -menuSlide,
+                                0,
+                              ),
+                              child: Row(
+                                children: _panelSide == MenuSide.right
+                                    ? [
+                                        _menuDragHandle(),
+                                        Expanded(child: _menuContent()),
+                                      ]
+                                    : [
+                                        Expanded(child: _menuContent()),
+                                        _menuDragHandle(),
+                                      ],
+                              ),
+                            ),
+                          ),
+                        if (widget.touchControls) ...[
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: edgeGrab,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onHorizontalDragStart: _onEdgeDragStart,
+                              onHorizontalDragUpdate: _onEdgeDragUpdate,
+                              onHorizontalDragEnd: _onEdgeDragEnd,
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                          Positioned(
+                            left: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: edgeGrab,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onHorizontalDragStart: _onEdgeDragStart,
+                              onHorizontalDragUpdate: _onEdgeDragUpdate,
+                              onHorizontalDragEnd: _onEdgeDragEnd,
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        ],
+                        // Floating menu button: always on mouse platforms (their only way
+                        // in — no edge-drag), optional on touch (the menu has a switch to
+                        // hide it; edge-swipe remains as the fallback there).
+                        if (!_menuOpen &&
+                            !_keyboardOpen &&
+                            (!widget.touchControls || _touchMenuButtonEnabled))
+                          _buildMenuButton(viewport),
+                        if (_keyboardOpen) ...[
+                          GestureDetector(
+                            onTap: _closeKeyboard,
+                            child: Container(color: Colors.black54),
+                          ),
+                          Align(
+                            alignment: Alignment.bottomCenter,
+                            child: Material(
+                              color: theme.colorScheme.surface,
+                              elevation: 8,
+                              child: SafeArea(
+                                top: false,
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    12,
+                                    16,
+                                    12,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _keyboardCtrl,
+                                          focusNode: _keyboardFocus,
+                                          autofocus: true,
+                                          decoration: InputDecoration(
+                                            hintText:
+                                                'Type to send keys to PC…',
+                                            border: const OutlineInputBorder(),
+                                            isDense: true,
+                                            suffixIcon: IconButton(
+                                              icon: const Icon(Icons.close),
+                                              onPressed: _closeKeyboard,
+                                            ),
+                                          ),
+                                          onChanged: _onKeyboardTextChanged,
+                                          onSubmitted: _submitKeyboardText,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
-            ),
-          ],
-              ],
-            );
-          },
-              ),
-            ),
-            if (!widget.touchControls && !_menuOnLeft) _buildDockedMenu(),
-          ]),
+              if (!widget.touchControls && !_menuOnLeft) _buildDockedMenu(),
+            ],
+          ),
         ),
       ),
     );
@@ -1145,8 +1203,8 @@ class _StreamInputLayer extends StatefulWidget {
     required this.screenEdgeGrab,
     required this.mouseControlEnabled,
     required this.multiTouchSession,
-    required this.onCaptureChanged,
     required this.onMultiTouchSessionChanged,
+    required this.child,
   });
 
   final Rect videoRect;
@@ -1157,8 +1215,8 @@ class _StreamInputLayer extends StatefulWidget {
   final double screenEdgeGrab;
   final bool mouseControlEnabled;
   final bool multiTouchSession;
-  final ValueChanged<bool> onCaptureChanged;
   final ValueChanged<bool> onMultiTouchSessionChanged;
+  final Widget child;
 
   @override
   State<_StreamInputLayer> createState() => _StreamInputLayerState();
@@ -1172,6 +1230,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   final _activePointers = <int>{};
   final _pointers = <int, Offset>{};
+
   /// Currently-pressed mouse buttons (Flutter bitmask), for real
   /// press/release semantics (drag & select) on mouse-driven platforms.
   int _mouseButtons = 0;
@@ -1200,9 +1259,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   int get _refH => widget.refHeight.clamp(1, 65535);
 
   bool get _multiFingerContact =>
-      widget.multiTouchSession ||
-      _pendingTwoFinger ||
-      _pointers.length >= 2;
+      widget.multiTouchSession || _pendingTwoFinger || _pointers.length >= 2;
 
   @override
   void didUpdateWidget(_StreamInputLayer oldWidget) {
@@ -1210,9 +1267,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (oldWidget.mode != widget.mode) {
       _resetMouseState();
     }
-    if (!widget.mouseControlEnabled || widget.multiTouchSession) {
-      _setCapturing(false);
-    }
+    if (!widget.mouseControlEnabled || widget.multiTouchSession) {}
     if (!widget.mouseControlEnabled && _mouseButtons != 0) {
       _syncMouseButtons(0);
     }
@@ -1224,7 +1279,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _cancelRelFlush();
     _flushRel();
     if (_mouseButtons != 0) _syncMouseButtons(0);
-    _setCapturing(false);
     super.dispose();
   }
 
@@ -1249,7 +1303,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _twoFingerStartSpan = null;
     _twoFingerTravel = 0;
     _twoFingerDownAt = null;
-    _setCapturing(false);
   }
 
   Offset? _videoLocal(Offset stackLocal, {bool clamp = false}) {
@@ -1257,26 +1310,27 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       return stackLocal - widget.videoRect.topLeft;
     }
     if (!clamp) return null;
-    final x = (stackLocal.dx - widget.videoRect.left)
-        .clamp(0.0, widget.videoSize.width);
-    final y = (stackLocal.dy - widget.videoRect.top)
-        .clamp(0.0, widget.videoSize.height);
+    final x = (stackLocal.dx - widget.videoRect.left).clamp(
+      0.0,
+      widget.videoSize.width,
+    );
+    final y = (stackLocal.dy - widget.videoRect.top).clamp(
+      0.0,
+      widget.videoSize.height,
+    );
     return Offset(x, y);
   }
 
   void _sendAbs(Offset videoLocal) {
-    final x = (videoLocal.dx / widget.videoSize.width * _refW)
-        .round()
-        .clamp(0, _refW);
-    final y = (videoLocal.dy / widget.videoSize.height * _refH)
-        .round()
-        .clamp(0, _refH);
-    sendMouseAbs(
-      x: x,
-      y: y,
-      refW: _refW,
-      refH: _refH,
+    final x = (videoLocal.dx / widget.videoSize.width * _refW).round().clamp(
+      0,
+      _refW,
     );
+    final y = (videoLocal.dy / widget.videoSize.height * _refH).round().clamp(
+      0,
+      _refH,
+    );
+    sendMouseAbs(x: x, y: y, refW: _refW, refH: _refH);
   }
 
   void _sendRel(Offset delta) {
@@ -1305,10 +1359,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (_relAccumX.round() != 0 || _relAccumY.round() != 0) {
       _scheduleRelFlush();
     }
-  }
-
-  void _setCapturing(bool on) {
-    widget.onCaptureChanged(on);
   }
 
   bool _isInMenuEdgeZone(Offset global) {
@@ -1419,7 +1469,9 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       final pos = _pointers.values.firstOrNull;
       if (pos == null) return;
       _touchDragActive = true;
-      if (widget.mode == PointerMode.direct) _sendAbs(pos);
+      if (widget.mode == PointerMode.direct) {
+        _sendAbs(_videoLocal(pos, clamp: true)!);
+      }
       sendMouseButton(button: 0, down: true);
       HapticFeedback.mediumImpact();
     });
@@ -1466,7 +1518,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _lastMovePos = null;
     _relAccumX = 0;
     _relAccumY = 0;
-    _setCapturing(false);
     widget.onMultiTouchSessionChanged(true);
   }
 
@@ -1487,10 +1538,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     }
     if (_isInMenuEdgeZone(event.position)) return;
 
-    final local = _videoLocal(event.localPosition);
-    if (local == null) return;
-
     _activePointers.add(event.pointer);
+    // Track raw viewport coordinates. Trackpad mode can therefore continue
+    // moving through letterbox space; direct mode maps these through a
+    // clamped video coordinate only at send time.
+    final local = event.localPosition;
     _pointers[event.pointer] = local;
 
     if (_pointers.length >= 2) {
@@ -1510,9 +1562,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _lastMovePos = local;
     _relAccumX = 0;
     _relAccumY = 0;
-    _setCapturing(true);
     if (widget.mode == PointerMode.direct) {
-      _sendAbs(local);
+      _sendAbs(_videoLocal(local, clamp: true)!);
     }
     _startLongPressTimer();
   }
@@ -1524,10 +1575,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     }
     if (!_activePointers.contains(event.pointer)) return;
 
-    final local = _videoLocal(event.localPosition, clamp: true);
-    if (local != null) {
-      _pointers[event.pointer] = local;
-    }
+    final local = event.localPosition;
+    _pointers[event.pointer] = local;
 
     if (_multiFingerContact) {
       if (_pointers.length >= 2) {
@@ -1553,7 +1602,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _longPressTimer = null;
     }
     if (widget.mode == PointerMode.direct) {
-      _sendAbs(tracked);
+      _sendAbs(_videoLocal(tracked, clamp: true)!);
     } else {
       final last = _lastMovePos;
       if (last != null) {
@@ -1599,7 +1648,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
           travel < _tapSlop &&
           DateTime.now().difference(downAt) < _tapTimeout) {
         if (widget.mode == PointerMode.direct) {
-          _sendAbs(origin);
+          _sendAbs(_videoLocal(origin, clamp: true)!);
         }
         sendMouseClick(button: 0);
       }
@@ -1618,7 +1667,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _lastMovePos = null;
       _relAccumX = 0;
       _relAccumY = 0;
-      _setCapturing(false);
     }
   }
 
@@ -1636,22 +1684,20 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   @override
   Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: _onPointerDown,
-        onPointerMove: _onPointerMove,
-        onPointerUp: _onPointerUp,
-        onPointerCancel: _onPointerCancel,
-        onPointerHover: _onPointerHover,
-        onPointerSignal: _onPointerSignal,
-        onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
-        // Client-side cursor: the host's DXGI capture never composites the
-        // pointer into the stream, and we send absolute positions — so the
-        // local OS cursor *is* the remote cursor (native-res, zero-latency).
-        // Don't hide it.
-        child: const SizedBox.expand(),
-      ),
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      onPointerHover: _onPointerHover,
+      onPointerSignal: _onPointerSignal,
+      onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
+      // Client-side cursor: the host's DXGI capture never composites the
+      // pointer into the stream, and we send absolute positions — so the
+      // local OS cursor *is* the remote cursor (native-res, zero-latency).
+      // Don't hide it.
+      child: widget.child,
     );
   }
 }
@@ -1679,14 +1725,14 @@ class _LiveDiagnostics {
 
   @override
   int get hashCode => Object.hash(
-        width,
-        height,
-        targetFps,
-        renderFps.round(),
-        bytesPerSec.round(),
-        networkRttMs.round(),
-        codec,
-      );
+    width,
+    height,
+    targetFps,
+    renderFps.round(),
+    bytesPerSec.round(),
+    networkRttMs.round(),
+    codec,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -1717,6 +1763,9 @@ class _StreamMenu extends StatelessWidget {
     required this.customSettings,
     required this.onCustomSettingsChanged,
     required this.onCustomSettingsCommitted,
+    required this.displays,
+    required this.selectedDisplayId,
+    required this.onDisplayChanged,
     required this.upscaleSupported,
     required this.upscaleActive,
     required this.onToggleUpscale,
@@ -1727,8 +1776,10 @@ class _StreamMenu extends StatelessWidget {
   final _LiveDiagnostics diagnostics;
   final bool showDiagnostics;
   final bool touchControls;
+
   /// True when the panel is anchored to the left screen edge.
   final bool anchorLeft;
+
   /// Shown as a close button in the header (docked sidebar); overlay mode
   /// closes via scrim/edge-drag instead and passes null.
   final VoidCallback? onClose;
@@ -1749,6 +1800,9 @@ class _StreamMenu extends StatelessWidget {
   // Fires once when the user releases a slider — this is what actually
   // reconnects with the new settings, mirroring `onStreamModeChanged`.
   final VoidCallback onCustomSettingsCommitted;
+  final List<PlaybackDisplay> displays;
+  final int? selectedDisplayId;
+  final ValueChanged<int> onDisplayChanged;
   final bool upscaleSupported;
   final bool upscaleActive;
   final VoidCallback? onToggleUpscale;
@@ -1761,10 +1815,15 @@ class _StreamMenu extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final insets = MediaQuery.paddingOf(context);
     final compact = size.height < 640 || size.width < 360;
-    final metrics = _MenuMetrics(compact: compact, screenWidth: size.width, insets: insets);
+    final metrics = _MenuMetrics(
+      compact: compact,
+      screenWidth: size.width,
+      insets: insets,
+    );
     final trackpad = pointerMode == PointerMode.trackpad;
-    final tileDensity =
-        compact ? VisualDensity.compact : VisualDensity.standard;
+    final tileDensity = compact
+        ? VisualDensity.compact
+        : VisualDensity.standard;
     final tilePadding = EdgeInsets.symmetric(
       horizontal: metrics.horizontal,
       vertical: compact ? 0 : 2,
@@ -1795,10 +1854,11 @@ class _StreamMenu extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'StreamBeam',
-                      style: (compact
-                              ? theme.textTheme.titleSmall
-                              : theme.textTheme.titleMedium)
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style:
+                          (compact
+                                  ? theme.textTheme.titleSmall
+                                  : theme.textTheme.titleMedium)
+                              ?.copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
                   if (onClose != null)
@@ -1834,12 +1894,65 @@ class _StreamMenu extends StatelessWidget {
                       ),
                     ),
                     Padding(
-                      padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: metrics.horizontal,
+                      ),
                       child: _DiagnosticsPanel(
                         diagnostics: diagnostics,
                         compact: compact,
                       ),
                     ),
+                    const Divider(height: 1),
+                  ],
+                  if (displays.length > 1) ...[
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        metrics.horizontal + 4,
+                        compact ? 4 : 8,
+                        metrics.horizontal + 4,
+                        compact ? 2 : 4,
+                      ),
+                      child: Text('Screen', style: theme.textTheme.titleSmall),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: metrics.horizontal,
+                      ),
+                      child: DropdownButtonFormField<int>(
+                        key: ValueKey(selectedDisplayId),
+                        initialValue:
+                            displays.any((d) => d.id == selectedDisplayId)
+                            ? selectedDisplayId
+                            : displays.first.id,
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        items: [
+                          for (final display in displays)
+                            DropdownMenuItem(
+                              value: display.id,
+                              child: Text(
+                                '${display.name} · ${display.width}×${display.height}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (id) {
+                          if (id != null && id != selectedDisplayId) {
+                            onDisplayChanged(id);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     const Divider(height: 1),
                   ],
                   Padding(
@@ -1849,10 +1962,15 @@ class _StreamMenu extends StatelessWidget {
                       metrics.horizontal + 4,
                       compact ? 2 : 4,
                     ),
-                    child: Text('Streaming mode', style: theme.textTheme.titleSmall),
+                    child: Text(
+                      'Streaming mode',
+                      style: theme.textTheme.titleSmall,
+                    ),
                   ),
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: metrics.horizontal,
+                    ),
                     child: DropdownButtonFormField<StreamMode>(
                       initialValue: streamMode,
                       isExpanded: true,
@@ -1933,7 +2051,8 @@ class _StreamMenu extends StatelessWidget {
                         min: 0.25,
                         max: 1.0,
                         divisions: 15,
-                        label: '${(customSettings.resolutionScale * 100).round()}%',
+                        label:
+                            '${(customSettings.resolutionScale * 100).round()}%',
                         onChanged: (value) => onCustomSettingsChanged(
                           customSettings.copyWith(resolutionScale: value),
                         ),
@@ -1985,10 +2104,7 @@ class _StreamMenu extends StatelessWidget {
                         metrics.horizontal + 4,
                         compact ? 2 : 4,
                       ),
-                      child: Text(
-                        'Video',
-                        style: theme.textTheme.titleSmall,
-                      ),
+                      child: Text('Video', style: theme.textTheme.titleSmall),
                     ),
                     SwitchListTile(
                       value: upscaleActive,
@@ -2019,12 +2135,17 @@ class _StreamMenu extends StatelessWidget {
                       ),
                     ),
                     Padding(
-                      padding: EdgeInsets.symmetric(horizontal: metrics.horizontal),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: metrics.horizontal,
+                      ),
                       child: SegmentedButton<PointerMode>(
                         segments: [
                           ButtonSegment(
                             value: PointerMode.direct,
-                            icon: Icon(Icons.touch_app, size: compact ? 18 : 20),
+                            icon: Icon(
+                              Icons.touch_app,
+                              size: compact ? 18 : 20,
+                            ),
                             label: compact ? null : const Text('Direct'),
                             tooltip: 'Direct touch — finger maps to screen',
                           ),
@@ -2110,11 +2231,11 @@ class _StreamMenu extends StatelessWidget {
                     child: Text(
                       touchControls
                           ? 'Drag from the left or right edge for menu\n'
-                              '1 finger: move cursor · tap: left click\n'
-                              '2 fingers: pinch zoom / pan (local only)\n'
-                              'Quick 2-finger tap: right click'
+                                '1 finger: move cursor · tap: left click\n'
+                                '2 fingers: pinch zoom / pan (local only)\n'
+                                'Quick 2-finger tap: right click'
                           : 'Mouse controls the remote device directly:\n'
-                              'click · drag · right-click · scroll',
+                                'click · drag · right-click · scroll',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: compact ? 1.25 : 1.35,
@@ -2132,10 +2253,7 @@ class _StreamMenu extends StatelessWidget {
 }
 
 class _DiagnosticsPanel extends StatelessWidget {
-  const _DiagnosticsPanel({
-    required this.diagnostics,
-    required this.compact,
-  });
+  const _DiagnosticsPanel({required this.diagnostics, required this.compact});
 
   final _LiveDiagnostics diagnostics;
   final bool compact;
@@ -2146,21 +2264,20 @@ class _DiagnosticsPanel extends StatelessWidget {
     final labelStyle = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
-    final valueStyle = (compact
-            ? theme.textTheme.bodySmall
-            : theme.textTheme.bodyMedium)
-        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    final valueStyle =
+        (compact ? theme.textTheme.bodySmall : theme.textTheme.bodyMedium)
+            ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
 
     final resolution = diagnostics.hasResolution
         ? '${diagnostics.width}×${diagnostics.height}'
         : '—';
     final fps = diagnostics.renderFps > 0.05
         ? diagnostics.targetFps > 0
-            ? '${diagnostics.renderFps.toStringAsFixed(0)} fps (${diagnostics.targetFps} target)'
-            : '${diagnostics.renderFps.toStringAsFixed(0)} fps'
+              ? '${diagnostics.renderFps.toStringAsFixed(0)} fps (${diagnostics.targetFps} target)'
+              : '${diagnostics.renderFps.toStringAsFixed(0)} fps'
         : diagnostics.targetFps > 0
-            ? '0 fps (${diagnostics.targetFps} target)'
-            : '—';
+        ? '0 fps (${diagnostics.targetFps} target)'
+        : '—';
     final rate = _formatDataRate(diagnostics.bytesPerSec);
     final codec = diagnostics.codec.isNotEmpty ? diagnostics.codec : '—';
     final rtt = diagnostics.networkRttMs > 0
@@ -2172,13 +2289,48 @@ class _DiagnosticsPanel extends StatelessWidget {
 
     return Column(
       children: [
-        _DiagRow(label: 'Resolution', value: resolution, labelStyle: labelStyle, valueStyle: valueStyle),
-        _DiagRow(label: 'Frame rate', value: fps, labelStyle: labelStyle, valueStyle: valueStyle),
-        _DiagRow(label: 'Data rate', value: rate, labelStyle: labelStyle, valueStyle: valueStyle),
-        _DiagRow(label: 'Codec', value: codec, labelStyle: labelStyle, valueStyle: valueStyle),
-        _DiagRow(label: 'Network RTT', value: rtt, labelStyle: labelStyle, valueStyle: valueStyle),
-        _DiagRow(label: 'Input transport', value: oneWay, labelStyle: labelStyle, valueStyle: valueStyle),
-        _DiagRow(label: 'Video transport', value: oneWay, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(
+          label: 'Resolution',
+          value: resolution,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
+        _DiagRow(
+          label: 'Frame rate',
+          value: fps,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
+        _DiagRow(
+          label: 'Data rate',
+          value: rate,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
+        _DiagRow(
+          label: 'Codec',
+          value: codec,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
+        _DiagRow(
+          label: 'Network RTT',
+          value: rtt,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
+        _DiagRow(
+          label: 'Input transport',
+          value: oneWay,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
+        _DiagRow(
+          label: 'Video transport',
+          value: oneWay,
+          labelStyle: labelStyle,
+          valueStyle: valueStyle,
+        ),
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Text(
@@ -2226,11 +2378,7 @@ class _DiagRow extends StatelessWidget {
           Expanded(flex: 2, child: Text(label, style: labelStyle)),
           Expanded(
             flex: 3,
-            child: Text(
-              value,
-              style: valueStyle,
-              textAlign: TextAlign.end,
-            ),
+            child: Text(value, style: valueStyle, textAlign: TextAlign.end),
           ),
         ],
       ),
@@ -2249,9 +2397,7 @@ class _MenuMetrics {
   final double screenWidth;
   final EdgeInsets insets;
 
-  double get horizontal => compact
-      ? 4
-      : (screenWidth * 0.025).clamp(6.0, 14.0);
+  double get horizontal => compact ? 4 : (screenWidth * 0.025).clamp(6.0, 14.0);
 
   double get top => math.max(insets.top, compact ? 6 : 12);
 

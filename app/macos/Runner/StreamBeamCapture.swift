@@ -6,7 +6,13 @@ import ScreenCaptureKit
 import VideoToolbox
 
 @_silgen_name("streambeam_macos_capture_begin")
-private func rustCaptureBegin(_ width: UInt32, _ height: UInt32)
+private func rustCaptureBegin(
+  _ width: UInt32, _ height: UInt32, _ displayID: UInt32,
+  _ originX: Double, _ originY: Double, _ displayWidth: Double, _ displayHeight: Double)
+@_silgen_name("streambeam_macos_capture_requested_display")
+private func rustCaptureRequestedDisplay() -> UInt32
+@_silgen_name("streambeam_macos_capture_set_displays")
+private func rustCaptureSetDisplays(_ bytes: UnsafePointer<UInt8>, _ length: Int)
 @_silgen_name("streambeam_macos_capture_end")
 private func rustCaptureEnd()
 @_silgen_name("streambeam_macos_capture_submit")
@@ -40,7 +46,10 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
   private var stopping = false
   private var width: Int32 = 0
   private var height: Int32 = 0
-  private let fps: Int32 = 30
+  // The remote cursor is composited by ScreenCaptureKit, so its visible
+  // smoothness follows capture cadence even though input itself is sent at
+  // up to 125 Hz. Keep this at 60 to match a typical phone display.
+  private let fps: Int32 = 60
 
   func start(maxDimension: Int = 1920) async throws {
     guard stream == nil else { return }
@@ -48,9 +57,26 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
     let content = try await SCShareableContent.excludingDesktopWindows(
       false, onScreenWindowsOnly: true)
-    // Input coordinates are mapped against CGMainDisplayID in Rust; capture
-    // that same display so an absolute touch lands on the visible pixel.
-    guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
+    let primaryID = CGMainDisplayID()
+    let catalog: [[String: Any]] = content.displays.enumerated().map { index, item in
+      [
+        "id": item.displayID,
+        "name": item.displayID == primaryID ? "Main display" : "Display \(index + 1)",
+        "width": min(item.width, Int(UInt16.max)),
+        "height": min(item.height, Int(UInt16.max)),
+        "primary": item.displayID == primaryID,
+      ]
+    }
+    if let data = try? JSONSerialization.data(withJSONObject: catalog) {
+      data.withUnsafeBytes { raw in
+        if let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) {
+          rustCaptureSetDisplays(base, data.count)
+        }
+      }
+    }
+    let requestedID = rustCaptureRequestedDisplay()
+    guard let display = content.displays.first(where: { $0.displayID == requestedID })
+      ?? content.displays.first(where: { $0.displayID == primaryID })
       ?? content.displays.first else { throw CaptureError.noDisplay }
 
     let scale = min(1.0, Double(maxDimension) / Double(max(display.width, display.height)))
@@ -71,7 +97,10 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     configuration.capturesAudio = false
 
     try createEncoder()
-    rustCaptureBegin(UInt32(width), UInt32(height))
+    let bounds = CGDisplayBounds(display.displayID)
+    rustCaptureBegin(
+      UInt32(width), UInt32(height), display.displayID,
+      bounds.origin.x, bounds.origin.y, bounds.width, bounds.height)
 
     let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
     do {

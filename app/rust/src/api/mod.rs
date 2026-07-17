@@ -39,6 +39,39 @@ pub fn playback_diagnostics() -> PlaybackDiagnostics {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PlaybackDisplay {
+    pub id: u32,
+    pub name: String,
+    pub width: u16,
+    pub height: u16,
+    pub primary: bool,
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn playback_displays() -> Vec<PlaybackDisplay> {
+    crate::playback::displays()
+        .into_iter()
+        .map(|display| PlaybackDisplay {
+            id: display.id,
+            name: display.name,
+            width: display.width,
+            height: display.height,
+            primary: display.primary,
+        })
+        .collect()
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn select_playback_display(id: u32) {
+    crate::playback::request_display(id);
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn selected_playback_display() -> Option<u32> {
+    crate::playback::requested_display_id()
+}
+
 // The send_* input functions are platform-generic: they enqueue on the
 // active session's input pump (`crate::input`) and silently no-op when no
 // session is streaming.
@@ -470,6 +503,7 @@ fn desktop_video_caps(
         } else {
             fallback.max_fps
         },
+        display_id: crate::playback::requested_display_id(),
     }
 }
 
@@ -563,6 +597,7 @@ async fn desktop_stream_loop(
     // `playback_frames_rendered()` work identically to the Android path
     // (the player UI polls them regardless of platform).
     crate::playback::reset();
+    crate::playback::set_displays(session.displays.clone(), session.selected_display_id);
     crate::playback::set_session(
         session.width,
         session.height,

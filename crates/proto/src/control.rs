@@ -10,6 +10,18 @@ pub struct VideoCaps {
     pub max_width: u16,
     pub max_height: u16,
     pub max_fps: u8,
+    /// Stable platform display identifier, or `None` for the host's primary
+    /// display. Applied when the session starts.
+    pub display_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayInfo {
+    pub id: u32,
+    pub name: String,
+    pub width: u16,
+    pub height: u16,
+    pub primary: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +75,10 @@ pub enum HostMsg {
     PairAck,
     PairReject {
         reason: String,
+    },
+    DisplayList {
+        displays: Vec<DisplayInfo>,
+        selected_id: u32,
     },
     SessionAccept {
         session_id: u64,
@@ -123,6 +139,23 @@ mod tests {
     fn host_msg_roundtrip() {
         let msg = HostMsg::PairReject {
             reason: "bad token".into(),
+        };
+        let bytes = frame::encode_frame(&msg).unwrap();
+        let (decoded, _) = frame::decode_frame::<HostMsg>(&bytes).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn display_list_roundtrip() {
+        let msg = HostMsg::DisplayList {
+            displays: vec![DisplayInfo {
+                id: 42,
+                name: "Built-in display".into(),
+                width: 3024,
+                height: 1964,
+                primary: true,
+            }],
+            selected_id: 42,
         };
         let bytes = frame::encode_frame(&msg).unwrap();
         let (decoded, _) = frame::decode_frame::<HostMsg>(&bytes).unwrap();
