@@ -34,8 +34,9 @@ receives. "Control my phone from my PC" needs the host half on the target.
 
 - **macOS beam follow-ups** — video and CGEvent input are working through
   ScreenCaptureKit + VideoToolbox and reuse the shared host server/pairing/FEC
-  path. Still needed: ScreenCaptureKit system audio → Opus, dynamic fps/bitrate
-  reconfiguration, a display picker, and gamepad injection.
+  path. Display selection is implemented. Still needed: ScreenCaptureKit
+  system audio → Opus, dynamic fps/bitrate reconfiguration, and gamepad
+  injection.
 - **Desktop watch (macOS → then Windows/Linux)** — decode H.264 and render into
   the Flutter window. macOS: VideoToolbox → `AVSampleBufferDisplayLayer` platform
   view, fed by the shared `crates/core` reassembly. The network + FEC + jitter

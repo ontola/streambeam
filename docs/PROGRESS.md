@@ -8,7 +8,7 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 | M0 — Scaffold + secure transport | ✅ done | proto + net + devtools; tag m0 pending |
 | M1 — Media plane vs fakehost | ✅ done | loss sweep 0–15%, 8s soak in CI; 10-min soak manual |
 | M2 — Windows capture→encode spike | 🔨 in progress | Direct NVENC (bypassing Media Foundation) + GPU shader downscale landed; real-device end-to-end verification still pending |
-| M3 — Android video path vs fakehost | 🔨 in progress | reconnect without QR; device verify pending |
+| M3 — Android video path vs fakehost | ✅ done | MediaCodec→Surface, discovery, persistent pairing; verified watching and beaming on Xiaomi 15 |
 | M4 — End-to-end video | ⬜ | |
 | M5 — Audio | ⬜ | |
 | M6 — Input | 🔨 in progress | Windows + macOS mouse/keyboard injection; phone gamepad→VIIPER (USBIP); bundle viiper + usbip-win2 in Win installer (M8); rumble + macOS gamepad pending |
@@ -54,6 +54,18 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [x] mDNS host discovery from Android (`discover_hosts`)
 - [x] Persistent host/client identity + reconnect without fresh QR
 - [x] Verified on a physical device (Xiaomi 15) — both watching and beaming
+
+## M6 checklist
+
+- [x] Android touch: absolute pointer, trackpad-relative movement, tap, drag and scroll
+- [x] Android software/physical keyboard → protocol VK events
+- [x] Windows mouse/keyboard injection implementation via `SendInput`
+- [x] macOS mouse/keyboard injection via `CGEvent`, including selected-display mapping
+- [x] Android gamepad state → Windows VIIPER virtual Xbox controller path
+- [ ] Verify Windows keyboard + VIIPER gamepad on real hardware
+- [ ] Rumble backchannel
+- [ ] macOS gamepad injection
+- [ ] 240 fps input-latency measurement + stuck-button loss soak
 
 ## Decisions log
 
