@@ -10,8 +10,8 @@ you're watching. No web UI, no browser certificate warnings, no PIN dance.
 [PLATFORMS.md](docs/PLATFORMS.md) — today:
 
 - **Beam (host):** Windows ✅ (WGC/DXGI → Media Foundation H.264; hardware NVENC in
-  progress) · Android ✅ (MediaProjection → MediaCodec, video-only) · macOS ⬜
-  (ScreenCaptureKit + VideoToolbox, planned)
+  progress) · Android ✅ (MediaProjection → MediaCodec, video-only) · macOS ✅
+  (ScreenCaptureKit → VideoToolbox H.264, video-only)
 - **Watch (client):** Android ✅ (MediaCodec → Surface) · macOS ✅ (VideoToolbox →
   Flutter texture) · Windows/Linux ⬜ (planned)
 - **Control:** Android sends touch/trackpad + gamepad; Windows host injects mouse +
@@ -28,6 +28,10 @@ Core details:
   the URL *fragment*, so it never reaches the web server.
 - **Discovery:** mDNS (`_streambeam._udp`) for tap-to-connect on the LAN; native
   Bonjour on macOS. QR/link only needed for first pairing.
+- **Client-initiated sessions:** approve a device once on the host; its pinned
+  key is persisted, and from then on that client can start a beam directly.
+  On macOS the host stays idle/available and only runs ScreenCaptureKit while
+  an authorized client is actively watching.
 
 Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PROGRESS.md](docs/PROGRESS.md) (live status & decisions log) · [PLATFORMS.md](docs/PLATFORMS.md) (per-platform beam/watch/control matrix) · [SYMMETRY.md](docs/SYMMETRY.md) (symmetric-apps direction) · [PLAN.md](docs/PLAN.md) (original design & milestones) · [WAN.md](docs/WAN.md) (internet/NAT roadmap) · [COMPETITION.md](docs/COMPETITION.md) (competitive landscape) · [AGENTS.md](AGENTS.md) (working conventions)
 
@@ -50,8 +54,9 @@ cd app
 flutter run -d macos      # or: -d windows, or a connected Android device
 ```
 
-Watch tab: tap a discovered device, or paste/scan its link. Beam tab (Windows,
-Android): start hosting and share the QR/link.
+Watch tab: tap a discovered paired device to start a beam, or paste/scan its
+link for the one-time pairing. Desktop Beam tabs stay ready in the background;
+Android still needs its per-session MediaProjection confirmation.
 
 After changing `app/rust/src/api/`, regenerate bindings: `flutter_rust_bridge_codegen generate`.
 

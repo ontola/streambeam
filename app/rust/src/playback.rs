@@ -13,11 +13,13 @@ struct SessionInfo {
 
 static FRAMES_RENDERED: AtomicU64 = AtomicU64::new(0);
 static BYTES_RECEIVED: AtomicU64 = AtomicU64::new(0);
+static NETWORK_RTT_US: AtomicU64 = AtomicU64::new(0);
 static SESSION: Mutex<Option<SessionInfo>> = Mutex::new(None);
 
 pub fn reset() {
     FRAMES_RENDERED.store(0, Ordering::Relaxed);
     BYTES_RECEIVED.store(0, Ordering::Relaxed);
+    NETWORK_RTT_US.store(0, Ordering::Relaxed);
 }
 
 pub fn set_session(width: u16, height: u16, fps: u8, codec: String) {
@@ -68,10 +70,21 @@ pub fn note_bytes_received(n: u64) {
     BYTES_RECEIVED.fetch_add(n, Ordering::Relaxed);
 }
 
+pub fn note_network_rtt(rtt: std::time::Duration) {
+    NETWORK_RTT_US.store(
+        rtt.as_micros().min(u128::from(u64::MAX)) as u64,
+        Ordering::Relaxed,
+    );
+}
+
 pub fn frames_rendered() -> u64 {
     FRAMES_RENDERED.load(Ordering::Relaxed)
 }
 
 pub fn bytes_received() -> u64 {
     BYTES_RECEIVED.load(Ordering::Relaxed)
+}
+
+pub fn network_rtt_us() -> u64 {
+    NETWORK_RTT_US.load(Ordering::Relaxed)
 }

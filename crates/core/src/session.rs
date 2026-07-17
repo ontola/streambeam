@@ -167,7 +167,10 @@ fn load_client_identity(
 /// The QUIC connection stays alive on keep-alives even when the host never
 /// answers the handshake (wedged encoder, incompatible/older host build) —
 /// without a deadline the client would show "Connecting…" forever.
-const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+// A first client-initiated macOS session may need the host user to approve the
+// Screen Recording prompt after pairing. Keep a finite deadline, but allow
+// enough time for that one-time OS consent interaction.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 async fn finish_session(
     endpoint: quinn::Endpoint,

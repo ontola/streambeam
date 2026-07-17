@@ -1,11 +1,19 @@
 import Cocoa
 import FlutterMacOS
 
+@_silgen_name("streambeam_macos_capture_wanted")
+private func rustCaptureWanted() -> UInt8
+
 class MainFlutterWindow: NSWindow {
   private var videoChannel: FlutterMethodChannel?
   private var video: StreamBeamVideo?
   private var discoveryChannel: FlutterMethodChannel?
   private var deviceChannel: FlutterMethodChannel?
+  private var screencastChannel: FlutterMethodChannel?
+  private var screenCapture: AnyObject?
+  private var captureDemandTimer: Timer?
+  private var captureStarting = false
+  private var captureAttemptedForDemand = false
   private let discovery = StreamBeamDiscovery()
 
   override func awakeFromNib() {
@@ -18,8 +26,113 @@ class MainFlutterWindow: NSWindow {
     setUpVideoChannel(flutterViewController)
     setUpDiscoveryChannel(flutterViewController)
     setUpDeviceChannel(flutterViewController)
+    setUpScreencastChannel(flutterViewController)
+    startCaptureDemandPolling()
 
     super.awakeFromNib()
+  }
+
+  deinit {
+    captureDemandTimer?.invalidate()
+  }
+
+  /// The Rust host is always available, but ScreenCaptureKit only runs while
+  /// an authorized client owns a stream. Polling keeps all Apple API work on
+  /// the main thread and avoids routing encoded frames or lifecycle commands
+  /// through Dart.
+  private func startCaptureDemandPolling() {
+    captureDemandTimer?.invalidate()
+    captureDemandTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) {
+      [weak self] _ in
+      self?.syncCaptureDemand()
+    }
+  }
+
+  private func syncCaptureDemand() {
+    guard #available(macOS 13.0, *) else { return }
+    let wanted = rustCaptureWanted() != 0
+    if wanted {
+      guard screenCapture == nil, !captureStarting, !captureAttemptedForDemand else { return }
+      captureAttemptedForDemand = true
+      captureStarting = true
+      let capture = StreamBeamCapture()
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        do {
+          try await capture.start(maxDimension: 1920)
+          if rustCaptureWanted() != 0 {
+            self.screenCapture = capture
+            self.screencastChannel?.invokeMethod(
+              "captureState", arguments: ["active": true])
+          } else {
+            await capture.stop()
+          }
+        } catch {
+          self.screencastChannel?.invokeMethod(
+            "captureState",
+            arguments: ["active": false, "error": error.localizedDescription])
+        }
+        self.captureStarting = false
+      }
+    } else {
+      captureAttemptedForDemand = false
+      guard let capture = screenCapture as? StreamBeamCapture, !captureStarting else { return }
+      screenCapture = nil
+      captureStarting = true
+      Task { @MainActor [weak self] in
+        await capture.stop()
+        self?.captureStarting = false
+        self?.screencastChannel?.invokeMethod(
+          "captureState", arguments: ["active": false])
+      }
+    }
+  }
+
+  /// macOS Beam: request Screen Recording permission, capture with
+  /// ScreenCaptureKit and encode with VideoToolbox. Encoded access units go
+  /// directly from Swift into Rust (see StreamBeamCapture), never via Dart.
+  private func setUpScreencastChannel(_ controller: FlutterViewController) {
+    let registrar = controller.registrar(forPlugin: "StreamBeamScreencast")
+    let channel = FlutterMethodChannel(
+      name: "streambeam/screencast", binaryMessenger: registrar.messenger)
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else { return }
+      guard #available(macOS 13.0, *) else {
+        result(FlutterError(
+          code: "unsupported", message: "Beaming requires macOS 13 or newer.", details: nil))
+        return
+      }
+      switch call.method {
+      case "requestInputAccess":
+        if CGPreflightPostEventAccess() {
+          result(true)
+        } else {
+          result(CGRequestPostEventAccess())
+        }
+      case "requestCapture":
+        let capture = (self.screenCapture as? StreamBeamCapture) ?? StreamBeamCapture()
+        Task { @MainActor in
+          do {
+            try await capture.start(maxDimension: 1920)
+            self.screenCapture = capture
+            result(true)
+          } catch {
+            result(FlutterError(
+              code: "capture", message: error.localizedDescription, details: nil))
+          }
+        }
+      case "stopCapture":
+        let capture = self.screenCapture as? StreamBeamCapture
+        self.screenCapture = nil
+        Task { @MainActor in
+          await capture?.stop()
+          result(nil)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    screencastChannel = channel
   }
 
   /// Device metadata — same channel contract as Android's MainActivity.

@@ -2,9 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Debug/dev build: the App Sandbox blocks the LAN mDNS multicast that host
-	     discovery relies on (multicast needs a restricted, Apple-provisioned
-	     entitlement). Off here so local dev works; Release keeps the sandbox. -->
+	<!-- StreamBeam is a LAN host and injects consent-gated Accessibility input;
+	     both roles are incompatible with the App Sandbox. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 	<key>com.apple.security.cs.allow-jit</key>

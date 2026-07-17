@@ -52,6 +52,9 @@ windows = { version = "0.61", features = [
     "Win32_System_Power",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics2 = { version = "0.5.2", default-features = false, features = ["display", "event", "link"] }
+
 [dev-dependencies]
 
 [[bin]]

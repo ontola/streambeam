@@ -1,6 +1,7 @@
 # Symmetric apps & the Flutter-everywhere direction
 
-Direction agreed 2026-07-04. Not v1-blocking; nothing here is implemented yet.
+Direction agreed 2026-07-04. The symmetric app shape is now implemented on
+Windows, Android, and macOS; platform-specific follow-ups remain.
 This supersedes the "host = egui panel, client = Flutter" split in
 [PLAN.md](PLAN.md) as the *target* shape — PLAN.md stays as the historical
 record, [PROGRESS.md](PROGRESS.md) tracks what has actually landed.
@@ -20,7 +21,7 @@ symmetry is nearly free at the wire level. It is *not* free at the OS level:
 |---|---|---|
 | Windows | ✅ | ✅ WGC + NVENC/AMF/QSV (v1 path, unchanged) |
 | macOS | ✅ | ✅ ScreenCaptureKit + VideoToolbox |
-| Android | ✅ (v1 path, unchanged) | ⚠️ maybe later (MediaProjection; no input inject) |
+| Android | ✅ | ✅ MediaProjection + MediaCodec (no input inject) |
 | iOS | ✅ later | ❌ effectively impossible (no background capture/inject) |
 | Linux | ✅ later | ⚠️ later (PipeWire portal + VAAPI) |
 
@@ -66,8 +67,10 @@ trait and mock impls already make this workspace-checkable on macOS.
 - **Encode:** VideoToolbox. `hwcodec` already wraps it (RustDesk ships it on
   Mac) — same no-declared-license caveat as on Windows; it stays behind
   `VideoEncoder` so it can be swapped (see AGENTS.md quirks).
-- **Input injection:** `CGEvent` (mouse/keyboard). Gamepad has no ViGEm
-  equivalent; virtual-controller support is out of scope initially.
+- **Input injection:** `CGEvent` mouse/keyboard is implemented (absolute touch,
+  relative trackpad, tap/drag, pixel scroll, and VK→macOS keycode translation).
+  Gamepad has no ViGEm equivalent; virtual-controller support is out of scope
+  initially.
 - **Permissions UX:** first hosting run triggers TCC prompts (Screen Recording
   + Accessibility). Needs a guided onboarding screen — the prompts don't
   re-appear, but a denied prompt silently yields black frames / dead input, so
@@ -92,9 +95,8 @@ trait and mock impls already make this workspace-checkable on macOS.
    either way).
 2. Extract `crates/hostcore` from `crates/host` (pure refactor, no behavior
    change; CLI binary keeps working).
-3. Grow the FRB API + Flutter host UI ("Beam my screen" → QR screen, tray).
-   Windows Flutter host reaches parity with the egui panel; egui retires.
-4. macOS host: SCK capture + VideoToolbox encoder behind the existing traits;
-   CGEvent injection; TCC onboarding.
-5. Desktop *client* (watch on Mac/PC) after the texture-rendering spike proves
-   the latency is acceptable.
+3. ✅ Grow the FRB API + Flutter host UI ("Beam my screen" → QR screen).
+4. 🔨 macOS host: SCK capture + VideoToolbox encoder and CGEvent mouse/keyboard
+   input landed 2026-07-17; system audio, display selection, dynamic encode
+   settings, gamepad, and fuller TCC onboarding remain.
+5. ✅ Desktop client watch on macOS and Windows.

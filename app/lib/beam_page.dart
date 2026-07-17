@@ -46,11 +46,8 @@ AppCapabilities appCapabilities() {
     return AppCapabilities(host: host, watch: watch, platformLabel: 'Windows');
   }
   if (Platform.isMacOS) {
-    // Browsing/discovery works; live playback + hosting are gated per-tab as
-    // "coming soon" until the macOS A/V paths (VideoToolbox / ScreenCaptureKit)
-    // land — see docs/SYMMETRY.md.
-    return const AppCapabilities(
-      host: false,
+    return AppCapabilities(
+      host: host,
       watch: true,
       platformLabel: 'macOS',
     );
@@ -69,7 +66,7 @@ AppCapabilities appCapabilities() {
   );
 }
 
-/// Windows desktop host UI — pair via QR, manage connected phones.
+/// Shared host UI — pair via QR, manage connected viewers.
 class BeamPage extends StatefulWidget {
   const BeamPage({super.key});
 
@@ -94,17 +91,21 @@ class _BeamPageState extends State<BeamPage> {
 
   static const _screencast = MethodChannel('streambeam/screencast');
 
-  /// On Android, hosting needs the user to grant screen capture first, so we
-  /// don't auto-start — [_beaming] tracks whether the capture+host is running.
+  /// Android starts capture explicitly. On macOS the host stays ready and the
+  /// native runner toggles capture on demand when a client starts/stops.
   bool _beaming = false;
 
   @override
   void initState() {
     super.initState();
-    // Desktop capture is always available, so start immediately. Android needs
-    // an explicit screen-capture permission grant (see [_startBeaming]).
-    if (hostPlatformSupported() && !Platform.isAndroid) {
+    // Desktop hosts stay ready: a paired client initiates the actual session.
+    // Android still needs its per-session MediaProjection picker.
+    if (hostPlatformSupported() &&
+        (Platform.isWindows || Platform.isMacOS)) {
       unawaited(_ensureHostRunning());
+    }
+    if (Platform.isMacOS) {
+      _screencast.setMethodCallHandler(_handleNativeCaptureEvent);
     }
     _poll = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
   }
@@ -112,7 +113,26 @@ class _BeamPageState extends State<BeamPage> {
   @override
   void dispose() {
     _poll?.cancel();
+    if (Platform.isMacOS) {
+      _screencast.setMethodCallHandler(null);
+    }
     super.dispose();
+  }
+
+  Future<dynamic> _handleNativeCaptureEvent(MethodCall call) async {
+    if (call.method != 'captureState' || !mounted) return;
+    final args = Map<Object?, Object?>.from(call.arguments as Map);
+    final active = args['active'] == true;
+    final error = args['error'] as String?;
+    setState(() => _beaming = active);
+    if (error != null && error.isNotEmpty) {
+      _setStatus(
+        'Could not start this beam: $error. Allow Screen Recording for StreamBeam and retry from the client.',
+        error: true,
+      );
+    } else if (active) {
+      setState(() => _status = null);
+    }
   }
 
   Future<void> _startBeaming() async {
@@ -128,12 +148,28 @@ class _BeamPageState extends State<BeamPage> {
         _setStatus('Screen capture permission was declined.', error: true);
         return;
       }
+      final inputGranted = !Platform.isMacOS ||
+          (await _screencast.invokeMethod<bool>('requestInputAccess') ?? false);
       // The capture service is now feeding frames; start the host server, which
       // picks up the live screen encoder.
-      startHost(hostName: null, listen: null, fps: 30, maxEncodeDim: 1280);
+      startHost(
+        hostName: null,
+        listen: null,
+        fps: 30,
+        maxEncodeDim: Platform.isMacOS ? 1920 : 1280,
+      );
       _beaming = true;
       _refresh();
+      if (!inputGranted) {
+        _setStatus(
+          'Streaming is live. Enable StreamBeam in System Settings > Privacy & Security > Accessibility for remote input.',
+          error: true,
+        );
+      }
     } catch (e) {
+      try {
+        await _screencast.invokeMethod('stopCapture');
+      } catch (_) {}
       _setStatus(e.toString(), error: true);
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -171,10 +207,6 @@ class _BeamPageState extends State<BeamPage> {
   void _refresh() {
     if (!mounted || !hostPlatformSupported()) return;
     final next = hostSnapshot();
-    if (next.pairingLink != null) {
-      // ignore: avoid_print
-      print('DEBUG_PAIRING_LINK: ${next.pairingLink}');
-    }
     setState(() => _snap = next);
     if (next.error != null && next.error!.isNotEmpty) {
       _setStatus(next.error!, error: true);
@@ -200,10 +232,10 @@ class _BeamPageState extends State<BeamPage> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Allow this device?'),
+        title: const Text('Pair with this device?'),
         content: Text(
-          '${req.clientName} at ${req.clientAddr} wants to connect.\n\n'
-          'Allow only if you recognize this phone.',
+          '${req.clientName} at ${req.clientAddr} wants to pair.\n\n'
+          'This is a one-time approval. Once paired, this device can start future beams without asking again.',
         ),
         actions: [
           TextButton(
@@ -212,7 +244,7 @@ class _BeamPageState extends State<BeamPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Allow'),
+            child: const Text('Pair'),
           ),
         ],
       ),
@@ -220,6 +252,16 @@ class _BeamPageState extends State<BeamPage> {
     if (allow == null) return;
     try {
       hostRespondPairing(id: req.id, allow: allow);
+      if (allow && Platform.isMacOS) {
+        final inputGranted =
+            await _screencast.invokeMethod<bool>('requestInputAccess') ?? false;
+        if (!inputGranted) {
+          _setStatus(
+            'Paired. Enable StreamBeam in System Settings > Privacy & Security > Accessibility for remote input.',
+            error: true,
+          );
+        }
+      }
     } catch (e) {
       _setStatus(e.toString(), error: true);
     }
@@ -252,7 +294,7 @@ class _BeamPageState extends State<BeamPage> {
 
     final theme = Theme.of(context);
 
-    // Android: wait for the user to grant screen capture before hosting.
+    // Android needs a fresh MediaProjection grant before its host can listen.
     if (Platform.isAndroid && !_beaming) {
       return Scaffold(
         appBar: streamBeamAppBar(),
@@ -384,13 +426,24 @@ class _BeamPageState extends State<BeamPage> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                _snap.running
-                                    ? 'Listening on ${_snap.listenAddr}'
-                                    : 'Starting host…',
+                                !_snap.running
+                                    ? 'Starting host…'
+                                    : _beaming
+                                        ? 'Beaming now'
+                                        : 'Ready — start from a paired device',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
                               ),
+                              if (_snap.running) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Listening on ${_snap.listenAddr}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 16),
                               Center(
                                 child: link != null && link.isNotEmpty
@@ -417,8 +470,7 @@ class _BeamPageState extends State<BeamPage> {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                'Scan this QR with StreamBeam on another device, '
-                                'or copy the link below.',
+                                'Scan once to pair this device. After approval, it can start future beams directly.',
                                 textAlign: TextAlign.center,
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,

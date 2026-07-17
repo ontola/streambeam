@@ -29,6 +29,7 @@
 		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
 		5BEA100010000000000A0001 /* StreamBeamVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000A0002 /* StreamBeamVideo.swift */; };
 		5BEA100010000000000B0001 /* StreamBeamDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000B0002 /* StreamBeamDiscovery.swift */; };
+		5BEA100010000000000C0001 /* StreamBeamCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000C0002 /* StreamBeamCapture.swift */; };
 		53C7A4D1663292C4065C251E /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A54FDD9D0A2E11DBAC044CD /* Pods_Runner.framework */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		8B638F9077A12D44FCE6B264 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 742F0E7AB3CD684148279CB1 /* Pods_RunnerTests.framework */; };
@@ -78,6 +79,7 @@
 		33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
 		5BEA100010000000000A0002 /* StreamBeamVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamVideo.swift; sourceTree = "<group>"; };
 		5BEA100010000000000B0002 /* StreamBeamDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamDiscovery.swift; sourceTree = "<group>"; };
+		5BEA100010000000000C0002 /* StreamBeamCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamCapture.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
@@ -201,6 +203,7 @@
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				5BEA100010000000000A0002 /* StreamBeamVideo.swift */,
 				5BEA100010000000000B0002 /* StreamBeamDiscovery.swift */,
+				5BEA100010000000000C0002 /* StreamBeamCapture.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -456,6 +459,7 @@
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				5BEA100010000000000A0001 /* StreamBeamVideo.swift in Sources */,
 				5BEA100010000000000B0001 /* StreamBeamDiscovery.swift in Sources */,
+				5BEA100010000000000C0001 /* StreamBeamCapture.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);

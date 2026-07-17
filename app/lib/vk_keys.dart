@@ -33,6 +33,60 @@ int? vkForLogicalKey(LogicalKeyboardKey key) {
   return _vkTable[id];
 }
 
+/// A printable character expressed as a wire VK plus whether Shift must be
+/// held. Used by touch platforms, where the software keyboard reports edited
+/// text rather than physical [KeyEvent]s.
+({int vk, bool shift})? vkStrokeForCharacter(String character) {
+  if (character.length != 1) return null;
+  final code = character.codeUnitAt(0);
+  if (code >= 0x61 && code <= 0x7A) return (vk: code - 0x20, shift: false);
+  if (code >= 0x41 && code <= 0x5A) return (vk: code, shift: true);
+  if (code >= 0x30 && code <= 0x39) return (vk: code, shift: false);
+
+  const plain = <String, int>{
+    ' ': 0x20,
+    ';': 0xBA,
+    '=': 0xBB,
+    ',': 0xBC,
+    '-': 0xBD,
+    '.': 0xBE,
+    '/': 0xBF,
+    '`': 0xC0,
+    '[': 0xDB,
+    r'\': 0xDC,
+    ']': 0xDD,
+    "'": 0xDE,
+  };
+  final plainVk = plain[character];
+  if (plainVk != null) return (vk: plainVk, shift: false);
+
+  const shifted = <String, int>{
+    ')': 0x30,
+    '!': 0x31,
+    '@': 0x32,
+    '#': 0x33,
+    r'$': 0x34,
+    '%': 0x35,
+    '^': 0x36,
+    '&': 0x37,
+    '*': 0x38,
+    '(': 0x39,
+    ':': 0xBA,
+    '+': 0xBB,
+    '<': 0xBC,
+    '_': 0xBD,
+    '>': 0xBE,
+    '?': 0xBF,
+    '~': 0xC0,
+    '{': 0xDB,
+    '|': 0xDC,
+    '}': 0xDD,
+    '"': 0xDE,
+  };
+  final shiftedVk = shifted[character];
+  return shiftedVk == null ? null : (vk: shiftedVk, shift: true);
+}
+
 final Map<int, int> _vkTable = {
   LogicalKeyboardKey.space.keyId: 0x20,
   LogicalKeyboardKey.enter.keyId: 0x0D,

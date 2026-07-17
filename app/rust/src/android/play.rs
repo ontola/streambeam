@@ -246,7 +246,11 @@ fn video_caps(max_width: u16, max_height: u16, max_fps: u8) -> VideoCaps {
         } else {
             fallback.max_height
         },
-        max_fps: if max_fps > 0 { max_fps } else { fallback.max_fps },
+        max_fps: if max_fps > 0 {
+            max_fps
+        } else {
+            fallback.max_fps
+        },
     }
 }
 
@@ -352,10 +356,7 @@ async fn play_session(
 ) -> Result<StreamStats, String> {
     crate::playback::reset();
     let runtime = tokio::runtime::Handle::current();
-    let input = session
-        .input
-        .take()
-        .ok_or("input stream not open")?;
+    let input = session.input.take().ok_or("input stream not open")?;
     let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
     crate::input::set_sender(Some(input_tx));
 
@@ -520,6 +521,7 @@ fn play_session_blocking(
             }
             Ok::<_, String>(batch)
         })?;
+        crate::playback::note_network_rtt(session.conn.stats().path.rtt);
         // A single access unit is FEC-sharded into many ~1200-byte datagrams
         // (see MAX_SHARD_PAYLOAD) — a 15 KB P-frame is a dozen-plus shards
         // that legitimately arrive back-to-back within this batch's 2ms

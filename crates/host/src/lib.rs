@@ -12,6 +12,8 @@ pub mod encode;
 pub mod gamepad_inject;
 pub mod input_inject;
 pub mod logging;
+#[cfg(target_os = "macos")]
+pub mod macos_screen;
 pub mod mock;
 #[cfg(windows)]
 pub mod nvenc;

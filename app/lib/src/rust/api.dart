@@ -217,6 +217,11 @@ Stream<DesktopStreamEvent> playStreamDesktopKnown({
 bool hostPlatformSupported() =>
     StreambeamFfi.instance.api.crateApiHostPlatformSupported();
 
+/// Public key of the host currently running in this app. The Watch screen uses
+/// this stable identity to hide our own mDNS advertisement without relying on
+/// potentially-colliding device names or IP addresses.
+Uint8List hostPublicKey() => StreambeamFfi.instance.api.crateApiHostPublicKey();
+
 void startHost({
   String? hostName,
   String? listen,
@@ -446,6 +451,10 @@ class PlaybackDiagnostics {
   final BigInt bytesReceived;
   final BigInt framesRendered;
 
+  /// QUIC's smoothed round-trip time. One-way transport is estimated as
+  /// half this value; this does not include host processing or decode.
+  final BigInt networkRttUs;
+
   const PlaybackDiagnostics({
     required this.width,
     required this.height,
@@ -453,6 +462,7 @@ class PlaybackDiagnostics {
     required this.codec,
     required this.bytesReceived,
     required this.framesRendered,
+    required this.networkRttUs,
   });
 
   @override
@@ -462,7 +472,8 @@ class PlaybackDiagnostics {
       fps.hashCode ^
       codec.hashCode ^
       bytesReceived.hashCode ^
-      framesRendered.hashCode;
+      framesRendered.hashCode ^
+      networkRttUs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -474,7 +485,8 @@ class PlaybackDiagnostics {
           fps == other.fps &&
           codec == other.codec &&
           bytesReceived == other.bytesReceived &&
-          framesRendered == other.framesRendered;
+          framesRendered == other.framesRendered &&
+          networkRttUs == other.networkRttUs;
 }
 
 /// Saved host details for the device list (shown even when offline).

@@ -20,6 +20,7 @@ use tokio::sync::oneshot;
 use crate::active_stream::{ActiveStreamTracker, CloseableConn};
 use crate::audio::OpusCatalog;
 use crate::encode::{Codec, VideoEncoder, default_bitrate_bps};
+#[cfg(not(target_os = "macos"))]
 use crate::mock::MockEncoder;
 
 impl CloseableConn for quinn::Connection {
@@ -350,8 +351,14 @@ impl StreamControl {
     }
 }
 
-/// Build the video source: real desktop capture on Windows, else the test clip.
-fn build_encoder(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Box<dyn VideoEncoder> {
+/// Build the video source: real platform capture where available, else the
+/// test clip. macOS deliberately returns an error rather than ever showing a
+/// mock clip to a real client when Screen Recording consent is unavailable.
+fn build_encoder(
+    fps: u32,
+    max_encode_dim: u32,
+    wanted_codec: Codec,
+) -> Result<Box<dyn VideoEncoder>, String> {
     #[cfg(windows)]
     {
         match crate::capture::DesktopEncoder::new(fps, max_encode_dim, wanted_codec) {
@@ -361,7 +368,7 @@ fn build_encoder(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Box<dyn 
                     "desktop capture ready — {w}x{h} @ {fps}fps ({})",
                     enc.codec().wire_name()
                 ));
-                return Box::new(enc);
+                return Ok(Box::new(enc));
             }
             Err(e) => {
                 crate::logging::log(&format!(
@@ -382,14 +389,38 @@ fn build_encoder(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Box<dyn 
         for _ in 0..50 {
             if crate::android_screen::is_ready() {
                 crate::logging::log("android screen capture ready — streaming live screen");
-                return Box::new(crate::android_screen::AndroidScreenEncoder);
+                return Ok(Box::new(crate::android_screen::AndroidScreenEncoder));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         crate::logging::log("android screen capture didn't become ready — using mock clip");
     }
-    let _ = (fps, max_encode_dim, wanted_codec);
-    Box::new(MockEncoder::bundled())
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (fps, max_encode_dim, wanted_codec);
+        // The listener stays idle until an authorized client sends its
+        // SessionRequest. That request makes capture wanted; the Swift runner
+        // observes it and starts ScreenCaptureKit/VideoToolbox on the main
+        // thread. The longer wait covers the one-time macOS consent prompt.
+        crate::macos_screen::request_capture();
+        for _ in 0..300 {
+            if crate::macos_screen::is_ready() {
+                crate::logging::log("macOS screen capture ready — streaming live screen");
+                return Ok(Box::new(crate::macos_screen::MacOsScreenEncoder));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        crate::macos_screen::release_capture();
+        return Err(
+            "macOS screen capture did not start; allow Screen Recording for StreamBeam and retry"
+                .into(),
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (fps, max_encode_dim, wanted_codec);
+        Ok(Box::new(MockEncoder::bundled()))
+    }
 }
 
 pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -802,6 +833,12 @@ async fn handle_client(
                 } else {
                     default_fps
                 };
+                // The native SCK/VideoToolbox producer currently runs at a
+                // fixed 30 fps. Do not advertise a client-requested 120 fps
+                // in SessionAccept while only supplying 30; that makes its
+                // pacing/backlog heuristics reason from false metadata.
+                #[cfg(target_os = "macos")]
+                let build_fps = build_fps.min(crate::macos_screen::CAPTURE_FPS);
                 // AV1's better compression is only worth it if this client
                 // can actually decode it — `build_encoder` still isn't a
                 // hard promise (falls back to H.264 if this host's GPU
@@ -819,11 +856,16 @@ async fn handle_client(
                 controls.start_streaming(conn.remote_address(), &conn).await;
 
                 let mut cell = encoder_cell.lock().await;
-                let needs_rebuild = !matches!(
-                    cell.as_ref(),
-                    Some(c) if c.build_fps == build_fps && c.build_dim == build_dim
-                        && c.build_codec == wanted_codec
-                );
+                #[cfg(target_os = "macos")]
+                let source_unavailable = !crate::macos_screen::is_ready();
+                #[cfg(not(target_os = "macos"))]
+                let source_unavailable = false;
+                let needs_rebuild = source_unavailable
+                    || !matches!(
+                        cell.as_ref(),
+                        Some(c) if c.build_fps == build_fps && c.build_dim == build_dim
+                            && c.build_codec == wanted_codec
+                    );
                 if needs_rebuild {
                     // Rebuilding mid-connection (a client re-sending
                     // `SessionRequest` with new caps on an already-streaming
@@ -834,7 +876,7 @@ async fn handle_client(
                     // sends `SessionRequest` once, right after connecting,
                     // and changes caps by fully reconnecting (see
                     // `_reconnectForNewCaps` in the Flutter app).
-                    let encoder = build_encoder(build_fps, build_dim, wanted_codec);
+                    let encoder = build_encoder(build_fps, build_dim, wanted_codec)?;
                     let (width, height) = encoder.dimensions();
                     let codec_config = encoder.codec_config();
                     let build_codec = encoder.codec();
@@ -1056,6 +1098,16 @@ async fn stream_video(
     height: u32,
     fps: u32,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(target_os = "macos")]
+    struct CaptureLease;
+    #[cfg(target_os = "macos")]
+    impl Drop for CaptureLease {
+        fn drop(&mut self) {
+            crate::macos_screen::release_capture();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let _capture_lease = CaptureLease;
     // Dropped at every `return`/`break` below via normal Rust scope rules —
     // released the moment this session ends, one way or another.
     let _keep_awake = KeepDisplayAwake::new();

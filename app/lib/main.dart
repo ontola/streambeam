@@ -361,9 +361,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   List<_HostListEntry> _hostEntries() {
     final entries = <_HostListEntry>[];
     final matchedLan = <int>{};
+    final localHostPubkey = hostPublicKey();
 
     final saved = _savedHostInfo;
-    if (saved != null) {
+    final savedIsLocal =
+        saved != null &&
+        saved.hostPubkey.length == 32 &&
+        localHostPubkey.length == 32 &&
+        _pubkeysEqual(saved.hostPubkey, localHostPubkey);
+    if (saved != null && !savedIsLocal) {
       DiscoveredHost? lanMatch;
       int? lanIndex;
       for (var i = 0; i < _lanHosts.length; i++) {
@@ -668,8 +674,18 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         hosts = await _discoverHostsNative();
       }
       if (!mounted) return;
+      final localHostPubkey = hostPublicKey();
+      final visibleHosts = localHostPubkey.length == 32
+          ? hosts
+                .where(
+                  (host) =>
+                      host.hostPubkey.length != 32 ||
+                      !_pubkeysEqual(host.hostPubkey, localHostPubkey),
+                )
+                .toList()
+          : hosts;
       setState(() {
-        _lanHosts = hosts;
+        _lanHosts = visibleHosts;
         _discoveryBusy = false;
       });
     } catch (e) {
@@ -1736,15 +1752,14 @@ class _StreamFromPromo extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Stream from another device',
+            'Stream from / to anywhere',
             style: theme.textTheme.titleMedium,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
           Text(
-            'Install StreamBeam on the device you want to watch — a PC or Mac — '
-            'and run it. It shows up here on the same Wi‑Fi, or scan its QR to '
-            'pair.',
+            'Install StreamBeam on your phone to watch this Mac or beam your '
+            'phone to it. Pair once, then start from either device.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -1754,7 +1769,7 @@ class _StreamFromPromo extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: openGithubReleases,
             icon: const Icon(Icons.download),
-            label: const Text('Get StreamBeam for desktop'),
+            label: const Text('Install StreamBeam on your phone'),
           ),
         ],
       ),

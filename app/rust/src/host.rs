@@ -17,6 +17,7 @@ fn service_slot() -> &'static Mutex<Option<HostService>> {
 struct HostService {
     controls: Arc<HostControls>,
     ui: Arc<Mutex<HostUiState>>,
+    host_pubkey: [u8; 32],
     thread: JoinHandle<()>,
 }
 
@@ -121,6 +122,12 @@ pub fn start(
         config.identity_path = dir.join("host_identity.pkcs8");
         config.paired_store = Some(dir.join("paired.json"));
     }
+    // Resolve the identity before starting the server so the Watch UI can
+    // reliably remove this exact host from its own mDNS results. Comparing
+    // names or addresses would also hide a different machine with a collision.
+    let host_pubkey = streambeam_net::Identity::load_or_generate(&config.identity_path)
+        .map_err(|e| e.to_string())?
+        .public_key();
 
     let ui_payload = ui.clone();
     let ui_fatal = ui.clone();
@@ -183,9 +190,18 @@ pub fn start(
     *slot = Some(HostService {
         controls,
         ui,
+        host_pubkey,
         thread,
     });
     Ok(())
+}
+
+pub fn public_key() -> Vec<u8> {
+    service_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|svc| svc.host_pubkey.to_vec()))
+        .unwrap_or_default()
 }
 
 pub fn stop() {

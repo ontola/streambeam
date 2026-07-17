@@ -21,6 +21,9 @@ pub struct PlaybackDiagnostics {
     pub codec: String,
     pub bytes_received: u64,
     pub frames_rendered: u64,
+    /// QUIC's smoothed round-trip time. One-way transport is estimated as
+    /// half this value; this does not include host processing or decode.
+    pub network_rtt_us: u64,
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -32,6 +35,7 @@ pub fn playback_diagnostics() -> PlaybackDiagnostics {
         codec: crate::playback::session_codec(),
         bytes_received: crate::playback::bytes_received(),
         frames_rendered: crate::playback::frames_rendered(),
+        network_rtt_us: crate::playback::network_rtt_us(),
     }
 }
 
@@ -51,12 +55,7 @@ pub fn send_mouse_scroll(dx: i16, dy: i16) {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_abs(x: u16, y: u16, ref_w: u16, ref_h: u16) {
-    crate::input::send(streambeam_proto::input::InputEvent::MouseAbs {
-        x,
-        y,
-        ref_w,
-        ref_h,
-    });
+    crate::input::send(streambeam_proto::input::InputEvent::MouseAbs { x, y, ref_w, ref_h });
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -113,7 +112,7 @@ pub fn send_gamepad_state(
 
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     streambeam_host::logging::install_panic_hook();
     flutter_rust_bridge::setup_default_user_utils();
     #[cfg(target_os = "android")]
@@ -381,7 +380,13 @@ pub async fn reconnect_play_stream(
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (native_window, max_video_frames, max_width, max_height, max_fps);
+        let _ = (
+            native_window,
+            max_video_frames,
+            max_width,
+            max_height,
+            max_fps,
+        );
         Err("reconnect_play_stream is Android-only".into())
     }
 }
@@ -460,7 +465,11 @@ fn desktop_video_caps(
         } else {
             fallback.max_height
         },
-        max_fps: if max_fps > 0 { max_fps } else { fallback.max_fps },
+        max_fps: if max_fps > 0 {
+            max_fps
+        } else {
+            fallback.max_fps
+        },
     }
 }
 
@@ -633,6 +642,7 @@ async fn desktop_stream_loop(
             .await
             .map_err(|_| "timed out waiting for media".to_string())?
             .map_err(|e| e.to_string())?;
+        crate::playback::note_network_rtt(session.conn.stats().path.rtt);
 
         // Greedily grab anything already sitting in the receive queue too —
         // more than one datagram back-to-back means decode fell behind real
@@ -849,7 +859,24 @@ pub struct HostSnapshot {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_platform_supported() -> bool {
-    cfg!(any(target_os = "windows", target_os = "android"))
+    cfg!(any(
+        target_os = "windows",
+        target_os = "android",
+        target_os = "macos"
+    ))
+}
+
+/// Public key of the host currently running in this app. The Watch screen uses
+/// this stable identity to hide our own mDNS advertisement without relying on
+/// potentially-colliding device names or IP addresses.
+#[flutter_rust_bridge::frb(sync)]
+pub fn host_public_key() -> Vec<u8> {
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
+    {
+        return crate::host::public_key();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
+    Vec::new()
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -859,26 +886,26 @@ pub fn start_host(
     fps: u32,
     max_encode_dim: u32,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     {
         return crate::host::start(host_name, listen, fps, max_encode_dim);
     }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {
         let _ = (host_name, listen, fps, max_encode_dim);
-        Err("hosting is only supported on Windows".into())
+        Err("hosting is not supported on this platform".into())
     }
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn stop_host() {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     crate::host::stop();
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_snapshot() -> HostSnapshot {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     {
         let s = crate::host::snapshot();
         return HostSnapshot {
@@ -906,7 +933,7 @@ pub fn host_snapshot() -> HostSnapshot {
             }),
         };
     }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     HostSnapshot {
         running: false,
         host_name: String::new(),
@@ -923,55 +950,55 @@ pub fn host_snapshot() -> HostSnapshot {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_set_discoverable(on: bool) -> Result<(), String> {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     return crate::host::set_discoverable(on);
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {
         let _ = on;
-        Err("hosting is only supported on Windows".into())
+        Err("hosting is not supported on this platform".into())
     }
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_set_accepts_connections(on: bool) -> Result<(), String> {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     return crate::host::set_accepts_connections(on);
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {
         let _ = on;
-        Err("hosting is only supported on Windows".into())
+        Err("hosting is not supported on this platform".into())
     }
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_disconnect_client(addr: String) -> Result<bool, String> {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     return crate::host::disconnect_client(&addr);
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {
         let _ = addr;
-        Err("hosting is only supported on Windows".into())
+        Err("hosting is not supported on this platform".into())
     }
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_forget_client(addr: String) -> Result<bool, String> {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     return crate::host::forget_client(&addr);
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {
         let _ = addr;
-        Err("hosting is only supported on Windows".into())
+        Err("hosting is not supported on this platform".into())
     }
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn host_respond_pairing(id: u64, allow: bool) -> Result<bool, String> {
-    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     return crate::host::respond_pairing(id, allow);
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {
         let _ = (id, allow);
-        Err("hosting is only supported on Windows".into())
+        Err("hosting is not supported on this platform".into())
     }
 }

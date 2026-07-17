@@ -261,6 +261,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   DateTime? _diagLastSampleAt;
   final _keyboardFocus = FocusNode();
   final _keyboardCtrl = TextEditingController();
+  String _keyboardText = '';
   /// Physical-keyboard forwarding (mouse-first platforms): focus node that
   /// captures keys while streaming, and the VKs currently held remotely so
   /// they can be released if capture stops mid-press (no stuck keys).
@@ -470,6 +471,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       renderFps: renderFps,
       codec: snap.codec,
       bytesPerSec: bytesPerSec,
+      networkRttMs: snap.networkRttUs.toDouble() / 1000.0,
     );
     if (next != _liveDiagListenable.value) {
       _liveDiagListenable.value = next;
@@ -520,6 +522,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   void _openKeyboard() {
     _closeMenu();
+    _keyboardCtrl.clear();
+    _keyboardText = '';
     setState(() => _keyboardOpen = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _keyboardFocus.requestFocus();
@@ -529,6 +533,38 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   void _closeKeyboard() {
     _keyboardFocus.unfocus();
     setState(() => _keyboardOpen = false);
+  }
+
+  void _sendVkStroke(int vk, {bool shift = false}) {
+    if (shift) sendKey(vk: 0xA0, down: true);
+    sendKey(vk: vk, down: true);
+    sendKey(vk: vk, down: false);
+    if (shift) sendKey(vk: 0xA0, down: false);
+  }
+
+  void _onKeyboardTextChanged(String value) {
+    var prefix = 0;
+    final shared = math.min(_keyboardText.length, value.length);
+    while (prefix < shared &&
+        _keyboardText.codeUnitAt(prefix) == value.codeUnitAt(prefix)) {
+      prefix++;
+    }
+
+    // Replacements and software-keyboard backspace both appear as an edit of
+    // the TextField value. Remove the old suffix, then type the new suffix.
+    for (var i = prefix; i < _keyboardText.length; i++) {
+      _sendVkStroke(0x08);
+    }
+    for (final rune in value.substring(prefix).runes) {
+      final stroke = vkStrokeForCharacter(String.fromCharCode(rune));
+      if (stroke != null) _sendVkStroke(stroke.vk, shift: stroke.shift);
+    }
+    _keyboardText = value;
+  }
+
+  void _submitKeyboardText(String _) {
+    _sendVkStroke(0x0D);
+    _closeKeyboard();
   }
 
   void _handleStop() {
@@ -1072,7 +1108,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                 onPressed: _closeKeyboard,
                               ),
                             ),
-                            onSubmitted: (_) => _closeKeyboard(),
+                            onChanged: _onKeyboardTextChanged,
+                            onSubmitted: _submitKeyboardText,
                           ),
                         ),
                       ],
@@ -1627,6 +1664,7 @@ class _LiveDiagnostics {
     this.renderFps = 0,
     this.codec = '',
     this.bytesPerSec = 0,
+    this.networkRttMs = 0,
   });
 
   final int width;
@@ -1635,6 +1673,7 @@ class _LiveDiagnostics {
   final double renderFps;
   final String codec;
   final double bytesPerSec;
+  final double networkRttMs;
 
   bool get hasResolution => width > 0 && height > 0;
 
@@ -1645,6 +1684,7 @@ class _LiveDiagnostics {
         targetFps,
         renderFps.round(),
         bytesPerSec.round(),
+        networkRttMs.round(),
         codec,
       );
 
@@ -1657,6 +1697,7 @@ class _LiveDiagnostics {
           targetFps == other.targetFps &&
           (renderFps - other.renderFps).abs() < 0.05 &&
           (bytesPerSec - other.bytesPerSec).abs() < 100 &&
+          (networkRttMs - other.networkRttMs).abs() < 0.1 &&
           codec == other.codec;
 }
 
@@ -2122,6 +2163,12 @@ class _DiagnosticsPanel extends StatelessWidget {
             : '—';
     final rate = _formatDataRate(diagnostics.bytesPerSec);
     final codec = diagnostics.codec.isNotEmpty ? diagnostics.codec : '—';
+    final rtt = diagnostics.networkRttMs > 0
+        ? '${diagnostics.networkRttMs.toStringAsFixed(1)} ms'
+        : '—';
+    final oneWay = diagnostics.networkRttMs > 0
+        ? '~${(diagnostics.networkRttMs / 2).toStringAsFixed(1)} ms'
+        : '—';
 
     return Column(
       children: [
@@ -2129,6 +2176,17 @@ class _DiagnosticsPanel extends StatelessWidget {
         _DiagRow(label: 'Frame rate', value: fps, labelStyle: labelStyle, valueStyle: valueStyle),
         _DiagRow(label: 'Data rate', value: rate, labelStyle: labelStyle, valueStyle: valueStyle),
         _DiagRow(label: 'Codec', value: codec, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(label: 'Network RTT', value: rtt, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(label: 'Input transport', value: oneWay, labelStyle: labelStyle, valueStyle: valueStyle),
+        _DiagRow(label: 'Video transport', value: oneWay, labelStyle: labelStyle, valueStyle: valueStyle),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            'Transport estimates exclude host processing and video decode/display.',
+            style: labelStyle,
+            textAlign: TextAlign.center,
+          ),
+        ),
       ],
     );
   }

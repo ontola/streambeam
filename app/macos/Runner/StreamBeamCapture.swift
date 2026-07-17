@@ -1,0 +1,248 @@
+import CoreMedia
+import CoreGraphics
+import CoreVideo
+import Foundation
+import ScreenCaptureKit
+import VideoToolbox
+
+@_silgen_name("streambeam_macos_capture_begin")
+private func rustCaptureBegin(_ width: UInt32, _ height: UInt32)
+@_silgen_name("streambeam_macos_capture_end")
+private func rustCaptureEnd()
+@_silgen_name("streambeam_macos_capture_submit")
+private func rustCaptureSubmit(
+  _ bytes: UnsafePointer<UInt8>, _ length: Int, _ keyframe: UInt8, _ isConfig: UInt8)
+@_silgen_name("streambeam_macos_capture_take_idr_request")
+private func rustCaptureTakeIDRRequest() -> UInt8
+
+/// ScreenCaptureKit → VideoToolbox H.264 encoder for the macOS Beam role.
+/// Encoded access units cross directly into Rust; no video bytes touch Dart.
+@available(macOS 13.0, *)
+final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
+  enum CaptureError: LocalizedError {
+    case noDisplay
+    case encoder(OSStatus)
+
+    var errorDescription: String? {
+      switch self {
+      case .noDisplay:
+        return "No display is available to capture."
+      case .encoder(let status):
+        return "VideoToolbox encoder setup failed (OSStatus \(status))."
+      }
+    }
+  }
+
+  private let captureQueue = DispatchQueue(label: "io.streambeam.capture", qos: .userInteractive)
+  private var stream: SCStream?
+  private var encoder: VTCompressionSession?
+  private var codecConfig = Data()
+  private var stopping = false
+  private var width: Int32 = 0
+  private var height: Int32 = 0
+  private let fps: Int32 = 30
+
+  func start(maxDimension: Int = 1920) async throws {
+    guard stream == nil else { return }
+    stopping = false
+
+    let content = try await SCShareableContent.excludingDesktopWindows(
+      false, onScreenWindowsOnly: true)
+    // Input coordinates are mapped against CGMainDisplayID in Rust; capture
+    // that same display so an absolute touch lands on the visible pixel.
+    guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
+      ?? content.displays.first else { throw CaptureError.noDisplay }
+
+    let scale = min(1.0, Double(maxDimension) / Double(max(display.width, display.height)))
+    width = Int32(max(2, Int(Double(display.width) * scale) & ~1))
+    height = Int32(max(2, Int(Double(display.height) * scale) & ~1))
+
+    let ownBundle = Bundle.main.bundleIdentifier
+    let ownApps = content.applications.filter { $0.bundleIdentifier == ownBundle }
+    let filter = SCContentFilter(
+      display: display, excludingApplications: ownApps, exceptingWindows: [])
+    let configuration = SCStreamConfiguration()
+    configuration.width = Int(width)
+    configuration.height = Int(height)
+    configuration.minimumFrameInterval = CMTime(value: 1, timescale: fps)
+    configuration.queueDepth = 3
+    configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    configuration.showsCursor = true
+    configuration.capturesAudio = false
+
+    try createEncoder()
+    rustCaptureBegin(UInt32(width), UInt32(height))
+
+    let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+    do {
+      try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
+      self.stream = stream
+      try await stream.startCapture()
+    } catch {
+      self.stream = nil
+      destroyEncoder()
+      rustCaptureEnd()
+      throw error
+    }
+  }
+
+  func stop() async {
+    guard !stopping else { return }
+    stopping = true
+    if let stream {
+      try? await stream.stopCapture()
+    }
+    stream = nil
+    destroyEncoder()
+    codecConfig.removeAll(keepingCapacity: false)
+    rustCaptureEnd()
+    stopping = false
+  }
+
+  private func createEncoder() throws {
+    var session: VTCompressionSession?
+    let status = VTCompressionSessionCreate(
+      allocator: kCFAllocatorDefault,
+      width: width,
+      height: height,
+      codecType: kCMVideoCodecType_H264,
+      encoderSpecification: [
+        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true
+      ] as CFDictionary,
+      imageBufferAttributes: nil,
+      compressedDataAllocator: nil,
+      outputCallback: { refcon, _, status, _, sampleBuffer in
+        guard status == noErr, let refcon, let sampleBuffer else { return }
+        let capture = Unmanaged<StreamBeamCapture>.fromOpaque(refcon).takeUnretainedValue()
+        capture.handleEncoded(sampleBuffer)
+      },
+      refcon: Unmanaged.passUnretained(self).toOpaque(),
+      compressionSessionOut: &session)
+    guard status == noErr, let session else { throw CaptureError.encoder(status) }
+
+    VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_ProfileLevel,
+      value: kVTProfileLevel_H264_Main_AutoLevel)
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_ExpectedFrameRate,
+      value: NSNumber(value: fps))
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
+      value: NSNumber(value: fps * 30))
+    let bitrate = min(60_000_000, max(2_000_000, Int(width) * Int(height) * Int(fps) / 15))
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_AverageBitRate,
+      value: NSNumber(value: bitrate))
+    let prepareStatus = VTCompressionSessionPrepareToEncodeFrames(session)
+    guard prepareStatus == noErr else {
+      VTCompressionSessionInvalidate(session)
+      throw CaptureError.encoder(prepareStatus)
+    }
+    encoder = session
+  }
+
+  private func destroyEncoder() {
+    if let encoder {
+      VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid)
+      VTCompressionSessionInvalidate(encoder)
+    }
+    encoder = nil
+  }
+
+  func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+              of outputType: SCStreamOutputType) {
+    guard outputType == .screen, sampleBuffer.isValid,
+          let imageBuffer = sampleBuffer.imageBuffer, let encoder else { return }
+
+    var frameProperties: CFDictionary?
+    if rustCaptureTakeIDRRequest() != 0 {
+      frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame as String: true] as CFDictionary
+    }
+    let timestamp = sampleBuffer.presentationTimeStamp
+    let duration = sampleBuffer.duration.isValid
+      ? sampleBuffer.duration : CMTime(value: 1, timescale: fps)
+    let status = VTCompressionSessionEncodeFrame(
+      encoder, imageBuffer: imageBuffer, presentationTimeStamp: timestamp,
+      duration: duration, frameProperties: frameProperties,
+      sourceFrameRefcon: nil, infoFlagsOut: nil)
+    if status != noErr {
+      NSLog("StreamBeam: VideoToolbox encode failed: %d", status)
+    }
+  }
+
+  func stream(_ stream: SCStream, didStopWithError error: Error) {
+    NSLog("StreamBeam: screen capture stopped: %@", error.localizedDescription)
+  }
+
+  private func handleEncoded(_ sampleBuffer: CMSampleBuffer) {
+    let attachments = CMSampleBufferGetSampleAttachmentsArray(
+      sampleBuffer, createIfNecessary: false) as? [[CFString: Any]]
+    let keyframe = !(attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+
+    if keyframe, let format = sampleBuffer.formatDescription,
+       let config = h264CodecConfig(format) {
+      codecConfig = config
+      submit(config, keyframe: true, isConfig: true)
+    }
+    guard var accessUnit = annexBData(sampleBuffer) else { return }
+    // Repeat SPS/PPS before every IDR so a decoder can recover without waiting
+    // for a control-stream reconfiguration.
+    if keyframe, !codecConfig.isEmpty {
+      accessUnit.insert(contentsOf: codecConfig, at: 0)
+    }
+    submit(accessUnit, keyframe: keyframe, isConfig: false)
+  }
+
+  private func submit(_ data: Data, keyframe: Bool, isConfig: Bool) {
+    data.withUnsafeBytes { raw in
+      guard let bytes = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+      rustCaptureSubmit(bytes, data.count, keyframe ? 1 : 0, isConfig ? 1 : 0)
+    }
+  }
+
+  private func h264CodecConfig(_ format: CMFormatDescription) -> Data? {
+    var output = Data()
+    var nalLength: Int32 = 0
+    for index in 0..<2 {
+      var pointer: UnsafePointer<UInt8>?
+      var size = 0
+      var count = 0
+      let status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+        format, parameterSetIndex: index, parameterSetPointerOut: &pointer,
+        parameterSetSizeOut: &size, parameterSetCountOut: &count,
+        nalUnitHeaderLengthOut: &nalLength)
+      guard status == noErr, let pointer else { return nil }
+      output.append(contentsOf: [0, 0, 0, 1])
+      output.append(pointer, count: size)
+    }
+    return output
+  }
+
+  private func annexBData(_ sampleBuffer: CMSampleBuffer) -> Data? {
+    guard let block = sampleBuffer.dataBuffer else { return nil }
+    let length = CMBlockBufferGetDataLength(block)
+    var avcc = Data(count: length)
+    let status = avcc.withUnsafeMutableBytes { raw in
+      CMBlockBufferCopyDataBytes(
+        block, atOffset: 0, dataLength: length, destination: raw.baseAddress!)
+    }
+    guard status == kCMBlockBufferNoErr else { return nil }
+
+    var output = Data(capacity: length)
+    var offset = 0
+    while offset + 4 <= avcc.count {
+      let nalLength = avcc[offset..<(offset + 4)].reduce(0) {
+        ($0 << 8) | Int($1)
+      }
+      offset += 4
+      guard nalLength > 0, offset + nalLength <= avcc.count else { return nil }
+      output.append(contentsOf: [0, 0, 0, 1])
+      output.append(avcc[offset..<(offset + nalLength)])
+      offset += nalLength
+    }
+    return offset == avcc.count ? output : nil
+  }
+}
