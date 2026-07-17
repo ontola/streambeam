@@ -1387,6 +1387,7 @@ impl SseDecode for crate::api::HostSnapshot {
         let mut var_discoverable = <bool>::sse_decode(deserializer);
         let mut var_acceptsConnections = <bool>::sse_decode(deserializer);
         let mut var_clients = <Vec<crate::api::HostClientInfo>>::sse_decode(deserializer);
+        let mut var_viewers = <Vec<crate::api::HostClientInfo>>::sse_decode(deserializer);
         let mut var_pendingApproval =
             <Option<crate::api::HostPairRequest>>::sse_decode(deserializer);
         return crate::api::HostSnapshot {
@@ -1399,6 +1400,7 @@ impl SseDecode for crate::api::HostSnapshot {
             discoverable: var_discoverable,
             accepts_connections: var_acceptsConnections,
             clients: var_clients,
+            viewers: var_viewers,
             pending_approval: var_pendingApproval,
         };
     }
@@ -1753,6 +1755,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::HostSnapshot {
             self.discoverable.into_into_dart().into_dart(),
             self.accepts_connections.into_into_dart().into_dart(),
             self.clients.into_into_dart().into_dart(),
+            self.viewers.into_into_dart().into_dart(),
             self.pending_approval.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -1913,6 +1916,7 @@ impl SseEncode for crate::api::HostSnapshot {
         <bool>::sse_encode(self.discoverable, serializer);
         <bool>::sse_encode(self.accepts_connections, serializer);
         <Vec<crate::api::HostClientInfo>>::sse_encode(self.clients, serializer);
+        <Vec<crate::api::HostClientInfo>>::sse_encode(self.viewers, serializer);
         <Option<crate::api::HostPairRequest>>::sse_encode(self.pending_approval, serializer);
     }
 }

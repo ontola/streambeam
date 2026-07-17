@@ -1,10 +1,12 @@
 import Cocoa
 import FlutterMacOS
+import UserNotifications
 
 @_silgen_name("streambeam_macos_capture_wanted")
 private func rustCaptureWanted() -> UInt8
 
-class MainFlutterWindow: NSWindow {
+class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
+  private static let activeStreamNotificationId = "streambeam.active-viewers"
   private var videoChannel: FlutterMethodChannel?
   private var video: StreamBeamVideo?
   private var discoveryChannel: FlutterMethodChannel?
@@ -23,6 +25,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    UNUserNotificationCenter.current().delegate = self
     setUpVideoChannel(flutterViewController)
     setUpDiscoveryChannel(flutterViewController)
     setUpDeviceChannel(flutterViewController)
@@ -34,6 +37,51 @@ class MainFlutterWindow: NSWindow {
 
   deinit {
     captureDemandTimer?.invalidate()
+    clearViewerNotification()
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if #available(macOS 11.0, *) {
+      completionHandler([.banner, .sound])
+    } else {
+      completionHandler([.alert, .sound])
+    }
+  }
+
+  private func updateViewerNotification(names: [String]) {
+    let center = UNUserNotificationCenter.current()
+    guard !names.isEmpty else {
+      clearViewerNotification()
+      return
+    }
+
+    center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+      guard granted else { return }
+      let content = UNMutableNotificationContent()
+      if names.count == 1 {
+        content.title = "\(names[0]) is watching your screen"
+      } else {
+        content.title = "\(names.count) devices are watching your screen"
+      }
+      content.body = "A StreamBeam session is open. Open StreamBeam to stop it or remove access."
+      content.sound = .default
+      let request = UNNotificationRequest(
+        identifier: Self.activeStreamNotificationId,
+        content: content,
+        trigger: nil)
+      center.add(request)
+    }
+  }
+
+  private func clearViewerNotification() {
+    let center = UNUserNotificationCenter.current()
+    let ids = [Self.activeStreamNotificationId]
+    center.removePendingNotificationRequests(withIdentifiers: ids)
+    center.removeDeliveredNotifications(withIdentifiers: ids)
   }
 
   /// The Rust host is always available, but ScreenCaptureKit only runs while
@@ -128,6 +176,11 @@ class MainFlutterWindow: NSWindow {
           await capture?.stop()
           result(nil)
         }
+      case "setActiveViewers":
+        let args = call.arguments as? [String: Any]
+        let names = args?["names"] as? [String] ?? []
+        self.updateViewerNotification(names: names)
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }

@@ -46,11 +46,7 @@ AppCapabilities appCapabilities() {
     return AppCapabilities(host: host, watch: watch, platformLabel: 'Windows');
   }
   if (Platform.isMacOS) {
-    return AppCapabilities(
-      host: host,
-      watch: true,
-      platformLabel: 'macOS',
-    );
+    return AppCapabilities(host: host, watch: true, platformLabel: 'macOS');
   }
   if (Platform.isLinux) {
     return const AppCapabilities(
@@ -83,11 +79,13 @@ class _BeamPageState extends State<BeamPage> {
     discoverable: false,
     acceptsConnections: false,
     clients: [],
+    viewers: [],
   );
   bool _starting = false;
   String? _status;
   bool _statusError = false;
   BigInt? _shownApprovalId;
+  String _notifiedViewers = '';
 
   static const _screencast = MethodChannel('streambeam/screencast');
 
@@ -100,8 +98,7 @@ class _BeamPageState extends State<BeamPage> {
     super.initState();
     // Desktop hosts stay ready: a paired client initiates the actual session.
     // Android still needs its per-session MediaProjection picker.
-    if (hostPlatformSupported() &&
-        (Platform.isWindows || Platform.isMacOS)) {
+    if (hostPlatformSupported() && (Platform.isWindows || Platform.isMacOS)) {
       unawaited(_ensureHostRunning());
     }
     if (Platform.isMacOS) {
@@ -114,6 +111,11 @@ class _BeamPageState extends State<BeamPage> {
   void dispose() {
     _poll?.cancel();
     if (Platform.isMacOS) {
+      unawaited(
+        _screencast.invokeMethod<void>('setActiveViewers', {
+          'names': <String>[],
+        }),
+      );
       _screencast.setMethodCallHandler(null);
     }
     super.dispose();
@@ -148,7 +150,8 @@ class _BeamPageState extends State<BeamPage> {
         _setStatus('Screen capture permission was declined.', error: true);
         return;
       }
-      final inputGranted = !Platform.isMacOS ||
+      final inputGranted =
+          !Platform.isMacOS ||
           (await _screencast.invokeMethod<bool>('requestInputAccess') ?? false);
       // The capture service is now feeding frames; start the host server, which
       // picks up the live screen encoder.
@@ -208,6 +211,7 @@ class _BeamPageState extends State<BeamPage> {
     if (!mounted || !hostPlatformSupported()) return;
     final next = hostSnapshot();
     setState(() => _snap = next);
+    _syncViewerNotification(next.viewers);
     if (next.error != null && next.error!.isNotEmpty) {
       _setStatus(next.error!, error: true);
     }
@@ -216,6 +220,17 @@ class _BeamPageState extends State<BeamPage> {
       _shownApprovalId = pending.id;
       unawaited(_showApprovalDialog(pending));
     }
+  }
+
+  void _syncViewerNotification(List<HostClientInfo> viewers) {
+    if (!Platform.isMacOS) return;
+    final names = viewers.map((viewer) => viewer.name).toList()..sort();
+    final key = names.join('\u0000');
+    if (key == _notifiedViewers) return;
+    _notifiedViewers = key;
+    unawaited(
+      _screencast.invokeMethod<void>('setActiveViewers', {'names': names}),
+    );
   }
 
   void _setStatus(String message, {bool error = false}) {
@@ -429,8 +444,8 @@ class _BeamPageState extends State<BeamPage> {
                                 !_snap.running
                                     ? 'Starting host…'
                                     : _beaming
-                                        ? 'Beaming now'
-                                        : 'Ready — start from a paired device',
+                                    ? 'Beaming now'
+                                    : 'Ready — start from a paired device',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),

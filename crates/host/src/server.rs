@@ -262,6 +262,16 @@ impl HostControls {
         self.clients.lock().unwrap().clone()
     }
 
+    /// Clients that currently own the media stream, rather than merely having
+    /// an authenticated QUIC connection open.
+    pub fn viewers(&self) -> Vec<ClientEntry> {
+        let clients = self.clients.lock().unwrap().clone();
+        clients
+            .into_iter()
+            .filter(|client| self.is_active_stream(client.addr))
+            .collect()
+    }
+
     fn add_client(&self, entry: ClientEntry) {
         let mut clients = self.clients.lock().unwrap();
         // Same device reconnecting gets a new ephemeral UDP port — keep one row per name.

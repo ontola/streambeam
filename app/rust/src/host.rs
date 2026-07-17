@@ -63,6 +63,7 @@ pub struct HostSnapshot {
     pub discoverable: bool,
     pub accepts_connections: bool,
     pub clients: Vec<HostClientInfo>,
+    pub viewers: Vec<HostClientInfo>,
     pub pending_approval: Option<HostPairRequest>,
 }
 
@@ -233,6 +234,7 @@ pub fn snapshot() -> HostSnapshot {
             discoverable: false,
             accepts_connections: false,
             clients: Vec::new(),
+            viewers: Vec::new(),
             pending_approval: None,
         };
     };
@@ -242,6 +244,16 @@ pub fn snapshot() -> HostSnapshot {
     let clients: Vec<HostClientInfo> = svc
         .controls
         .clients()
+        .into_iter()
+        .map(|c| HostClientInfo {
+            name: c.name,
+            addr: c.addr.to_string(),
+            pubkey: c.pubkey.to_vec(),
+        })
+        .collect();
+    let viewers: Vec<HostClientInfo> = svc
+        .controls
+        .viewers()
         .into_iter()
         .map(|c| HostClientInfo {
             name: c.name,
@@ -260,6 +272,7 @@ pub fn snapshot() -> HostSnapshot {
         discoverable: svc.controls.is_discoverable(),
         accepts_connections: svc.controls.accepts_connections(),
         clients,
+        viewers,
         pending_approval: ui
             .and_then(|u| u.pending_approval.as_ref())
             .map(|p| HostPairRequest {

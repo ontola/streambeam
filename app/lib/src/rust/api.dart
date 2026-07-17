@@ -398,6 +398,9 @@ class HostSnapshot {
   final bool discoverable;
   final bool acceptsConnections;
   final List<HostClientInfo> clients;
+
+  /// Authenticated clients currently receiving this device's media stream.
+  final List<HostClientInfo> viewers;
   final HostPairRequest? pendingApproval;
 
   const HostSnapshot({
@@ -410,6 +413,7 @@ class HostSnapshot {
     required this.discoverable,
     required this.acceptsConnections,
     required this.clients,
+    required this.viewers,
     this.pendingApproval,
   });
 
@@ -424,6 +428,7 @@ class HostSnapshot {
       discoverable.hashCode ^
       acceptsConnections.hashCode ^
       clients.hashCode ^
+      viewers.hashCode ^
       pendingApproval.hashCode;
 
   @override
@@ -440,6 +445,7 @@ class HostSnapshot {
           discoverable == other.discoverable &&
           acceptsConnections == other.acceptsConnections &&
           clients == other.clients &&
+          viewers == other.viewers &&
           pendingApproval == other.pendingApproval;
 }
 

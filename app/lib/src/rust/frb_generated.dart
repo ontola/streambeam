@@ -1386,8 +1386,8 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
   HostSnapshot dco_decode_host_snapshot(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return HostSnapshot(
       running: dco_decode_bool(arr[0]),
       hostName: dco_decode_String(arr[1]),
@@ -1398,7 +1398,8 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       discoverable: dco_decode_bool(arr[6]),
       acceptsConnections: dco_decode_bool(arr[7]),
       clients: dco_decode_list_host_client_info(arr[8]),
-      pendingApproval: dco_decode_opt_box_autoadd_host_pair_request(arr[9]),
+      viewers: dco_decode_list_host_client_info(arr[9]),
+      pendingApproval: dco_decode_opt_box_autoadd_host_pair_request(arr[10]),
     );
   }
 
@@ -1660,6 +1661,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     var var_discoverable = sse_decode_bool(deserializer);
     var var_acceptsConnections = sse_decode_bool(deserializer);
     var var_clients = sse_decode_list_host_client_info(deserializer);
+    var var_viewers = sse_decode_list_host_client_info(deserializer);
     var var_pendingApproval = sse_decode_opt_box_autoadd_host_pair_request(
       deserializer,
     );
@@ -1673,6 +1675,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
       discoverable: var_discoverable,
       acceptsConnections: var_acceptsConnections,
       clients: var_clients,
+      viewers: var_viewers,
       pendingApproval: var_pendingApproval,
     );
   }
@@ -1990,6 +1993,7 @@ class StreambeamFfiApiImpl extends StreambeamFfiApiImplPlatform
     sse_encode_bool(self.discoverable, serializer);
     sse_encode_bool(self.acceptsConnections, serializer);
     sse_encode_list_host_client_info(self.clients, serializer);
+    sse_encode_list_host_client_info(self.viewers, serializer);
     sse_encode_opt_box_autoadd_host_pair_request(
       self.pendingApproval,
       serializer,

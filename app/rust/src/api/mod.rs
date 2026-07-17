@@ -854,6 +854,8 @@ pub struct HostSnapshot {
     pub discoverable: bool,
     pub accepts_connections: bool,
     pub clients: Vec<HostClientInfo>,
+    /// Authenticated clients currently receiving this device's media stream.
+    pub viewers: Vec<HostClientInfo>,
     pub pending_approval: Option<HostPairRequest>,
 }
 
@@ -926,6 +928,15 @@ pub fn host_snapshot() -> HostSnapshot {
                     host_pubkey: c.pubkey,
                 })
                 .collect(),
+            viewers: s
+                .viewers
+                .into_iter()
+                .map(|c| HostClientInfo {
+                    name: c.name,
+                    addr: c.addr,
+                    host_pubkey: c.pubkey,
+                })
+                .collect(),
             pending_approval: s.pending_approval.map(|p| HostPairRequest {
                 id: p.id,
                 client_name: p.client_name,
@@ -944,6 +955,7 @@ pub fn host_snapshot() -> HostSnapshot {
         discoverable: false,
         accepts_connections: false,
         clients: Vec::new(),
+        viewers: Vec::new(),
         pending_approval: None,
     }
 }

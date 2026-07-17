@@ -215,6 +215,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   bool _discoveryBusy = false;
   String? _discoveryError;
   Timer? _discoveryTimer;
+  Timer? _viewerTimer;
+  List<HostClientInfo> _viewers = [];
   MobileScannerController? _scannerController;
   String? _lastQrPayload;
   bool _qrPreviewOpen = false;
@@ -448,6 +450,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
     unawaited(_ensureMdnsLock());
     unawaited(_discoverHosts());
+    _refreshViewers();
     unawaited(_refreshClipboard());
     _clipboardTimer = Timer.periodic(_clipboardPollInterval, (_) {
       if (!_busy && mounted) unawaited(_refreshClipboard());
@@ -457,6 +460,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         unawaited(_discoverHosts());
       }
     });
+    _viewerTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _refreshViewers(),
+    );
     _deepLinkChannel.setMethodCallHandler((call) async {
       if (call.method == 'link') {
         await _handleIncomingLink(call.arguments as String?);
@@ -493,6 +500,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _discoveryTimer?.cancel();
+    _viewerTimer?.cancel();
     _clipboardTimer?.cancel();
     _cancelSurfaceTimeout();
     unawaited(_releaseMdnsLock());
@@ -500,6 +508,20 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     unawaited(_desktopSub?.cancel());
     _payloadCtrl.dispose();
     super.dispose();
+  }
+
+  void _refreshViewers() {
+    if (!mounted || !hostPlatformSupported()) return;
+    final next = hostSnapshot().viewers;
+    final currentKey = _viewers
+        .map((viewer) => '${viewer.name}\u0000${viewer.addr}')
+        .join('\u0001');
+    final nextKey = next
+        .map((viewer) => '${viewer.name}\u0000${viewer.addr}')
+        .join('\u0001');
+    if (currentKey != nextKey) {
+      setState(() => _viewers = next);
+    }
   }
 
   @override
@@ -1345,6 +1367,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   _DevicesSection(
                     busy: _busy,
                     hosts: _hostEntries(),
+                    viewers: _viewers,
                     discovering: _discoveryBusy,
                     discoveryError: _discoveryError,
                     onHostTap: _busy
@@ -1543,6 +1566,7 @@ class _DevicesSection extends StatelessWidget {
   const _DevicesSection({
     required this.busy,
     required this.hosts,
+    required this.viewers,
     required this.discovering,
     this.discoveryError,
     this.onHostTap,
@@ -1551,6 +1575,7 @@ class _DevicesSection extends StatelessWidget {
 
   final bool busy;
   final List<_HostListEntry> hosts;
+  final List<HostClientInfo> viewers;
   final bool discovering;
   final String? discoveryError;
   final void Function(_HostListEntry host)? onHostTap;
@@ -1584,6 +1609,8 @@ class _DevicesSection extends StatelessWidget {
               Text(
                 discovering
                     ? 'Searching…'
+                    : viewers.isNotEmpty
+                    ? '${viewers.length} watching${onlineCount > 0 ? ' · $onlineCount online' : ''}'
                     : hosts.isEmpty
                     ? 'None found'
                     : '$onlineCount online · ${hosts.length} listed',
@@ -1594,7 +1621,16 @@ class _DevicesSection extends StatelessWidget {
             ],
           ),
         ),
-        if (hosts.isEmpty)
+        ...viewers.map(
+          (viewer) => DeviceTile(
+            icon: Icons.visibility,
+            title: viewer.name,
+            subtitle: 'Watching your screen · ${viewer.addr}',
+            active: true,
+            trailing: const StatusChip(label: 'Watching', highlight: true),
+          ),
+        ),
+        if (hosts.isEmpty && viewers.isEmpty)
           _EmptyDevices(discovering: discovering)
         else
           ...hosts.map((h) {
