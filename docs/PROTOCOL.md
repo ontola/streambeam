@@ -149,6 +149,8 @@ move when the host advertises `Touch`; because each frame is self-contained, a
 coalesced move cannot leave a contact stuck. Each contact has a stable `u8` id,
 `u16 x/y` in the advertised reference space, and `u16 pressure`. A mouse or
 trackpad remains mouse input even for a touch host.
+Android maps primary-button press/drag/release to one touch contact when its
+unprivileged AccessibilityService cannot inject a native mouse cursor.
 
 Text clipboard sync is active only for the authenticated device currently in
 a stream session. Client→host updates use S1; host→client updates use S0. Both

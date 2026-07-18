@@ -10,11 +10,22 @@ const MAX_PENDING: usize = 64;
 static FRAMES: LazyLock<Mutex<VecDeque<(Vec<TouchContact>, u16, u16)>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static MOUSE: LazyLock<Mutex<MouseState>> = LazyLock::new(|| Mutex::new(MouseState::default()));
+
+#[derive(Default)]
+struct MouseState {
+    x: u16,
+    y: u16,
+    ref_w: u16,
+    ref_h: u16,
+    primary_down: bool,
+}
 
 pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
     if !enabled {
         FRAMES.lock().unwrap().clear();
+        *MOUSE.lock().unwrap() = MouseState::default();
     }
 }
 
@@ -22,14 +33,63 @@ pub fn submit(event: InputEvent) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let InputEvent::TouchFrame {
-        contacts,
-        ref_w,
-        ref_h,
-    } = event
-    else {
-        return;
-    };
+    match event {
+        InputEvent::TouchFrame {
+            contacts,
+            ref_w,
+            ref_h,
+        } => enqueue(contacts, ref_w, ref_h),
+        InputEvent::MouseAbs { x, y, ref_w, ref_h } => {
+            let mut mouse = MOUSE.lock().unwrap();
+            mouse.x = x;
+            mouse.y = y;
+            mouse.ref_w = ref_w.max(1);
+            mouse.ref_h = ref_h.max(1);
+            if mouse.primary_down {
+                enqueue_mouse(&mouse);
+            }
+        }
+        InputEvent::MouseMove { dx, dy } => {
+            let mut mouse = MOUSE.lock().unwrap();
+            if mouse.ref_w == 0 || mouse.ref_h == 0 {
+                return;
+            }
+            mouse.x = (i32::from(mouse.x) + i32::from(dx)).clamp(0, i32::from(mouse.ref_w)) as u16;
+            mouse.y = (i32::from(mouse.y) + i32::from(dy)).clamp(0, i32::from(mouse.ref_h)) as u16;
+            if mouse.primary_down {
+                enqueue_mouse(&mouse);
+            }
+        }
+        InputEvent::MouseButton { button: 0, down } => {
+            let mut mouse = MOUSE.lock().unwrap();
+            if mouse.ref_w == 0 || mouse.ref_h == 0 {
+                return;
+            }
+            mouse.primary_down = down;
+            if down {
+                enqueue_mouse(&mouse);
+            } else {
+                enqueue(Vec::new(), mouse.ref_w, mouse.ref_h);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn enqueue_mouse(mouse: &MouseState) {
+    enqueue(
+        vec![TouchContact {
+            id: 0,
+            x: mouse.x,
+            y: mouse.y,
+            pressure: u16::MAX,
+        }],
+        mouse.ref_w,
+        mouse.ref_h,
+    );
+}
+
+fn enqueue(contacts: Vec<TouchContact>, ref_w: u16, ref_h: u16) {
     let mut frames = FRAMES.lock().unwrap();
     if frames.len() >= MAX_PENDING {
         // Preserve state transitions at both ends. Dropping intermediate move
@@ -63,8 +123,11 @@ pub fn take_packed() -> Option<Vec<i32>> {
 mod tests {
     use super::*;
 
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn packs_full_touch_state() {
+        let _guard = TEST_LOCK.lock().unwrap();
         set_enabled(true);
         submit(InputEvent::TouchFrame {
             contacts: vec![TouchContact {
@@ -77,6 +140,43 @@ mod tests {
             ref_h: 200,
         });
         assert_eq!(take_packed(), Some(vec![100, 200, 1, 7, 11, 13, 17]));
+        set_enabled(false);
+    }
+
+    #[test]
+    fn maps_primary_mouse_drag_to_single_touch() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        set_enabled(true);
+        submit(InputEvent::MouseAbs {
+            x: 10,
+            y: 20,
+            ref_w: 100,
+            ref_h: 200,
+        });
+        submit(InputEvent::MouseButton {
+            button: 0,
+            down: true,
+        });
+        submit(InputEvent::MouseAbs {
+            x: 30,
+            y: 40,
+            ref_w: 100,
+            ref_h: 200,
+        });
+        submit(InputEvent::MouseButton {
+            button: 0,
+            down: false,
+        });
+
+        assert_eq!(
+            take_packed(),
+            Some(vec![100, 200, 1, 0, 10, 20, i32::from(u16::MAX)])
+        );
+        assert_eq!(
+            take_packed(),
+            Some(vec![100, 200, 1, 0, 30, 40, i32::from(u16::MAX)])
+        );
+        assert_eq!(take_packed(), Some(vec![100, 200, 0]));
         set_enabled(false);
     }
 }
