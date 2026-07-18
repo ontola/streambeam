@@ -163,6 +163,11 @@ class AndroidEnvironment {
       '_CARGOKIT_NDK_LINK_TARGET': targetArg,
       '_CARGOKIT_NDK_LINK_CLANG': ccValue,
       'CARGOKIT_TOOL_TEMP_DIR': toolTempDir,
+      // CMake-based build scripts (e.g. audiopus_sys building libopus) run
+      // CMake's own Android platform detection, which needs the NDK location
+      // from the environment — the CC/AR vars above only cover cc-rs crates.
+      'ANDROID_NDK_ROOT': ndkPath,
+      'ANDROID_NDK_HOME': ndkPath,
     };
   }
 
