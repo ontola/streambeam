@@ -55,8 +55,18 @@ fn capture_ts_us() -> u32 {
 /// `stream_video`'s lifetime — from first frame to disconnect, not from
 /// host launch, so an idle host with no viewers still respects normal power
 /// settings.
+/// `ES_CONTINUOUS` execution state is **per-thread** — but `stream_video` is
+/// a tokio task that migrates across worker threads, so setting it inline
+/// (the previous implementation) applied it to whichever worker happened to
+/// poll at that moment and cleared it from a possibly different one: the
+/// display could still sleep (and the session then idle-lock) mid-stream,
+/// killing capture with the `ACCESS_LOST` loop described above. Own a
+/// dedicated OS thread instead: it sets the state on itself, parks for the
+/// guard's lifetime, and clears the state on the same thread when dropped.
 #[cfg(windows)]
-struct KeepDisplayAwake;
+struct KeepDisplayAwake {
+    stop_tx: std::sync::mpsc::Sender<()>,
+}
 
 #[cfg(windows)]
 impl KeepDisplayAwake {
@@ -64,20 +74,27 @@ impl KeepDisplayAwake {
         use windows::Win32::System::Power::{
             ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
         };
-        unsafe {
-            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-        }
-        Self
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let _ = std::thread::Builder::new()
+            .name("streambeam-keep-awake".into())
+            .spawn(move || unsafe {
+                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+                // Blocks until the guard drops (Err = sender gone). The
+                // thread must outlive the stream: per-thread ES_CONTINUOUS
+                // state dies with its thread.
+                let _ = stop_rx.recv();
+                SetThreadExecutionState(ES_CONTINUOUS);
+            });
+        Self { stop_tx }
     }
 }
 
 #[cfg(windows)]
 impl Drop for KeepDisplayAwake {
     fn drop(&mut self) {
-        use windows::Win32::System::Power::{ES_CONTINUOUS, SetThreadExecutionState};
-        unsafe {
-            SetThreadExecutionState(ES_CONTINUOUS);
-        }
+        // Dropping the sender would also unblock the thread; send explicitly
+        // so the intent is visible and the result ignorable.
+        let _ = self.stop_tx.send(());
     }
 }
 
