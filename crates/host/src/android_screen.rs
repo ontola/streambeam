@@ -120,6 +120,7 @@ pub fn submit(data: Vec<u8>, keyframe: bool, is_config: bool, width: u32, height
         keyframe,
         width: w,
         height: h,
+        timestamp: 0,
     });
 }
 

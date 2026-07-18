@@ -27,6 +27,12 @@ pub struct EncodedFrame {
     pub keyframe: bool,
     pub width: u32,
     pub height: u32,
+    /// Encoder-internal timestamp of this frame (NVENC: the
+    /// `inputTimeStamp`/`outputTimeStamp` the session tracks its DPB by),
+    /// used to name reference frames in `invalidate_ref_timestamps`.
+    /// Encoders without reference invalidation just report 0 — the value is
+    /// only ever handed back to the same encoder that produced it.
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Error)]
@@ -56,15 +62,19 @@ pub trait VideoEncoder: Send {
     fn force_idr(&mut self);
     fn dimensions(&self) -> (u32, u32);
 
-    /// Tell the encoder the client lost video frames `[first_frame,
-    /// last_frame]` (StreamBeam wrapping frame_ids) and the next frame must
-    /// not reference them. Real hardware encoders map these to their
-    /// reference frames and invalidate just those (NVENC
-    /// `NvEncInvalidateRefFrames`, AMF/QSV equivalents) — a cheap P-frame
-    /// instead of a full keyframe. The default falls back to a full IDR,
-    /// which always recovers (just not cheaply); encoders that can't do real
-    /// invalidation should leave this as-is rather than reimplement it.
-    fn invalidate_ref_frames(&mut self, _first_frame: u16, _last_frame: u16) {
+    /// Tell the encoder the client lost the frames with these
+    /// encoder-internal timestamps (`EncodedFrame::timestamp` values —
+    /// `server.rs` keeps the wire-frame-id → timestamp mapping and resolves
+    /// the client's `InvalidateRefFrames` range before calling this) and the
+    /// next frame must not reference them. Real hardware encoders invalidate
+    /// just those references (NVENC `NvEncInvalidateRefFrames`, AMF/QSV
+    /// equivalents) — a cheap P-frame instead of a full keyframe; per
+    /// NVIDIA's docs the driver also invalidates frames *reconstructed from*
+    /// a corrupt frame, and falls back to an intra frame itself if no valid
+    /// reference remains. The default falls back to a full IDR, which always
+    /// recovers (just not cheaply); encoders that can't do real invalidation
+    /// should leave this as-is rather than reimplement it.
+    fn invalidate_ref_timestamps(&mut self, _timestamps: &[u64]) {
         self.force_idr();
     }
 

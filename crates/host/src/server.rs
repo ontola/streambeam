@@ -832,18 +832,16 @@ async fn handle_client(
     // client actually wanted.
     let mut resolved: Option<(Arc<AsyncMutex<Box<dyn VideoEncoder>>>, u16, u16)> = None;
     let mut last_idr = std::time::Instant::now();
-    // RFI's invalidate is *meant* to be cheaper to service than a full IDR
-    // (no keyframe burst) — true once an encoder implements real reference-
-    // frame invalidation, but `VideoEncoder::invalidate_ref_frames`'s default
-    // (which is what NVENC uses today, see `capture.rs`) just calls
-    // `force_idr()`, which here means a full NVENC session recreate — every
-    // bit as expensive as `RequestIdr`, not cheaper. A 60ms gate on
-    // something that costly let a client stuck in a request-recover-request
-    // loop (e.g. reacting to the recreate's own brief stall as if it were
-    // more loss) tear down and rebuild the encoder up to ~16x/sec, which
-    // showed up as the "fps very inconsistent" / "data rate collapses"
-    // reports. Gated the same as `RequestIdr` until NVENC gets a real cheap
-    // invalidation path (`crates/host/src/capture.rs`'s own TODO).
+    // RFI's invalidate IS now cheaper to service than a full IDR on the
+    // NVENC path (`NvEncInvalidateRefFrames` — no keyframe burst, no session
+    // recreate; see `stream_video`'s frame-id→timestamp mapping), but it
+    // still *falls back* to `force_idr()` (a full session recreate) whenever
+    // the range can't be mapped or the driver call fails, and the software/
+    // mock encoders always take that fallback. Keep the 250ms gate: an
+    // ungated 60ms one historically let a client stuck in a
+    // request-recover-request loop (reacting to the recreate's own brief
+    // stall as if it were more loss) tear down and rebuild the encoder up to
+    // ~16x/sec — the "fps very inconsistent" / "data rate collapses" reports.
     let mut last_invalidate = std::time::Instant::now();
     let mut clipboard_rx = controls.clipboard_to_client.subscribe();
 
@@ -1227,6 +1225,18 @@ async fn stream_video(
         .max_datagram_size()
         .unwrap_or(1200 + streambeam_proto::media::MEDIA_HEADER_LEN);
     let mut frame_id: u16 = 0;
+    // Wire `frame_id` → encoder-internal timestamp for each recently sent
+    // frame, so a client `InvalidateRefFrames { first, last }` range can be
+    // resolved into the `EncodedFrame::timestamp` values NVENC names its DPB
+    // entries by (`VideoEncoder::invalidate_ref_timestamps`). Only the send
+    // loop knows both halves of that mapping, which is why it lives here and
+    // not in the encoder. Bounded well past any real DPB depth; a lookup
+    // miss just falls back to a forced IDR. Cleared on every forced IDR:
+    // an NVENC forced IDR is a session recreate that restarts timestamps
+    // from 0, so pre-IDR entries would alias new frames.
+    const SENT_FRAME_MAP_LEN: usize = 128;
+    let mut sent_frames: std::collections::VecDeque<(u16, u64)> =
+        std::collections::VecDeque::with_capacity(SENT_FRAME_MAP_LEN);
     // Rolling per-report-window timing, to find where per-frame latency goes:
     // waiting on the encoder (capture+encode+channel round trip), FEC sharding,
     // or actually pushing shards onto the wire.
@@ -1339,9 +1349,34 @@ async fn stream_video(
         if force_idr {
             let mut enc = encoder.lock().await;
             enc.force_idr();
+            sent_frames.clear();
         } else if let Some((first, last)) = invalidate {
+            // Resolve the client's lost wire-frame range into encoder
+            // timestamps (see `sent_frames`). The driver handles transitive
+            // damage itself — NVENC's docs: frames *reconstructed from* an
+            // invalidated frame are invalidated too, and if no valid
+            // reference remains the next frame is intra-coded — so passing
+            // exactly the reported range is sufficient. An unmappable or
+            // absurdly wide range (nothing that old is in any DPB) falls
+            // back to the forced IDR that used to service every invalidate.
+            let span = usize::from(last.wrapping_sub(first)) + 1;
+            let timestamps: Vec<u64> = (0..span as u16)
+                .filter_map(|off| {
+                    let id = first.wrapping_add(off);
+                    sent_frames.iter().find(|(fid, _)| *fid == id).map(|(_, ts)| *ts)
+                })
+                .collect();
             let mut enc = encoder.lock().await;
-            enc.invalidate_ref_frames(first, last);
+            if span <= 64 && timestamps.len() == span {
+                enc.invalidate_ref_timestamps(&timestamps);
+            } else {
+                log!(
+                    "invalidate [{first}, {last}]: {}/{span} frames mappable — forcing IDR instead",
+                    timestamps.len()
+                );
+                enc.force_idr();
+                sent_frames.clear();
+            }
         }
 
         let t_encode = std::time::Instant::now();
@@ -1500,6 +1535,10 @@ async fn stream_video(
             window_start = std::time::Instant::now();
         }
 
+        if sent_frames.len() == SENT_FRAME_MAP_LEN {
+            sent_frames.pop_front();
+        }
+        sent_frames.push_back((frame_id, frame.timestamp));
         frame_id = frame_id.wrapping_add(1);
     }
     Ok(())

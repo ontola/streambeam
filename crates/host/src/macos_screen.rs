@@ -170,6 +170,7 @@ pub fn submit(data: Vec<u8>, keyframe: bool, is_config: bool) {
         keyframe,
         width: SOURCE.width.load(Ordering::Relaxed).max(1),
         height: SOURCE.height.load(Ordering::Relaxed).max(1),
+        timestamp: 0,
     });
 }
 

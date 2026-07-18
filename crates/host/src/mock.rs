@@ -42,6 +42,7 @@ impl VideoEncoder for MockEncoder {
             keyframe,
             width: self.width,
             height: self.height,
+            timestamp: 0,
         }))
     }
 

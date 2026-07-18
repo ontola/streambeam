@@ -416,6 +416,10 @@ type RegisterAsyncEventFn = unsafe extern "C" fn(*mut c_void, *mut EventParams) 
 type UnregisterAsyncEventFn = unsafe extern "C" fn(*mut c_void, *mut EventParams) -> i32;
 type DestroyEncoderFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type ReconfigureEncoderFn = unsafe extern "C" fn(*mut c_void, *mut ReconfigureParams) -> i32;
+// `NvEncInvalidateRefFrames(void* encoder, uint64_t invalidRefFrameTimeStamp)`
+// — the timestamp is the `PicParams::input_time_stamp` the frame was encoded
+// with (echoed back in `LockBitstream::output_time_stamp`).
+type InvalidateRefFramesFn = unsafe extern "C" fn(*mut c_void, u64) -> i32;
 
 // Layout cross-checked against the authoritative NVIDIA SDK header
 // (Samples/NvCodec/NvEncoder/nvEncodeAPI.h, `_NV_ENC_RECONFIGURE_PARAMS`):
@@ -461,7 +465,7 @@ struct FunctionList {
     map_input_resource: MapInputResourceFn,
     unmap_input_resource: UnmapInputResourceFn,
     destroy_encoder: DestroyEncoderFn,
-    invalidate_ref_frames: *mut c_void,
+    invalidate_ref_frames: InvalidateRefFramesFn,
     open_encode_session_ex: OpenEncodeSessionExFn,
     register_resource: RegisterResourceFn,
     unregister_resource: UnregisterResourceFn,
@@ -545,8 +549,7 @@ unsafe fn build_config(
     // the ultra-low-latency preset already set, which for H.264 already
     // enables SPS/PPS repetition on every IDR — required since our
     // client parses SPS/PPS straight out of each keyframe's Annex-B
-    // bytes. AV1's equivalent (repeating the sequence header OBU on
-    // every keyframe) is likewise a preset default we don't override.
+    // bytes.
     config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
     config.frame_interval_p = 1; // no B-frames — lowest latency
     // Was forced to Baseline (no CABAC) to match the software encoder's
@@ -594,6 +597,23 @@ unsafe fn build_config(
     // forcing every other macroblock to re-quantize that frame. Aka why
     // every screen-capture NVENC tool (Sunshine included) enables this.
     config.rc_params.bit_fields |= 1 << 3;
+    // AV1's SPS/PPS-repetition equivalent, `repeatSeqHdr` ("output Sequence
+    // Header for every Key frame"), is NOT a preset default the way H.264's
+    // `repeatSPSPPS` is — proven in the field 2026-07-18: a ~50-minute av01
+    // session with `gop_len = fps*3` logged zero `keyframe=true` frames,
+    // because both ends detect an AV1 keyframe by sequence-header-OBU
+    // presence (`obu.rs::access_unit_is_keyframe`), and without this bit
+    // NVENC only emits the sequence header on a session's very first frame.
+    // Every downstream keyframe consumer (client behind-skip, loss resync,
+    // host keyframe logging) silently degraded. Layout cross-checked against
+    // nv-codec-headers nvEncodeAPI.h `_NV_ENC_CONFIG_AV1`: four leading u32s
+    // (level, tier, minPartSize, maxPartSize), then the LSB-first packed
+    // bitfield word — outputAnnexBFormat=0, enableTimingInfo=1,
+    // enableDecoderModelInfo=2, enableFrameIdNumbers=3, disableSeqHdr=4,
+    // repeatSeqHdr=5.
+    if codec == Codec::Av1 {
+        config.encode_codec_config[4] |= 1 << 5;
+    }
     Ok(config)
 }
 
@@ -858,7 +878,27 @@ impl NvencEncoder {
             keyframe,
             width: self.width,
             height: self.height,
+            timestamp: lock_params.output_time_stamp,
         }))
+    }
+
+    /// `NvEncInvalidateRefFrames` for each timestamp — the cheap loss
+    /// recovery this session's whole recreate-on-IDR machinery exists to
+    /// avoid: the driver marks the named reference frames (and, per NVIDIA's
+    /// docs, anything reconstructed from them) unusable for motion
+    /// estimation, encodes the next frame against an older still-valid
+    /// reference, and produces an intra frame itself if none remains — no
+    /// keyframe burst, no session teardown. Timestamps are
+    /// `EncodedFrame::timestamp` values from *this* session; any driver
+    /// error aborts so the caller can fall back to a forced IDR.
+    pub unsafe fn invalidate_ref_frames(&mut self, timestamps: &[u64]) -> Result<(), String> {
+        for &ts in timestamps {
+            check(
+                "NvEncInvalidateRefFrames",
+                (self.functions.invalidate_ref_frames)(self.encoder.as_ptr(), ts),
+            )?;
+        }
+        Ok(())
     }
 }
 

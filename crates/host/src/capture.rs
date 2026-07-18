@@ -68,6 +68,10 @@ enum Request {
     /// request already queued behind others in the channel doesn't carry a
     /// stale value by the time it's handled.
     SetBitrate,
+    /// Nudge only — the timestamps live in `pending_invalidate` (same
+    /// staleness reasoning as `SetBitrate`; a newer invalidate supersedes an
+    /// unconsumed older one, mirroring `StreamControl::request_invalidate`).
+    Invalidate,
 }
 
 /// Video encoder backed by a background capture+encode thread.
@@ -84,6 +88,7 @@ pub struct DesktopEncoder {
     frame_rx: Receiver<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
     pending_bitrate: Arc<Mutex<Option<u32>>>,
+    pending_invalidate: Arc<Mutex<Option<Vec<u64>>>>,
     /// The codec actually driving the encoder — may not match what was
     /// requested (see `codec()`).
     codec: Codec,
@@ -105,6 +110,8 @@ impl DesktopEncoder {
         let thread_force = force_idr.clone();
         let pending_bitrate = Arc::new(Mutex::new(None));
         let thread_bitrate = pending_bitrate.clone();
+        let pending_invalidate = Arc::new(Mutex::new(None));
+        let thread_invalidate = pending_invalidate.clone();
         let codec_config = Arc::new(Mutex::new(None));
         let thread_codec_config = codec_config.clone();
 
@@ -120,6 +127,7 @@ impl DesktopEncoder {
                     frame_tx,
                     thread_force,
                     thread_bitrate,
+                    thread_invalidate,
                     thread_codec_config,
                 )
             })
@@ -134,6 +142,7 @@ impl DesktopEncoder {
                 frame_rx,
                 force_idr,
                 pending_bitrate,
+                pending_invalidate,
                 codec,
                 _thread: thread,
             }),
@@ -143,14 +152,6 @@ impl DesktopEncoder {
     }
 }
 
-// TODO(M2): real NVENC/AMF/QSV NvEncInvalidateRefFrames-equivalent support.
-// This impl currently relies on VideoEncoder::invalidate_ref_frames's default
-// (falls back to force_idr — always recovers, just not cheaply). Wiring real
-// hardware invalidation here will need a map from StreamBeam's wrapping
-// `frame_id` (assigned per-frame in `server::stream_video`, after encoding)
-// to whatever reference-frame handle/index the chosen hardware encoder uses
-// internally (NVENC reference picture indices, etc.) — that mapping doesn't
-// exist yet and isn't built by this change.
 impl VideoEncoder for DesktopEncoder {
     fn encode_next(&mut self) -> Result<Option<EncodedFrame>, EncodeError> {
         if self.req_tx.send(Request::Next).is_err() {
@@ -170,6 +171,11 @@ impl VideoEncoder for DesktopEncoder {
     fn set_bitrate(&mut self, kbps: u32) {
         *self.pending_bitrate.lock().unwrap() = Some(kbps.saturating_mul(1000));
         let _ = self.req_tx.send(Request::SetBitrate);
+    }
+
+    fn invalidate_ref_timestamps(&mut self, timestamps: &[u64]) {
+        *self.pending_invalidate.lock().unwrap() = Some(timestamps.to_vec());
+        let _ = self.req_tx.send(Request::Invalidate);
     }
 
     fn dimensions(&self) -> (u32, u32) {
@@ -195,6 +201,7 @@ fn run_pipeline(
     frame_tx: SyncSender<Option<EncodedFrame>>,
     force_idr: Arc<AtomicBool>,
     pending_bitrate: Arc<Mutex<Option<u32>>>,
+    pending_invalidate: Arc<Mutex<Option<Vec<u64>>>>,
     codec_config: Arc<Mutex<Option<Vec<u8>>>>,
 ) {
     let mut pipe = match Pipeline::new(fps, max_encode_dim, wanted_codec) {
@@ -211,8 +218,8 @@ fn run_pipeline(
 
     while let Ok(req) = req_rx.recv() {
         match req {
-            Request::ForceIdr | Request::SetBitrate => {
-                // Both flags/values are also read in the Next arm below;
+            Request::ForceIdr | Request::SetBitrate | Request::Invalidate => {
+                // The flags/values are all also read in the Next arm below;
                 // nothing to do here beyond having woken up a thread that
                 // might otherwise be parked waiting on the next real tick.
             }
@@ -220,6 +227,17 @@ fn run_pipeline(
                 let want_idr = force_idr.swap(false, Ordering::Relaxed);
                 if let Some(bps) = pending_bitrate.lock().unwrap().take() {
                     pipe.set_bitrate(bps);
+                }
+                match pending_invalidate.lock().unwrap().take() {
+                    // A pending forced IDR supersedes invalidation — the
+                    // keyframe it forces references nothing the invalidate
+                    // was trying to avoid (same precedence `stream_video`
+                    // applies between the two control signals).
+                    Some(_) if want_idr => {}
+                    // Safety: same dedicated thread that owns the NVENC
+                    // session and drives `capture_and_encode`.
+                    Some(ts) => unsafe { pipe.invalidate_refs(&ts) },
+                    None => {}
                 }
                 let frame = pipe.capture_and_encode(want_idr).unwrap_or_else(|e| {
                     crate::logging::log(&format!("capture/encode error: {e}"));
@@ -630,6 +648,33 @@ impl Pipeline {
         }
     }
 
+    /// Cheap loss recovery: drop the named reference frames from the
+    /// encoder's DPB (`NvencEncoder::invalidate_ref_frames`) so the next
+    /// frame is an ordinary P-frame against an older still-valid reference —
+    /// no keyframe burst, no session recreate. Any failure, or a backend
+    /// without reference invalidation, falls back to the pending-IDR path,
+    /// which always recovers (via a full session recreate in `encode()`),
+    /// just not cheaply.
+    unsafe fn invalidate_refs(&mut self, timestamps: &[u64]) {
+        match &mut self.backend {
+            EncoderBackend::Nvenc { encoder, .. } => {
+                match encoder.invalidate_ref_frames(timestamps) {
+                    Ok(()) => crate::logging::log(&format!(
+                        "NVENC: invalidated {} reference frame(s)",
+                        timestamps.len()
+                    )),
+                    Err(e) => {
+                        crate::logging::log(&format!(
+                            "NVENC: ref invalidation failed, falling back to forced IDR: {e}"
+                        ));
+                        self.pending_force_idr = true;
+                    }
+                }
+            }
+            EncoderBackend::Software { .. } => self.pending_force_idr = true,
+        }
+    }
+
     /// The codec actually in use — the software fallback is always H.264;
     /// NVENC reports whatever it actually initialized with (see `new`'s
     /// AV1-then-H.264 retry).
@@ -838,6 +883,9 @@ unsafe fn read_access_unit(
         keyframe,
         width,
         height,
+        // The MF software path has no reference invalidation — see
+        // `EncodedFrame::timestamp`.
+        timestamp: 0,
     })
 }
 
