@@ -1826,9 +1826,11 @@ class _DevicesSection extends StatelessWidget {
                       onPressed: busy ? null : () => onForgetHost!(h),
                     )
                   else if (canTap)
-                    Icon(
-                      Icons.play_circle_fill,
+                    IconButton(
+                      icon: const Icon(Icons.play_circle_fill),
                       color: theme.colorScheme.primary,
+                      tooltip: 'Watch ${h.name}',
+                      onPressed: busy ? null : () => onHostTap!(h),
                     ),
                 ],
               ),
