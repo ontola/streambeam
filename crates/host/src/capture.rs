@@ -513,9 +513,23 @@ impl Pipeline {
     unsafe fn capture_frame(&mut self) -> Result<(), String> {
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
+        // Wait at most one frame interval for a *changed* desktop frame —
+        // the timeout path below re-encodes the previous frame, so this
+        // bound sets the encode cadence on a static screen. The old flat
+        // 100ms collapsed an idle desktop to ~10fps while NVENC's CBR
+        // controller still budgeted bytes for the negotiated fps (e.g.
+        // 120), so the frame that finally carried a change (a cursor move)
+        // got ~1/12th of its real byte budget and was visibly crushed —
+        // near-black gradients pumping between grey and black as quality
+        // then crept back on the static frames. Encoding duplicates at the
+        // real cadence keeps the rate controller's per-frame budget honest
+        // and lets VBV headroom accumulate for the frames that matter
+        // (duplicates cost a few hundred bytes each), and makes
+        // `gop_len = fps*3` actually mean ~3s of wall clock.
+        let timeout_ms = (1000 / self.fps.max(1)).max(1);
         match self
             .duplication
-            .AcquireNextFrame(100, &mut info, &mut resource)
+            .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
         {
             Ok(()) => {
                 self.stat_acquired += 1;
