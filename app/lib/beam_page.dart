@@ -353,44 +353,61 @@ class _BeamPageState extends State<BeamPage> {
     if (link == null || link.isEmpty || !mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Pair this device'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 300),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
+      builder: (dialogContext) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Pair this device',
+                  style: Theme.of(dialogContext).textTheme.headlineSmall,
                 ),
-                child: QrImageView(
-                  data: link,
-                  size: 240,
-                  backgroundColor: Colors.white,
+                const SizedBox(height: 16),
+                Center(
+                  child: Container(
+                    width: 264,
+                    height: 264,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: QrImageView(
+                      data: link,
+                      size: 240,
+                      backgroundColor: Colors.white,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Scan once to pair. After approval, this device can start future beams directly.',
-                textAlign: TextAlign.center,
-              ),
-            ],
+                const SizedBox(height: 12),
+                const Text(
+                  'Scan once to pair. After approval, this device can start future beams directly.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton.icon(
+                      onPressed: _copyLink,
+                      icon: const Icon(Icons.link),
+                      label: const Text('Copy link'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: const Text('Done'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
-        actions: [
-          TextButton.icon(
-            onPressed: _copyLink,
-            icon: const Icon(Icons.link),
-            label: const Text('Copy link'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Done'),
-          ),
-        ],
       ),
     );
   }
@@ -448,31 +465,31 @@ class _BeamPageState extends State<BeamPage> {
           clipBehavior: Clip.antiAlias,
           child: Column(
             children: [
-              if (viewers.isEmpty)
-                ListTile(
-                  leading: const Icon(Icons.visibility_off_outlined),
-                  title: const Text('No one is watching'),
-                  subtitle: Text(
-                    running
-                        ? 'This device is ready for paired devices'
-                        : 'Starting StreamBeam…',
+              if (viewers.isNotEmpty) ...[
+                ColoredBox(
+                  color: theme.colorScheme.primaryContainer,
+                  child: Column(
+                    children: [
+                      for (final viewer in viewers)
+                        ListTile(
+                          leading: Icon(
+                            Icons.visibility,
+                            color: theme.colorScheme.onPrimaryContainer,
+                          ),
+                          title: Text('${viewer.name} is watching'),
+                          subtitle: Text(
+                            'Watching this device · ${viewer.addr}',
+                          ),
+                          trailing: TextButton(
+                            onPressed: () => _stopViewer(viewer),
+                            child: const Text('Stop'),
+                          ),
+                        ),
+                    ],
                   ),
-                )
-              else
-                for (final viewer in viewers)
-                  ListTile(
-                    leading: Icon(
-                      Icons.visibility,
-                      color: theme.colorScheme.primary,
-                    ),
-                    title: Text(viewer.name),
-                    subtitle: Text('Watching your screen · ${viewer.addr}'),
-                    trailing: TextButton(
-                      onPressed: () => _stopViewer(viewer),
-                      child: const Text('Stop'),
-                    ),
-                  ),
-              const Divider(height: 1),
+                ),
+                const Divider(height: 1),
+              ],
               ListTile(
                 leading: const Icon(Icons.qr_code_2),
                 title: const Text('Pair another device'),
