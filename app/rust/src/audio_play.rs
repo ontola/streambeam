@@ -9,6 +9,7 @@
 //! the session but never affect video.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +23,15 @@ const MAX_BUFFERED: usize = SAMPLE_RATE as usize / 5 * CHANNELS;
 const MAX_FRAME: usize = 5760 * CHANNELS;
 
 type Ring = Arc<Mutex<VecDeque<i16>>>;
+
+/// User "Sound" toggle from the player sidebar. Global so it survives the
+/// automatic reconnects a quality change triggers; Dart re-syncs it whenever
+/// a player screen mounts.
+static MUTED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_muted(muted: bool) {
+    MUTED.store(muted, Ordering::Relaxed);
+}
 
 pub struct AudioPlayback {
     tx: SyncSender<Vec<u8>>,
@@ -65,6 +75,12 @@ fn playback_thread(rx: Receiver<Vec<u8>>) {
     let mut pcm = vec![0i16; MAX_FRAME];
     // Ends when every AudioPlayback handle is dropped; the sink stops on drop.
     while let Ok(packet) = rx.recv() {
+        if MUTED.load(Ordering::Relaxed) {
+            // Drop instead of decoding; clear buffered audio so unmuting
+            // doesn't replay a stale burst.
+            ring.lock().unwrap().clear();
+            continue;
+        }
         match decoder.decode(&packet, &mut pcm, false) {
             Ok(frames) => {
                 let mut ring = ring.lock().unwrap();

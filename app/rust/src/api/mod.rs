@@ -13,6 +13,12 @@ pub fn playback_frames_rendered() -> u64 {
     crate::playback::frames_rendered()
 }
 
+/// Player sidebar "Sound" toggle: mute/unmute received stream audio.
+#[flutter_rust_bridge::frb(sync)]
+pub fn set_audio_muted(muted: bool) {
+    crate::audio_play::set_muted(muted);
+}
+
 /// Stop the active watch session immediately instead of waiting for the
 /// decoder/media receive loop's network timeout to notice that its UI left.
 #[flutter_rust_bridge::frb(sync)]
