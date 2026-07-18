@@ -24,6 +24,9 @@ object NativeStream {
     /** True when a client asked for a keyframe; ask MediaCodec for a sync frame. */
     external fun nativeTakeIdrRequest(): Boolean
 
+    /** True once a paired viewer has requested this screen. */
+    external fun nativeCaptureRequested(): Boolean
+
     /** `[refW, refH, count, id, x, y, pressure, ...]`, or null while idle. */
     external fun nativeTakeTouchFrame(): IntArray?
     external fun nativeTakeKeyEvent(): IntArray?

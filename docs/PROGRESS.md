@@ -54,6 +54,7 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [x] mDNS host discovery from Android (`discover_hosts`)
 - [x] Persistent host/client identity + reconnect without fresh QR
 - [x] Verified on a physical device (Xiaomi 15) — both watching and beaming
+- [x] Android host listens idle; a paired viewer raises only MediaProjection consent
 
 ## M6 checklist
 
@@ -69,6 +70,8 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [ ] 240 fps input-latency measurement + stuck-button loss soak
 
 ## Decisions log
+
+- 2026-07-18 — **Android beams are now remotely initiated after one-time pairing.** The Android app starts its QUIC/mDNS host idle instead of waiting for a local `Start beaming` tap. Only after an authenticated, paired client sends `SessionRequest` does Rust set a capture-demand flag. If StreamBeam is visible, Android's OS-owned MediaProjection consent opens immediately; Android forbids an ordinary background app from launching that activity, so a backgrounded StreamBeam instead posts a high-priority request notification whose tap opens the same consent flow—never a local Beam button. Approving resumes the already-waiting client handshake, while decline or a 30 s timeout aborts instead of exposing the bundled mock clip. The stream task owns a capture lease: disconnect clears demand and stops remotely-started MediaProjection, but leaves discovery and the paired host online for the next client-initiated session. Live Tab S9 verification covered idle mDNS presence, first pairing, a real stream, capture teardown with the host still advertised, and a later paired Mac request opening the system consent directly. No wire change.
 
 - 2026-07-18 — **macOS viewer notifications can no longer freeze the Flutter platform thread.** A live process sample caught the main thread blocked inside `UNUserNotificationCenter.removePendingNotificationRequests` → synchronous XPC after the active viewer list became empty. While blocked, the window stopped responding and on-demand ScreenCaptureKit starts timed out, producing misleading Screen Recording errors during S9 reconnects even though permission had worked moments earlier. Notification authorization/add/remove work now runs on a dedicated utility queue; Flutter method-channel completion and capture lifecycle stay on the main thread. This is based on the captured stack, not a speculative restart fix.
 

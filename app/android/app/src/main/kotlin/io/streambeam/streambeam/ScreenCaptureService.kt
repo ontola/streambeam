@@ -89,6 +89,8 @@ class ScreenCaptureService : Service() {
         startAsForeground()
         try {
             startCapture(resultCode, data)
+            captureActive = true
+            remoteCaptureActive = intent.getBooleanExtra(EXTRA_REMOTE_REQUEST, false)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "screen capture failed to start", e)
             stopSelf()
@@ -298,6 +300,8 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        captureActive = false
+        remoteCaptureActive = false
         running = false
         displayListener?.let {
             (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
@@ -433,6 +437,7 @@ class ScreenCaptureService : Service() {
         const val TAG = "ScreenCaptureService"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
+        const val EXTRA_REMOTE_REQUEST = "remoteRequest"
         const val EXTRA_APPROVAL_ID = "approvalId"
         const val ACTION_STOP = "io.streambeam.streambeam.STOP"
         const val ACTION_ALLOW = "io.streambeam.streambeam.ALLOW"
@@ -444,5 +449,15 @@ class ScreenCaptureService : Service() {
         private const val MAX_DIM = 1280
         private const val FPS = 30
         private const val BITRATE = 8_000_000
+
+        @Volatile
+        private var captureActive = false
+
+        @Volatile
+        private var remoteCaptureActive = false
+
+        fun isCaptureActive(): Boolean = captureActive
+
+        fun isRemoteCaptureActive(): Boolean = captureActive && remoteCaptureActive
     }
 }

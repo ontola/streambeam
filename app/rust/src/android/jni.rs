@@ -83,6 +83,15 @@ pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeTakeIdrR
     jboolean::from(streambeam_host::android_screen::take_idr_request())
 }
 
+/// Whether an authenticated viewer is waiting for Android's capture consent.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeCaptureRequested<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    jboolean::from(streambeam_host::android_screen::capture_wanted())
+}
+
 /// Next full touch frame for the AccessibilityService, packed as documented
 /// by `streambeam_host::android_input::take_packed`, or null when idle.
 #[unsafe(no_mangle)]

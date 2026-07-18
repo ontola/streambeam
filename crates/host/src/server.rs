@@ -415,21 +415,25 @@ fn build_encoder(
     }
     #[cfg(target_os = "android")]
     {
-        // On Android the host is only ever started as part of beaming, so the
-        // capture service (MediaProjection + MediaCodec) is on its way — but it
-        // starts asynchronously and may not have delivered the codec config yet
-        // when we get here. Wait for it before falling back to the mock clip.
+        // The Android host listens while idle. An authenticated SessionRequest
+        // raises this demand flag; the activity opens Android's mandatory
+        // MediaProjection consent UI and the capture service then feeds this
+        // encoder. Keep the handshake open while the user approves it.
         // Android beaming doesn't support AV1 encode (MediaCodec surface
         // encoder path is H.264-only) — `wanted_codec` is silently ignored,
-        // same as the mock clip below.
-        for _ in 0..50 {
+        // same as the mock clip on unsupported platforms below.
+        crate::android_screen::request_capture();
+        for _ in 0..300 {
             if crate::android_screen::is_ready() {
                 crate::logging::log("android screen capture ready — streaming live screen");
                 return Ok(Box::new(crate::android_screen::AndroidScreenEncoder));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        crate::logging::log("android screen capture didn't become ready — using mock clip");
+        crate::android_screen::release_capture();
+        return Err(
+            "Android screen capture was not approved; accept the system prompt and retry".into(),
+        );
     }
     #[cfg(target_os = "macos")]
     {
@@ -452,7 +456,7 @@ fn build_encoder(
                 .into(),
         );
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "android")))]
     {
         let _ = (fps, max_encode_dim, wanted_codec);
         Ok(Box::new(MockEncoder::bundled()))
@@ -906,10 +910,15 @@ async fn handle_client(
                 // the same connection.
                 controls.start_streaming(conn.remote_address(), &conn).await;
 
+                #[cfg(target_os = "android")]
+                crate::android_screen::request_capture();
+
                 let mut cell = encoder_cell.lock().await;
                 #[cfg(target_os = "macos")]
                 let source_unavailable = !crate::macos_screen::is_ready();
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "android")]
+                let source_unavailable = !crate::android_screen::is_ready();
+                #[cfg(not(any(target_os = "macos", target_os = "android")))]
                 let source_unavailable = false;
                 let needs_rebuild = source_unavailable
                     || !matches!(
@@ -1176,6 +1185,16 @@ async fn stream_video(
         }
     }
     #[cfg(target_os = "macos")]
+    let _capture_lease = CaptureLease;
+    #[cfg(target_os = "android")]
+    struct CaptureLease;
+    #[cfg(target_os = "android")]
+    impl Drop for CaptureLease {
+        fn drop(&mut self) {
+            crate::android_screen::release_capture();
+        }
+    }
+    #[cfg(target_os = "android")]
     let _capture_lease = CaptureLease;
     // Dropped at every `return`/`break` below via normal Rust scope rules —
     // released the moment this session ends, one way or another.

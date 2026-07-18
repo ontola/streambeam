@@ -1,6 +1,10 @@
 package io.streambeam.streambeam
 
 import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,6 +13,8 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Base64
 import android.view.KeyEvent
@@ -26,6 +32,13 @@ class MainActivity : FlutterActivity() {
     private var streamingWifiLock: WifiManager.WifiLock? = null
     private var gamepadBridge: GamepadBridge? = null
     private var pendingCaptureResult: MethodChannel.Result? = null
+    private var captureRequestInFlight = false
+    private var captureRequestWasRemote = false
+    private var remoteCaptureRequestHandled = false
+    private var activityResumed = false
+    private var captureNotificationShown = false
+    private val captureHandler = Handler(Looper.getMainLooper())
+    private var capturePoll: Runnable? = null
     private val nativeHosts = ConcurrentHashMap<String, Map<String, Any>>()
     private val pendingResolves = ArrayDeque<NsdServiceInfo>()
     private var resolvingService = false
@@ -33,6 +46,8 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val REQUEST_SCREEN_CAPTURE = 9731
+        const val CAPTURE_REQUEST_CHANNEL = "streambeam_capture_requests"
+        const val CAPTURE_REQUEST_NOTIFICATION = 44
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -114,7 +129,8 @@ class MainActivity : FlutterActivity() {
             "streambeam/screencast",
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "requestCapture" -> requestScreenCapture(result)
+                "requestCapture" -> requestScreenCapture(result, remote = false)
+                "isCaptureActive" -> result.success(ScreenCaptureService.isCaptureActive())
                 "stopCapture" -> {
                     stopService(Intent(this, ScreenCaptureService::class.java))
                     result.success(null)
@@ -137,6 +153,7 @@ class MainActivity : FlutterActivity() {
         }
         pendingLink = linkFrom(intent)
         requestPostNotifications()
+        startCaptureRequestPolling()
     }
 
     /** The user-set device name (Settings), falling back to the model. */
@@ -176,26 +193,129 @@ class MainActivity : FlutterActivity() {
         return enabled.split(':').any { it.equals(component, ignoreCase = true) }
     }
 
-    private fun requestScreenCapture(result: MethodChannel.Result) {
-        if (pendingCaptureResult != null) {
-            result.error("busy", "a capture request is already in progress", null)
+    private fun requestScreenCapture(result: MethodChannel.Result?, remote: Boolean) {
+        if (captureRequestInFlight) {
+            result?.error("busy", "a capture request is already in progress", null)
             return
         }
+        captureRequestInFlight = true
+        captureRequestWasRemote = remote
         pendingCaptureResult = result
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQUEST_SCREEN_CAPTURE)
+        try {
+            startActivityForResult(mpm.createScreenCaptureIntent(), REQUEST_SCREEN_CAPTURE)
+        } catch (e: Exception) {
+            captureRequestInFlight = false
+            pendingCaptureResult = null
+            result?.error("capture_prompt", e.message, null)
+        }
+    }
+
+    /**
+     * Turn a verified viewer's SessionRequest into Android's mandatory system
+     * consent prompt. The Rust flag is only set after pairing/authentication,
+     * so discovery traffic and unknown devices can never raise this UI.
+     */
+    private fun startCaptureRequestPolling() {
+        if (capturePoll != null) return
+        val poll = object : Runnable {
+            override fun run() {
+                val wanted = try {
+                    NativeStream.nativeCaptureRequested()
+                } catch (_: Exception) {
+                    false
+                }
+                if (!wanted) {
+                    remoteCaptureRequestHandled = false
+                    cancelCaptureRequestNotification()
+                    if (ScreenCaptureService.isRemoteCaptureActive()) {
+                        stopService(Intent(this@MainActivity, ScreenCaptureService::class.java))
+                    }
+                } else if (
+                    !ScreenCaptureService.isCaptureActive() &&
+                    !captureRequestInFlight &&
+                    !remoteCaptureRequestHandled
+                ) {
+                    if (activityResumed) {
+                        remoteCaptureRequestHandled = true
+                        cancelCaptureRequestNotification()
+                        requestScreenCapture(null, remote = true)
+                    } else {
+                        showCaptureRequestNotification()
+                    }
+                }
+                captureHandler.postDelayed(this, 300)
+            }
+        }
+        capturePoll = poll
+        captureHandler.post(poll)
+    }
+
+    private fun showCaptureRequestNotification() {
+        if (captureNotificationShown) return
+        captureNotificationShown = true
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CAPTURE_REQUEST_CHANNEL,
+                    "Screen sharing requests",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
+            )
+        }
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags = flags or PendingIntent.FLAG_IMMUTABLE
+        }
+        val open = PendingIntent.getActivity(
+            this,
+            CAPTURE_REQUEST_NOTIFICATION,
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            flags,
+        )
+        val notification = Notification.Builder(this, CAPTURE_REQUEST_CHANNEL)
+            .setContentTitle("A paired device wants to watch")
+            .setContentText("Tap to open Android's screen-sharing confirmation.")
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        manager.notify(CAPTURE_REQUEST_NOTIFICATION, notification)
+    }
+
+    private fun cancelCaptureRequestNotification() {
+        if (!captureNotificationShown) return
+        captureNotificationShown = false
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(CAPTURE_REQUEST_NOTIFICATION)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        activityResumed = true
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        super.onPause()
     }
 
     @Deprecated("startActivityForResult result routing")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_SCREEN_CAPTURE) return
+        captureRequestInFlight = false
+        val wasRemote = captureRequestWasRemote
+        captureRequestWasRemote = false
         val pending = pendingCaptureResult
         pendingCaptureResult = null
         if (resultCode == Activity.RESULT_OK && data != null) {
             val svc = Intent(this, ScreenCaptureService::class.java).apply {
                 putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
                 putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+                putExtra(ScreenCaptureService.EXTRA_REMOTE_REQUEST, wasRemote)
             }
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 startForegroundService(svc)
@@ -219,6 +339,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        capturePoll?.let { captureHandler.removeCallbacks(it) }
+        capturePoll = null
         stopNativeDiscovery()
         gamepadBridge?.dispose()
         gamepadBridge = null

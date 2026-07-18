@@ -31,6 +31,7 @@ struct ScreenSource {
     codec_config: Mutex<Option<Vec<u8>>>,
     idr_requested: AtomicBool,
     active: AtomicBool,
+    capture_wanted: AtomicBool,
     width: AtomicU32,
     height: AtomicU32,
 }
@@ -40,6 +41,7 @@ static SOURCE: ScreenSource = ScreenSource {
     codec_config: Mutex::new(None),
     idr_requested: AtomicBool::new(false),
     active: AtomicBool::new(false),
+    capture_wanted: AtomicBool::new(false),
     width: AtomicU32::new(0),
     height: AtomicU32::new(0),
 };
@@ -72,6 +74,24 @@ pub fn is_active() -> bool {
 /// the mock clip during the async capture-service startup.
 pub fn is_ready() -> bool {
     is_active() && SOURCE.codec_config.lock().unwrap().is_some()
+}
+
+/// Mark that an authenticated client is waiting for this screen. The Android
+/// activity polls this flag and opens the mandatory MediaProjection consent
+/// UI; no capture prompt is raised merely because the idle host is listening.
+pub fn request_capture() {
+    SOURCE.capture_wanted.store(true, Ordering::Release);
+}
+
+/// Release the current client's capture lease. The Android activity observes
+/// this and stops the foreground capture service while leaving the QUIC host
+/// online for the next paired client.
+pub fn release_capture() {
+    SOURCE.capture_wanted.store(false, Ordering::Release);
+}
+
+pub fn capture_wanted() -> bool {
+    SOURCE.capture_wanted.load(Ordering::Acquire)
 }
 
 /// Submit one `MediaCodec` output buffer. `is_config` marks the CSD (SPS/PPS)

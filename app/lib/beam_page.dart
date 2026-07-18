@@ -98,9 +98,10 @@ class _BeamPageState extends State<BeamPage> {
   @override
   void initState() {
     super.initState();
-    // Desktop hosts stay ready: a paired client initiates the actual session.
-    // Android still needs its per-session MediaProjection picker.
-    if (hostPlatformSupported() && (Platform.isWindows || Platform.isMacOS)) {
+    // Every host stays ready: a paired client initiates the actual session.
+    // Android raises its mandatory per-session MediaProjection picker only
+    // after that authenticated request arrives.
+    if (hostPlatformSupported()) {
       unawaited(_ensureHostRunning());
     }
     if (Platform.isMacOS) {
@@ -171,14 +172,16 @@ class _BeamPageState extends State<BeamPage> {
       final inputGranted =
           !Platform.isMacOS ||
           (await _screencast.invokeMethod<bool>('requestInputAccess') ?? false);
-      // The capture service is now feeding frames; start the host server, which
-      // picks up the live screen encoder.
-      startHost(
-        hostName: null,
-        listen: null,
-        fps: 30,
-        maxEncodeDim: Platform.isMacOS ? 1920 : 1280,
-      );
+      // Normally the host has been listening since app startup. Preserve the
+      // manual button as a fallback without trying to bind the port twice.
+      if (!hostSnapshot().running) {
+        startHost(
+          hostName: null,
+          listen: null,
+          fps: 30,
+          maxEncodeDim: Platform.isMacOS ? 1920 : 1280,
+        );
+      }
       _beaming = true;
       _refresh();
       if (!inputGranted) {
@@ -227,7 +230,10 @@ class _BeamPageState extends State<BeamPage> {
 
   void _refresh() {
     if (!mounted || !hostPlatformSupported()) return;
-    if (Platform.isAndroid) unawaited(_refreshRemoteInput());
+    if (Platform.isAndroid) {
+      unawaited(_refreshRemoteInput());
+      unawaited(_refreshAndroidCapture());
+    }
     final next = hostSnapshot();
     setState(() => _snap = next);
     _syncViewerNotification(next.viewers);
@@ -239,6 +245,14 @@ class _BeamPageState extends State<BeamPage> {
       _shownApprovalId = pending.id;
       unawaited(_showApprovalDialog(pending));
     }
+  }
+
+  Future<void> _refreshAndroidCapture() async {
+    try {
+      final active =
+          await _screencast.invokeMethod<bool>('isCaptureActive') ?? false;
+      if (mounted && active != _beaming) setState(() => _beaming = active);
+    } catch (_) {}
   }
 
   void _syncViewerNotification(List<HostClientInfo> viewers) {
@@ -328,8 +342,9 @@ class _BeamPageState extends State<BeamPage> {
 
     final theme = Theme.of(context);
 
-    // Android needs a fresh MediaProjection grant before its host can listen.
-    if (Platform.isAndroid && !_beaming) {
+    // Keep the Android setup page approachable before the idle host snapshot
+    // arrives. Once listening, show the same ready/pairing UI as desktop.
+    if (Platform.isAndroid && !_beaming && !_snap.running) {
       return Scaffold(
         appBar: streamBeamAppBar(),
         body: Center(
