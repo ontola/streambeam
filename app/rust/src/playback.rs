@@ -23,6 +23,7 @@ static REMOTE_CLIPBOARD: Mutex<Option<String>> = Mutex::new(None);
 const NO_DISPLAY: u32 = u32::MAX;
 static REQUESTED_DISPLAY: AtomicU32 = AtomicU32::new(NO_DISPLAY);
 static HOST_ACCEPTS_TOUCH: AtomicU32 = AtomicU32::new(0);
+static REMOTE_STOP_REQUESTED: AtomicU32 = AtomicU32::new(0);
 static ACTIVE_CONNECTION: Mutex<Option<quinn::Connection>> = Mutex::new(None);
 
 /// Keeps the currently visible playback connection addressable from the UI's
@@ -68,6 +69,11 @@ pub fn reset() {
     FRAMES_RENDERED.store(0, Ordering::Relaxed);
     BYTES_RECEIVED.store(0, Ordering::Relaxed);
     NETWORK_RTT_US.store(0, Ordering::Relaxed);
+    REMOTE_STOP_REQUESTED.store(0, Ordering::Relaxed);
+}
+
+pub fn remote_stop_requested() -> bool {
+    REMOTE_STOP_REQUESTED.load(Ordering::Relaxed) != 0
 }
 
 pub fn set_session(width: u16, height: u16, fps: u8, codec: String) {
@@ -129,11 +135,20 @@ pub fn take_remote_clipboard() -> Option<String> {
     REMOTE_CLIPBOARD.lock().unwrap().take()
 }
 
-pub async fn receive_control(mut recv: quinn::RecvStream) {
+pub async fn receive_control(mut recv: quinn::RecvStream, conn: quinn::Connection) {
     let mut buf = Vec::new();
     while let Ok(message) = streambeam_net::read_msg::<HostMsg>(&mut recv, &mut buf).await {
-        if let HostMsg::ClipboardText { text } = message {
-            receive_remote_clipboard(text);
+        match message {
+            HostMsg::ClipboardText { text } => receive_remote_clipboard(text),
+            HostMsg::Bye => {
+                // Wake the media read immediately. Its error completes the
+                // Rust playback future/stream, and Flutter tears down the
+                // frozen last frame in the same turn.
+                REMOTE_STOP_REQUESTED.store(1, Ordering::Relaxed);
+                conn.close(0u32.into(), b"host stopped stream");
+                break;
+            }
+            _ => {}
         }
     }
 }

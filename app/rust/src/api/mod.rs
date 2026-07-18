@@ -672,10 +672,12 @@ async fn desktop_stream_loop(
         crate::input::set_sender(Some(tx));
         InputPumpGuard(tokio::spawn(crate::input::pump(input_send, rx)))
     });
-    let _control_guard = session
-        .recv
-        .take()
-        .map(|recv| InputPumpGuard(tokio::spawn(crate::playback::receive_control(recv))));
+    let _control_guard = session.recv.take().map(|recv| {
+        InputPumpGuard(tokio::spawn(crate::playback::receive_control(
+            recv,
+            session.conn.clone(),
+        )))
+    });
 
     let codec_config = session
         .codec_config
@@ -730,10 +732,14 @@ async fn desktop_stream_loop(
     const RECOVERY_COOLDOWN: Duration = Duration::from_secs(3);
     let mut last_recovery = None::<tokio::time::Instant>;
     loop {
-        let first = tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram())
-            .await
-            .map_err(|_| "timed out waiting for media".to_string())?
-            .map_err(|e| e.to_string())?;
+        let first =
+            match tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram()).await
+            {
+                Ok(Ok(datagram)) => datagram,
+                Ok(Err(_)) if crate::playback::remote_stop_requested() => break,
+                Ok(Err(e)) => return Err(e.to_string()),
+                Err(_) => return Err("timed out waiting for media".to_string()),
+            };
         crate::playback::note_network_rtt(session.conn.stats().path.rtt);
 
         // Greedily grab anything already sitting in the receive queue too —

@@ -143,7 +143,7 @@ pub struct ClientEntry {
     pub name: String,
     pub addr: SocketAddr,
     pub pubkey: [u8; 32],
-    conn: quinn::Connection,
+    disconnect: tokio::sync::watch::Sender<bool>,
 }
 
 impl Default for HostControls {
@@ -240,7 +240,7 @@ impl HostControls {
         let Some(entry) = clients.iter().find(|c| c.addr == addr) else {
             return false;
         };
-        entry.conn.close(0u32.into(), b"disconnected by host");
+        entry.disconnect.send_replace(true);
         true
     }
 
@@ -252,7 +252,7 @@ impl HostControls {
             let Some(entry) = clients.iter().find(|c| c.addr == addr) else {
                 return false;
             };
-            entry.conn.close(0u32.into(), b"removed by host");
+            entry.disconnect.send_replace(true);
             entry.pubkey
         };
         if let Some((store, path)) = &*self.pairing.lock().unwrap() {
@@ -796,11 +796,12 @@ async fn handle_client(
     }
 
     // Accepted — track it in the shared list until this handler returns.
+    let (disconnect_tx, mut disconnect_rx) = tokio::sync::watch::channel(false);
     controls.add_client(ClientEntry {
         name: client_name.clone(),
         addr: conn.remote_address(),
         pubkey: client_pk,
-        conn: conn.clone(),
+        disconnect: disconnect_tx,
     });
     let _client_guard = ClientGuard {
         controls: controls.clone(),
@@ -860,6 +861,20 @@ async fn handle_client(
                 if streaming {
                     let text = clipboard_rx.borrow_and_update().1.clone();
                     write_msg(&mut send, &HostMsg::ClipboardText { text }).await?;
+                }
+                None
+            }
+            changed = disconnect_rx.changed() => {
+                if changed.is_err() || *disconnect_rx.borrow_and_update() {
+                    // Tell the viewer why media is ending on the reliable
+                    // control stream. Closing QUIC alone can leave a client
+                    // displaying its last decoded frame until its media-read
+                    // timeout notices the lost producer.
+                    let _ = write_msg(&mut send, &HostMsg::Bye).await;
+                    // Give Quinn one scheduling turn to put Bye on the wire
+                    // before CONNECTION_CLOSE supersedes pending stream data.
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    break;
                 }
                 None
             }
@@ -1525,7 +1540,24 @@ async fn stream_audio(
 
 #[cfg(test)]
 mod clipboard_tests {
-    use super::HostControls;
+    use super::{ClientEntry, HostControls};
+
+    #[tokio::test]
+    async fn disconnect_signals_the_connection_handler() {
+        let controls = HostControls::new();
+        let addr = "127.0.0.1:47990".parse().unwrap();
+        let (disconnect, mut requested) = tokio::sync::watch::channel(false);
+        controls.add_client(ClientEntry {
+            name: "viewer".into(),
+            addr,
+            pubkey: [7; 32],
+            disconnect,
+        });
+
+        assert!(controls.disconnect(addr));
+        requested.changed().await.unwrap();
+        assert!(*requested.borrow_and_update());
+    }
 
     #[tokio::test]
     async fn host_clipboard_is_published_to_viewers() {

@@ -371,7 +371,7 @@ async fn play_session(
     let control_task = session
         .recv
         .take()
-        .map(|recv| runtime.spawn(crate::playback::receive_control(recv)));
+        .map(|recv| runtime.spawn(crate::playback::receive_control(recv, session.conn.clone())));
 
     let result = tokio::task::spawn_blocking(move || {
         play_session_blocking(session, native_window, max_video_frames, runtime)
@@ -512,7 +512,7 @@ fn play_session_blocking(
         // real, measurable overhead entering the async runtime thousands of
         // times a second, showing up as sustained high CPU use and starving
         // other tasks on the same runtime (e.g. the input-forwarding task).
-        let batch = runtime.block_on(async {
+        let batch_result = runtime.block_on(async {
             let first = tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())
                 .await
                 .map_err(|_| "Timed out waiting for video from host.".to_string())?
@@ -534,7 +534,12 @@ fn play_session_blocking(
                 }
             }
             Ok::<_, String>(batch)
-        })?;
+        });
+        let batch = match batch_result {
+            Ok(batch) => batch,
+            Err(_) if crate::playback::remote_stop_requested() => break,
+            Err(e) => return Err(e),
+        };
         crate::playback::note_network_rtt(session.conn.stats().path.rtt);
         // A single access unit is FEC-sharded into many ~1200-byte datagrams
         // (see MAX_SHARD_PAYLOAD) — a 15 KB P-frame is a dozen-plus shards
