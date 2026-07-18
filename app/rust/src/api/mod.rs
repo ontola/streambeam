@@ -731,6 +731,18 @@ async fn desktop_stream_loop(
     // `IDR_REQUEST_COOLDOWN` in `app/rust/src/android/play.rs`).
     const RECOVERY_COOLDOWN: Duration = Duration::from_secs(3);
     let mut last_recovery = None::<tokio::time::Instant>;
+    // Latched the moment a non-keyframe completion is skipped (see the
+    // behind-skip below): every subsequent P-frame references frames the
+    // decoder was never fed, so feeding them "decodes" into progressively
+    // drifting garbage rather than erroring. Once set, nothing but a
+    // keyframe is fed — and an IDR is requested (cooldown permitting) so
+    // the blank-out is bounded by round-trip + encode, not by the GOP.
+    // Root-caused 2026-07-18: the skip used to apply per drain-batch only,
+    // so one "behind" burst (keyframe delivery, a UI stall) broke the
+    // reference chain and then resumed feeding broken P-frames anyway —
+    // the persistent purple-smear corruption on the macOS viewer, on a
+    // bitstream a reference decoder replayed bit-clean.
+    let mut awaiting_keyframe = false;
     loop {
         let first =
             match tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram()).await
@@ -786,12 +798,18 @@ async fn desktop_stream_loop(
         for (keyframe, frame) in completions {
             // Always decode a keyframe (resets the reference chain and is
             // worth showing even a little late). Otherwise, while behind,
-            // skip every non-keyframe completion — feeding a lone P-frame
-            // whose reference chain was just broken by skipped-ahead frames
-            // decodes "successfully" into garbage rather than erroring,
-            // indistinguishable from corrupted video (same failure mode
-            // Android's play.rs documents for MediaCodec).
-            if behind && !keyframe {
+            // skip every non-keyframe completion — and once even one
+            // P-frame is skipped, keep skipping (`awaiting_keyframe`) until
+            // a keyframe actually restores the reference chain: feeding a
+            // P-frame whose references were skipped decodes "successfully"
+            // into garbage rather than erroring, indistinguishable from
+            // corrupted video (same failure mode Android's play.rs
+            // documents for MediaCodec), and it stays garbage for the rest
+            // of the GOP.
+            if keyframe {
+                awaiting_keyframe = false;
+            } else if behind || awaiting_keyframe {
+                awaiting_keyframe = true;
                 continue;
             }
             // "Rendered" here means handed to the platform decoder — the
@@ -879,6 +897,12 @@ async fn desktop_stream_loop(
                     let _ = streambeam_core::request_idr(&mut session).await;
                 }
             }
+        } else if cooled_down && awaiting_keyframe {
+            // Skip-driven resync: we're deliberately feeding nothing until a
+            // keyframe (see `awaiting_keyframe`), so make one arrive sooner
+            // than the periodic GOP keyframe would.
+            last_recovery = Some(tokio::time::Instant::now());
+            let _ = streambeam_core::request_idr(&mut session).await;
         }
     }
 

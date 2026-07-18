@@ -482,6 +482,14 @@ fn play_session_blocking(
     // How many decodable (non-keyframe) completions we've skipped in a row
     // because we were catching up on a backlog — see the loop body.
     let mut consecutive_skipped = 0u32;
+    // Latched when a non-keyframe completion is skipped: every P-frame after
+    // a skip references frames the decoder never saw, so feeding them
+    // decodes into progressively drifting garbage (not an error). Once set,
+    // only a keyframe is fed — the `consecutive_skipped` resync below keeps
+    // the wait bounded. Same fix as the desktop loop in `api/mod.rs`
+    // (2026-07-18), where the per-batch-only skip was root-caused as the
+    // persistent purple corruption on a bit-clean stream.
+    let mut awaiting_keyframe = false;
     // Raised from 8 after real-device testing on a fast, clean LAN (RTT
     // <20ms, host reporting 0 lost/congested packets) still showed a
     // `RequestIdr`/`InvalidateRefFrames` every 2-4s at this threshold — each
@@ -606,7 +614,10 @@ fn play_session_blocking(
             // output rather than erroring — indistinguishable from a black
             // screen. Better to show nothing until the next keyframe resyncs
             // the reference chain than to render corrupted frames.
-            if behind && !is_keyframe {
+            if is_keyframe {
+                awaiting_keyframe = false;
+            } else if behind || awaiting_keyframe {
+                awaiting_keyframe = true;
                 consecutive_skipped += 1;
                 diag.skipped_behind += 1;
                 stats.video_frames = asm.stats().frames_complete;
