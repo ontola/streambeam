@@ -294,6 +294,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   int _desktopWidth = 0;
   int _desktopHeight = 0;
   StreamSubscription<DesktopStreamEvent>? _desktopSub;
+  int _desktopPlaybackAttempt = 0;
   // MetalFX upscaling (macOS): on by default; the native side reports back
   // whether it's actually available on this machine.
   bool _upscaleEnabled = true;
@@ -850,6 +851,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   /// decoder (macOS) and show its texture.
   Future<void> _startDesktopPlayback(String payload) async {
     await _stopDesktopPlayback();
+    final attempt = _desktopPlaybackAttempt;
     setState(() {
       _busy = true;
       _status =
@@ -857,14 +859,17 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _statusIsError = false;
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
+    final allowAv1 = await _desktopCanAv1();
+    if (!mounted || attempt != _desktopPlaybackAttempt) return;
     _attachDesktopStream(
       playStreamDesktop(
         payload: payload,
-        allowAv1: await _desktopCanAv1(),
+        allowAv1: allowAv1,
         maxWidth: maxWidth,
         maxHeight: maxHeight,
         maxFps: maxFps,
       ),
+      attempt,
     );
   }
 
@@ -875,6 +880,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     String addr,
   ) async {
     await _stopDesktopPlayback();
+    final attempt = _desktopPlaybackAttempt;
     setState(() {
       _busy = true;
       _status =
@@ -882,23 +888,26 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _statusIsError = false;
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
+    final allowAv1 = await _desktopCanAv1();
+    if (!mounted || attempt != _desktopPlaybackAttempt) return;
     _attachDesktopStream(
       playStreamDesktopKnown(
         hostName: host.name,
         hostPubkey: host.hostPubkey,
         addr: addr,
-        allowAv1: await _desktopCanAv1(),
+        allowAv1: allowAv1,
         maxWidth: maxWidth,
         maxHeight: maxHeight,
         maxFps: maxFps,
       ),
+      attempt,
     );
   }
 
-  void _attachDesktopStream(Stream<DesktopStreamEvent> stream) {
+  void _attachDesktopStream(Stream<DesktopStreamEvent> stream, int attempt) {
     _desktopSub = stream.listen(
       (ev) async {
-        if (!mounted) return;
+        if (!mounted || attempt != _desktopPlaybackAttempt) return;
         if (ev.isConfig) {
           // Sent once at session start and again on an in-band
           // reconfiguration (the host device rotated): rebuild the native
@@ -929,7 +938,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 h = rh;
               }
             }
-            if (id != null && mounted) {
+            if (id != null && mounted && attempt == _desktopPlaybackAttempt) {
               setState(() {
                 _desktopTextureId = id;
                 _desktopAspect = h > 0 ? w / h : 16 / 9;
@@ -950,10 +959,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         }
       },
       onError: (e) {
+        if (attempt != _desktopPlaybackAttempt) return;
         _reportError(_humanizeError(e.toString()));
         unawaited(_stopDesktopPlayback());
       },
-      onDone: () => unawaited(_stopDesktopPlayback()),
+      onDone: () {
+        if (attempt == _desktopPlaybackAttempt) {
+          unawaited(_stopDesktopPlayback());
+        }
+      },
     );
   }
 
@@ -984,6 +998,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     // cancel + native decoder dispose) continues in the background — the
     // dispose call queues behind any backlog of in-flight 'frame' messages
     // on the platform channel and can take a moment.
+    _desktopPlaybackAttempt++;
     final sub = _desktopSub;
     _desktopSub = null;
     stopPlayback();
@@ -1384,6 +1399,14 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     unawaited(_syncScanner());
   }
 
+  void _cancelConnectionAttempt() {
+    if (Platform.isAndroid) {
+      _stopStreaming();
+      return;
+    }
+    unawaited(_stopDesktopPlayback());
+  }
+
   String _normalizePayload(String raw) {
     return raw.replaceAll(RegExp(r'\s+'), '');
   }
@@ -1550,14 +1573,82 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       ],
     );
 
-    return Scaffold(
-      body: SafeArea(
-        top: false,
-        child: RefreshIndicator(
-          onRefresh: () async {
-            await Future.wait([_discoverHosts(), _refreshClipboard()]);
-          },
-          child: scrollView,
+    final showConnectingOverlay =
+        _busy && !_showVideo && _desktopTextureId == null;
+
+    return PopScope(
+      canPop: !showConnectingOverlay,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && showConnectingOverlay) {
+          _cancelConnectionAttempt();
+        }
+      },
+      child: Scaffold(
+        body: Stack(
+          children: [
+            SafeArea(
+              top: false,
+              child: RefreshIndicator(
+                onRefresh: () async {
+                  await Future.wait([_discoverHosts(), _refreshClipboard()]);
+                },
+                child: scrollView,
+              ),
+            ),
+            if (showConnectingOverlay) ...[
+              const Positioned.fill(
+                child: ModalBarrier(
+                  dismissible: false,
+                  color: Color(0x99000000),
+                ),
+              ),
+              Positioned.fill(
+                child: SafeArea(
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Card(
+                        elevation: 12,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 460),
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const CircularProgressIndicator(),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Connecting…',
+                                  style: Theme.of(context).textTheme.titleLarge,
+                                ),
+                                if (_status != null) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    _status!,
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodyLarge,
+                                  ),
+                                ],
+                                const SizedBox(height: 24),
+                                FilledButton.tonalIcon(
+                                  onPressed: _cancelConnectionAttempt,
+                                  icon: const Icon(Icons.close),
+                                  label: const Text('Cancel'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

@@ -1059,6 +1059,20 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                       style: theme.textTheme.bodyLarge
                                           ?.copyWith(color: Colors.white),
                                     ),
+                                    const SizedBox(height: 24),
+                                    FilledButton.tonalIcon(
+                                      onPressed: _handleStop,
+                                      icon: Icon(
+                                        widget.statusIsError
+                                            ? Icons.stop_circle_outlined
+                                            : Icons.close,
+                                      ),
+                                      label: Text(
+                                        widget.statusIsError
+                                            ? 'Stop'
+                                            : 'Cancel',
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
