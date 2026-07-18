@@ -4,6 +4,8 @@ import UserNotifications
 
 @_silgen_name("streambeam_macos_capture_wanted")
 private func rustCaptureWanted() -> UInt8
+@_silgen_name("streambeam_macos_capture_requested_max_dimension")
+private func rustCaptureRequestedMaxDimension() -> UInt32
 
 class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   private static let activeStreamNotificationId = "streambeam.active-viewers"
@@ -115,7 +117,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       Task { @MainActor [weak self] in
         guard let self else { return }
         do {
-          try await capture.start(maxDimension: 1920)
+          try await capture.start(maxDimension: Int(rustCaptureRequestedMaxDimension()))
           if rustCaptureWanted() != 0 {
             self.screenCapture = capture
             self.screencastChannel?.invokeMethod(

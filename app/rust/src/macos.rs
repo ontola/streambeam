@@ -31,6 +31,12 @@ pub extern "C" fn streambeam_macos_capture_requested_display() -> u32 {
     streambeam_host::macos_screen::requested_display().unwrap_or(u32::MAX)
 }
 
+/// Longest encoded side selected by the watching client's stream profile.
+#[unsafe(no_mangle)]
+pub extern "C" fn streambeam_macos_capture_requested_max_dimension() -> u32 {
+    streambeam_host::macos_screen::requested_max_dimension()
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn streambeam_macos_capture_set_displays(
     json: *const u8,

@@ -26,6 +26,9 @@ struct ScreenSource {
     /// Set while an authorized client owns the active stream. The Swift
     /// runner polls this and starts/stops ScreenCaptureKit on demand.
     capture_wanted: AtomicBool,
+    /// Longest encoded side requested by the client that owns the stream.
+    /// Swift reads this immediately before starting ScreenCaptureKit.
+    requested_max_dimension: AtomicU32,
     width: AtomicU32,
     height: AtomicU32,
     requested_display: AtomicU32,
@@ -40,6 +43,7 @@ static SOURCE: ScreenSource = ScreenSource {
     idr_requested: AtomicBool::new(false),
     active: AtomicBool::new(false),
     capture_wanted: AtomicBool::new(false),
+    requested_max_dimension: AtomicU32::new(1920),
     width: AtomicU32::new(0),
     height: AtomicU32::new(0),
     requested_display: AtomicU32::new(NO_DISPLAY),
@@ -111,8 +115,18 @@ pub fn is_ready() -> bool {
     SOURCE.active.load(Ordering::Relaxed) && SOURCE.codec_config.lock().unwrap().is_some()
 }
 
-pub fn request_capture() {
+pub fn request_capture(max_dimension: u32) {
+    SOURCE
+        .requested_max_dimension
+        .store(max_dimension.max(2), Ordering::Release);
     SOURCE.capture_wanted.store(true, Ordering::Release);
+}
+
+pub fn requested_max_dimension() -> u32 {
+    SOURCE
+        .requested_max_dimension
+        .load(Ordering::Acquire)
+        .max(2)
 }
 
 pub fn release_capture() {
@@ -178,8 +192,9 @@ mod tests {
     fn native_frames_flow_through_bounded_encoder_queue() {
         end_session();
         release_capture();
-        request_capture();
+        request_capture(1280);
         assert!(capture_wanted());
+        assert_eq!(requested_max_dimension(), 1280);
         begin_session(1920, 1080, 1, 0.0, 0.0, 1920.0, 1080.0);
         assert!(!is_ready());
         submit(vec![0, 0, 0, 1, 0x67], true, true);
