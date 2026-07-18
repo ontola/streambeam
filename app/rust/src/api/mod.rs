@@ -4,7 +4,7 @@ use streambeam_core::{
     FrameReassembler, SavedHost, clear_saved_host, connect_as_identity, load_saved_host,
     save_saved_host,
 };
-use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
+use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
 
 use crate::store::{client_identity_path, saved_host_path};
 
@@ -721,6 +721,7 @@ async fn desktop_stream_loop(
     let _ = streambeam_core::request_idr(&mut session).await;
 
     let mut asm = FrameReassembler::default();
+    let audio = crate::audio_play::AudioPlayback::start();
     // A forced IDR or ref-frame invalidation costs the host a live NVENC
     // reconfigure (see `crates/host/src/capture.rs`/`nvenc.rs` — no longer a
     // full session recreate, but still real work and, per real-device
@@ -770,6 +771,9 @@ async fn desktop_stream_loop(
             crate::playback::note_bytes_received(datagram.len() as u64);
             let header = MediaHeader::decode(&datagram).map_err(|e| e.to_string())?;
             if header.channel != CHANNEL_VIDEO {
+                if header.channel == CHANNEL_AUDIO && datagram.len() > MEDIA_HEADER_LEN {
+                    audio.push(&datagram[MEDIA_HEADER_LEN..]);
+                }
                 continue;
             }
             if let Some((_id, frame)) = asm.push_datagram(&datagram).map_err(|e| e.to_string())? {

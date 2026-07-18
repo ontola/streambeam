@@ -1,9 +1,56 @@
+import AVFoundation
 import AppKit
 import FlutterMacOS
 import Foundation
 import Metal
 import MetalFX
 import VideoToolbox
+
+@_silgen_name("streambeam_macos_audio_fill")
+private func rustAudioFill(_ out: UnsafeMutablePointer<Float32>, _ count: Int)
+
+/// Watch-role audio output. An `AVAudioSourceNode` pulls interleaved 48 kHz
+/// stereo f32 straight from Rust's decoded-Opus ring (the mirror image of the
+/// capture-side FFI — no audio bytes touch Dart). Rust hands back silence when
+/// no watch session is active, so the engine simply runs between `configure`
+/// and `dispose` of the video channel.
+final class StreamBeamAudioOut {
+  private let engine = AVAudioEngine()
+  private var source: AVAudioSourceNode?
+  private var running = false
+
+  func start() {
+    guard !running else { return }
+    guard
+      let format = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true)
+    else { return }
+    let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+      let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+      guard let buffer = buffers.first, let data = buffer.mData else { return noErr }
+      rustAudioFill(data.assumingMemoryBound(to: Float32.self), Int(frameCount) * 2)
+      return noErr
+    }
+    engine.attach(node)
+    engine.connect(node, to: engine.mainMixerNode, format: format)
+    do {
+      try engine.start()
+      source = node
+      running = true
+    } catch {
+      NSLog("StreamBeam: audio output engine failed to start: %@", error.localizedDescription)
+      engine.detach(node)
+    }
+  }
+
+  func stop() {
+    guard running else { return }
+    engine.stop()
+    if let source { engine.detach(source) }
+    source = nil
+    running = false
+  }
+}
 
 /// Desktop (macOS) watch: hardware-decodes the H.264 stream from Rust with
 /// VideoToolbox and exposes the frames as a Flutter texture. Rust

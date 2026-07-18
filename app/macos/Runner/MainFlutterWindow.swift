@@ -17,6 +17,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     label: "io.streambeam.notifications", qos: .utility)
   private var videoChannel: FlutterMethodChannel?
   private var video: StreamBeamVideo?
+  private let audioOut = StreamBeamAudioOut()
   private var discoveryChannel: FlutterMethodChannel?
   private var deviceChannel: FlutterMethodChannel?
   private var screencastChannel: FlutterMethodChannel?
@@ -302,6 +303,8 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
         if v.configure(codecConfig: config, codec: codec, width: width, height: height) {
           self.video?.dispose()
           self.video = v
+          // Idempotent: a mid-session reconfigure keeps the engine running.
+          self.audioOut.start()
           let dims = v.videoDimensions
           result([
             "textureId": Int(v.textureId),
@@ -323,6 +326,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       case "dispose":
         self.video?.dispose()
         self.video = nil
+        self.audioOut.stop()
         result(nil)
       default:
         result(FlutterMethodNotImplemented)

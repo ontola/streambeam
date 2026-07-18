@@ -11,6 +11,8 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
 log = "0.4"
+# Watch-role Opus decode; playback sinks are per-target below.
+opus = "0.3"
 # Same quinn the core crates use — only for reading Connection::stats() in
 # the playback diagnostics (ClientSession::conn is a quinn::Connection).
 quinn = "0.11"
@@ -32,7 +34,7 @@ streambeam-host = { path = "../../crates/host" }
 streambeam-host = { path = "../../crates/host", default-features = false }
 android_logger = "0.14"
 jni = "0.21"
-ndk = { version = "0.9", features = ["media", "nativewindow"] }
+ndk = { version = "0.9", features = ["media", "nativewindow", "audio"] }
 ndk-sys = "0.6"
 
 [lints.rust]

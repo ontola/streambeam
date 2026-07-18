@@ -17,7 +17,7 @@ use streambeam_core::{
     nal_with_start_code, request_idr, request_invalidate_ref_frames, save_saved_host,
 };
 use streambeam_proto::control::VideoCaps;
-use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
+use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
 
 use crate::api::StreamStats;
 use crate::store::client_identity_path;
@@ -460,6 +460,7 @@ fn play_session_blocking(
     };
 
     let mut asm = FrameReassembler::default();
+    let audio = crate::audio_play::AudioPlayback::start();
     let target = if max_video_frames == 0 {
         u64::MAX
     } else {
@@ -565,6 +566,9 @@ fn play_session_blocking(
             let header = MediaHeader::decode(datagram).map_err(|e| e.to_string())?;
             if header.channel == CHANNEL_AUDIO {
                 stats.audio_packets += 1;
+                if datagram.len() > MEDIA_HEADER_LEN {
+                    audio.push(&datagram[MEDIA_HEADER_LEN..]);
+                }
                 continue;
             }
 
