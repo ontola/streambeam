@@ -1982,30 +1982,32 @@ class _StreamMenu extends StatelessWidget {
                       metrics.bottom,
                     ),
                     children: [
-                      if (showDiagnostics) ...[
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            metrics.horizontal + 4,
-                            compact ? 4 : 8,
-                            metrics.horizontal + 4,
-                            compact ? 2 : 4,
-                          ),
-                          child: Text(
-                            'Connection',
-                            style: theme.textTheme.titleSmall,
-                          ),
+                      ListTile(
+                        leading: Icon(
+                          Icons.stop_circle_outlined,
+                          size: compact ? 22 : 24,
                         ),
-                        Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: metrics.horizontal,
+                        title: const Text('Stop'),
+                        visualDensity: tileDensity,
+                        contentPadding: tilePadding,
+                        onTap: onStop,
+                      ),
+                      if (touchControls)
+                        ListTile(
+                          leading: Icon(
+                            Icons.keyboard_outlined,
+                            size: compact ? 22 : 24,
                           ),
-                          child: _DiagnosticsPanel(
-                            diagnostics: diagnostics,
-                            compact: compact,
+                          title: const Text('Keyboard'),
+                          subtitle: Text(
+                            'Send text to your PC',
+                            style: theme.textTheme.bodySmall,
                           ),
+                          visualDensity: tileDensity,
+                          contentPadding: tilePadding,
+                          onTap: onKeyboard,
                         ),
-                        const Divider(height: 1),
-                      ],
+                      const Divider(height: 1),
                       if (displays.length > 1) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(
@@ -2306,32 +2308,6 @@ class _StreamMenu extends StatelessWidget {
                             contentPadding: tilePadding,
                           ),
                       ],
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(
-                          Icons.stop_circle_outlined,
-                          size: compact ? 22 : 24,
-                        ),
-                        title: const Text('Stop'),
-                        visualDensity: tileDensity,
-                        contentPadding: tilePadding,
-                        onTap: onStop,
-                      ),
-                      if (touchControls)
-                        ListTile(
-                          leading: Icon(
-                            Icons.keyboard_outlined,
-                            size: compact ? 22 : 24,
-                          ),
-                          title: const Text('Keyboard'),
-                          subtitle: Text(
-                            'Send text to your PC',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          visualDensity: tileDensity,
-                          contentPadding: tilePadding,
-                          onTap: onKeyboard,
-                        ),
                       Padding(
                         padding: EdgeInsets.fromLTRB(
                           metrics.horizontal + 4,
@@ -2353,6 +2329,30 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (showDiagnostics) ...[
+                        const Divider(height: 1),
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            metrics.horizontal + 4,
+                            compact ? 4 : 8,
+                            metrics.horizontal + 4,
+                            compact ? 2 : 4,
+                          ),
+                          child: Text(
+                            'Connection',
+                            style: theme.textTheme.titleSmall,
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.horizontal,
+                          ),
+                          child: _DiagnosticsPanel(
+                            diagnostics: diagnostics,
+                            compact: compact,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
