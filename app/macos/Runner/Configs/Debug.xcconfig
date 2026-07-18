@@ -1,2 +1,7 @@
 #include "../../Flutter/Flutter-Debug.xcconfig"
 #include "Warnings.xcconfig"
+
+// Ad-hoc signing makes macOS TCC identify every rebuilt binary by a new
+// CDHash. The setup script creates this optional machine-local override.
+STREAMBEAM_CODE_SIGN_IDENTITY = -
+#include? "LocalSigning.xcconfig"

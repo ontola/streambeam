@@ -19,4 +19,5 @@ app/.dart_tool/
 app/build/
 app/android/.gradle/
 app/rust/target/
+app/macos/Runner/Configs/LocalSigning.xcconfig
 /build/
