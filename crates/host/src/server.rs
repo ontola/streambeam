@@ -1237,6 +1237,19 @@ async fn stream_video(
     const SENT_FRAME_MAP_LEN: usize = 128;
     let mut sent_frames: std::collections::VecDeque<(u16, u64)> =
         std::collections::VecDeque::with_capacity(SENT_FRAME_MAP_LEN);
+    // How many upcoming frames get a full OBU-layout trace in the log (see
+    // the diagnostics block in the send loop). Starts armed for the session
+    // opening; re-armed after recovery/reconfigure events so the log shows
+    // what those actually do to the bitstream structure.
+    let mut obu_trace_left: u32 = 6;
+    // Debug tee of the exact encoded bitstream this session sends (raw
+    // concatenated access units — for AV1 that's a low-overhead OBU stream
+    // ffmpeg can decode directly). Lets a reference decoder rule the host's
+    // output in or out when a client shows corruption the host log can't
+    // explain. Opt-in via env; truncates per session.
+    let mut video_dump = std::env::var("STREAMBEAM_DUMP_VIDEO")
+        .ok()
+        .and_then(|p| std::fs::File::create(p).ok());
     // Rolling per-report-window timing, to find where per-frame latency goes:
     // waiting on the encoder (capture+encode+channel round trip), FEC sharding,
     // or actually pushing shards onto the wire.
@@ -1367,6 +1380,7 @@ async fn stream_video(
                 })
                 .collect();
             let mut enc = encoder.lock().await;
+            obu_trace_left = obu_trace_left.max(2);
             if span <= 64 && timestamps.len() == span {
                 enc.invalidate_ref_timestamps(&timestamps);
             } else {
@@ -1390,6 +1404,30 @@ async fn stream_video(
             window_empty_ticks += 1;
             continue;
         };
+
+        // Diagnostics for the Windows→Mac AV1 corruption hunt (2026-07-18):
+        // keyframes are far too rare for the 1/s sampled log line to ever
+        // catch one, and the client's redundant-header stripping makes
+        // structural assumptions about the temporal unit that no log has
+        // ever verified against what NVENC actually emits. Log every
+        // keyframe, and OBU-trace the first few frames per session plus the
+        // frames right after a recovery/reconfigure event (armed below).
+        if frame.keyframe {
+            log!("sent keyframe {frame_id} ({} bytes)", frame.data.len());
+        }
+        if let Some(f) = video_dump.as_mut() {
+            use std::io::Write;
+            let _ = f.write_all(&frame.data);
+        }
+        if obu_trace_left > 0 {
+            obu_trace_left -= 1;
+            log!(
+                "frame {frame_id} trace: keyframe={}, {} bytes, obus=[{}]",
+                frame.keyframe,
+                frame.data.len(),
+                streambeam_core::av1_obu_type_summary(&frame.data)
+            );
+        }
 
         let t_shard = std::time::Instant::now();
         let shards = match encode_video_frame(
@@ -1506,6 +1544,7 @@ async fn stream_video(
                 applied_bitrate_kbps = current_bitrate_kbps;
                 encoder.lock().await.set_bitrate(applied_bitrate_kbps);
                 last_bitrate_recreate = std::time::Instant::now();
+                obu_trace_left = obu_trace_left.max(2);
             }
 
             let frames_this_window = u128::from(window_frame_count.max(1));

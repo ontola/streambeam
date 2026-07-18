@@ -17,7 +17,6 @@ struct Obu<'a> {
 /// AV1 spec section 6.2.2, Table 6: the OBU types we actually branch on.
 const OBU_TYPE_SEQUENCE_HEADER: u8 = 1;
 const OBU_TYPE_FRAME_HEADER: u8 = 3;
-#[cfg(test)]
 const OBU_TYPE_FRAME: u8 = 6;
 const OBU_TYPE_REDUNDANT_FRAME_HEADER: u8 = 7;
 
@@ -89,6 +88,37 @@ pub fn access_unit_is_keyframe(data: &[u8]) -> bool {
     split_obus(data)
         .iter()
         .any(|obu| obu.obu_type == OBU_TYPE_SEQUENCE_HEADER)
+}
+
+/// Debug aid: the OBU layout of a temporal unit as `TYPE(payload_len)`
+/// entries, e.g. `TD(0),SH(12),F(8931)`. Unknown/rare types print their
+/// numeric type id. Used by the host to log what an encoder actually emits —
+/// keyframe detection and the client's redundant-header stripping both make
+/// structural assumptions (sequence-header presence, `FH` being redundant)
+/// that have already been wrong for one real encoder.
+pub fn obu_type_summary(data: &[u8]) -> String {
+    split_obus(data)
+        .iter()
+        .map(|obu| {
+            let name = match obu.obu_type {
+                OBU_TYPE_SEQUENCE_HEADER => "SH",
+                2 => "TD",
+                OBU_TYPE_FRAME_HEADER => "FH",
+                4 => "TG",
+                5 => "META",
+                OBU_TYPE_FRAME => "F",
+                OBU_TYPE_REDUNDANT_FRAME_HEADER => "RFH",
+                15 => "PAD",
+                _ => "",
+            };
+            if name.is_empty() {
+                format!("{}({})", obu.obu_type, obu.payload.len())
+            } else {
+                format!("{name}({})", obu.payload.len())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Extract the sequence header OBU (header + size field included, so it's a
