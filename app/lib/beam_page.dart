@@ -84,6 +84,7 @@ class _BeamPageState extends State<BeamPage> {
   bool _starting = false;
   String? _status;
   bool _statusError = false;
+  String? _shownHostError;
   BigInt? _shownApprovalId;
   String _notifiedViewers = '';
 
@@ -107,7 +108,10 @@ class _BeamPageState extends State<BeamPage> {
     if (Platform.isMacOS) {
       _screencast.setMethodCallHandler(_handleNativeCaptureEvent);
     }
-    _poll = Timer.periodic(const Duration(milliseconds: 250), (_) => _refresh());
+    _poll = Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) => _refresh(),
+    );
     if (Platform.isAndroid) unawaited(_refreshRemoteInput());
   }
 
@@ -238,7 +242,12 @@ class _BeamPageState extends State<BeamPage> {
     setState(() => _snap = next);
     _syncViewerNotification(next.viewers);
     if (next.error != null && next.error!.isNotEmpty) {
-      _setStatus(next.error!, error: true);
+      if (_shownHostError != next.error) {
+        _shownHostError = next.error;
+        _setStatus(next.error!, error: true);
+      }
+    } else {
+      _shownHostError = null;
     }
     final pending = next.pendingApproval;
     if (pending != null && pending.id != _shownApprovalId) {
@@ -268,9 +277,17 @@ class _BeamPageState extends State<BeamPage> {
 
   void _setStatus(String message, {bool error = false}) {
     if (!mounted) return;
+    if (error) {
+      showErrorToast(message);
+      setState(() {
+        _status = null;
+        _statusError = false;
+      });
+      return;
+    }
     setState(() {
       _status = message;
-      _statusError = error;
+      _statusError = false;
     });
   }
 
@@ -613,11 +630,7 @@ class _BeamPageState extends State<BeamPage> {
                       ),
                       if (_status != null) ...[
                         const SizedBox(height: 12),
-                        StatusNotice(
-                          message: _status!,
-                          isError: _statusError,
-                          onDismiss: () => setState(() => _status = null),
-                        ),
+                        StatusNotice(message: _status!, isError: false),
                       ],
                     ],
                   ),

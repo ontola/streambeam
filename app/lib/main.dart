@@ -94,6 +94,48 @@ class _TrayClickHandler with TrayListener {
 }
 
 final _trayClickHandler = _TrayClickHandler();
+final streamBeamMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
+/// Show an app-wide, floating error overlay. It belongs to MaterialApp rather
+/// than either tab, so errors remain visible while switching tabs and over the
+/// fullscreen player. A newer error replaces the current one instead of
+/// building a stale queue of notices.
+void showErrorToast(String message) {
+  final text = message.trim();
+  if (text.isEmpty) return;
+  final messenger = streamBeamMessengerKey.currentState;
+  if (messenger == null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => showErrorToast(text));
+    return;
+  }
+  final context = streamBeamMessengerKey.currentContext;
+  final colors = context == null
+      ? ColorScheme.fromSeed(seedColor: Colors.indigo)
+      : Theme.of(context).colorScheme;
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 8),
+        backgroundColor: colors.errorContainer,
+        showCloseIcon: true,
+        closeIconColor: colors.onErrorContainer,
+        content: Row(
+          children: [
+            Icon(Icons.error_outline, color: colors.onErrorContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(color: colors.onErrorContainer),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+}
 
 Future<void> _initTray() async {
   await trayManager.setIcon('assets/tray_icon.ico');
@@ -176,6 +218,7 @@ class StreamBeamApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'StreamBeam',
+      scaffoldMessengerKey: streamBeamMessengerKey,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
@@ -247,22 +290,22 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   void _setStatus(String message, {bool error = false}) {
     if (!mounted) return;
+    if (error) {
+      showErrorToast(_humanizeError(message));
+      setState(() {
+        _status = null;
+        _statusIsError = false;
+      });
+      return;
+    }
     setState(() {
       _status = message;
-      _statusIsError = error;
+      _statusIsError = false;
     });
   }
 
   void _reportError(String message) {
     _setStatus(_humanizeError(message), error: true);
-  }
-
-  void _dismissStatus() {
-    if (!mounted) return;
-    setState(() {
-      _status = null;
-      _statusIsError = false;
-    });
   }
 
   void _rememberStreamSize(StreamStats stats) {
@@ -321,12 +364,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     // used to. Only degenerate/unrecognized text falls through to the
     // fallback `return m` below.
     return m;
-  }
-
-  Future<void> _copyStatus() async {
-    final text = _status;
-    if (text == null) return;
-    await Clipboard.setData(ClipboardData(text: text));
   }
 
   void _cancelSurfaceTimeout() {
@@ -731,7 +768,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         _discoveryBusy = true;
-        _discoveryError = null;
       });
     }
     try {
@@ -762,12 +798,17 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       setState(() {
         _lanHosts = visibleHosts;
         _discoveryBusy = false;
+        _discoveryError = null;
       });
     } catch (e) {
       if (mounted) {
+        final message = _humanizeError(e.toString());
+        if (_discoveryError != message) showErrorToast(message);
         setState(() {
           _discoveryBusy = false;
-          _discoveryError = e.toString();
+          // Retained only to deduplicate repeated discovery polling failures;
+          // errors themselves are rendered by the app-wide toast.
+          _discoveryError = message;
         });
       }
     }
@@ -1186,9 +1227,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     } catch (e) {
       if (!_sessionAlive(sessionId)) return;
+      showErrorToast(_humanizeError(e.toString()));
       setState(() {
-        _status = _humanizeError(e.toString());
-        _statusIsError = true;
+        _status = null;
+        _statusIsError = false;
         _teardownVideo();
       });
     } finally {
@@ -1229,9 +1271,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     } catch (e) {
       if (!_sessionAlive(sessionId)) return;
+      showErrorToast(_humanizeError(e.toString()));
       setState(() {
-        _status = _humanizeError(e.toString());
-        _statusIsError = true;
+        _status = null;
+        _statusIsError = false;
         _teardownVideo();
       });
     } finally {
@@ -1433,7 +1476,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     hosts: _hostEntries(),
                     viewers: _viewers,
                     discovering: _discoveryBusy,
-                    discoveryError: _discoveryError,
                     onHostTap: _busy
                         ? null
                         : (h) => unawaited(_connectHostEntry(h)),
@@ -1444,14 +1486,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   ),
                   if (_status != null) ...[
                     const SizedBox(height: 12),
-                    StatusNotice(
-                      message: _status!,
-                      isError: _statusIsError,
-                      onCopy: _statusIsError
-                          ? () => unawaited(_copyStatus())
-                          : null,
-                      onDismiss: _statusIsError ? _dismissStatus : null,
-                    ),
+                    StatusNotice(message: _status!, isError: false),
                   ],
                   const SizedBox(height: 16),
                   // Add a host by QR or pasted code.
@@ -1633,7 +1668,6 @@ class _DevicesSection extends StatelessWidget {
     required this.hosts,
     required this.viewers,
     required this.discovering,
-    this.discoveryError,
     this.onHostTap,
     this.onForgetHost,
     this.onStopViewer,
@@ -1643,7 +1677,6 @@ class _DevicesSection extends StatelessWidget {
   final List<_HostListEntry> hosts;
   final List<HostClientInfo> viewers;
   final bool discovering;
-  final String? discoveryError;
   final void Function(_HostListEntry host)? onHostTap;
   final void Function(_HostListEntry host)? onForgetHost;
   final void Function(HostClientInfo viewer)? onStopViewer;
@@ -1742,15 +1775,6 @@ class _DevicesSection extends StatelessWidget {
               ),
             );
           }),
-        if (discoveryError != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            discoveryError!,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.error,
-            ),
-          ),
-        ],
         if (hosts.isNotEmpty &&
             hosts.any((h) => h.hostPubkey.length != 32)) ...[
           const SizedBox(height: 4),
