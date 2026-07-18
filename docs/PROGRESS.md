@@ -10,7 +10,7 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 | M2 — Windows capture→encode spike | 🔨 in progress | Direct NVENC (bypassing Media Foundation) + GPU shader downscale landed; real-device end-to-end verification still pending |
 | M3 — Android video path vs fakehost | ✅ done | MediaCodec→Surface, discovery, persistent pairing; verified watching and beaming on Xiaomi 15 |
 | M4 — End-to-end video | ⬜ | |
-| M5 — Audio | ⬜ | |
+| M5 — Audio | 🔨 in progress | macOS host capture + Android/macOS playback landed; Windows (WASAPI both ways) + real-device A/V verification pending |
 | M6 — Input | 🔨 in progress | Windows + macOS mouse/keyboard; Android multi-touch AccessibilityService awaiting device verification; phone gamepad→VIIPER; rumble + macOS gamepad pending |
 | M7 — Pairing/discovery polish | ⬜ | |
 | M8 — Robustness + v1 tag | ⬜ | |
@@ -56,6 +56,26 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [x] Verified on a physical device (Xiaomi 15) — both watching and beaming
 - [x] Android host listens idle; a paired viewer raises only MediaProjection consent
 
+## M5 checklist
+
+- [x] Host live audio source: PCM → Opus (48 kHz stereo, 10 ms) submit queue in
+      `crates/host/src/audio.rs`, behind the existing `audio` feature; the 440 Hz
+      test tone is now dev-opt-in only (`STREAMBEAM_TONE=1`) so real hosts stay
+      silent when no capture exists
+- [x] macOS host: ScreenCaptureKit system audio (own process excluded) →
+      `streambeam_macos_capture_submit_audio` FFI → Rust Opus encode
+- [x] Client playback: Opus decode on a dedicated Rust thread
+      (`app/rust/src/audio_play.rs`, 200 ms drop-oldest jitter bound);
+      AAudio LowLatency sink on Android (minSdk is already 26); macOS
+      `AVAudioSourceNode` pulls PCM from Rust via `streambeam_macos_audio_fill`
+      (mirror image of the capture FFI)
+- [ ] Verified on real devices (Mac → phone), incl. rough A/V offset check
+      (flash+beep per PLAN)
+- [ ] Windows host WASAPI loopback capture (needs the Windows box)
+- [ ] Windows watch playback sink (WASAPI; see 2026-07-18 decision on cpal)
+- [ ] Android host audio (`AudioPlaybackCapture`) — out of v1 scope; the host
+      `audio` feature stays off in the Android build
+
 ## M6 checklist
 
 - [x] Android touch: absolute pointer, trackpad-relative movement, tap, drag and scroll
@@ -70,6 +90,8 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [ ] 240 fps input-latency measurement + stuck-button loss soak
 
 ## Decisions log
+
+- 2026-07-18 — **M5 audio: live capture and playback stay in Rust; platform layers only move PCM.** The host gained a live audio source (`crates/host/src/audio.rs::live`): the capture layer submits interleaved 48 kHz stereo i16 and Rust encodes 10 ms Opus packets into a bounded queue that `stream_audio` drains, mirroring the `macos_screen` video submit-queue pattern. The 440 Hz M1 test tone is no longer streamed by default — real hosts are silent without capture; dev runs opt back in with `STREAMBEAM_TONE=1` (and `STREAMBEAM_MOCK=1` now forces the mock encoder, which also un-broke the macOS e2e reconnect test that had been waiting 30 s for a Swift capture layer the CLI bin doesn't have). macOS host capture is ScreenCaptureKit's `capturesAudio` on the existing SCStream, own-process audio excluded so self-viewing can't feed back. On the watch side each client decodes Opus on a dedicated Rust thread into a 200 ms drop-oldest ring (`app/rust/src/audio_play.rs`); Android drains it with an AAudio LowLatency stream (`ndk` crate, minSdk already 26), macOS with an `AVAudioSourceNode` whose render callback pulls PCM through `streambeam_macos_audio_fill` — the mirror image of the capture FFI, no audio bytes touching Dart. cpal was tried for desktop playback and rejected: its coreaudio-sys/bindgen build breaks the macOS app build this repo must keep working, so Windows watch playback (WASAPI) plus Windows host loopback capture wait for the next Windows-box session. No wire change: `CHANNEL_AUDIO` datagrams, `AudioCaps`/`AudioParams`, and the raw-Opus payload format are all as specified since M1.
 
 - 2026-07-18 — **The purple-corruption endgame: two more root causes, live-verified with a reference decoder.** (4) **NVENC never emitted periodic keyframes**: the ULL preset sets the codec-specific `idrPeriod` to NVENC_INFINITE_GOPLENGTH (the header's own low-latency suggestion), which overrides the top-level `gopLength` the code sets — proven live: 650+ frames past a forced IDR with `gop_len=360` and zero keyframes. `build_config` now writes `idrPeriod = gop_len` into the codec union (AV1 word 5, H.264 word 2, offsets cross-checked against nvEncodeAPI.h); GOP keyframes immediately appeared at exactly the 360-frame cadence. Historically the constant session recreates masked this; removing them made all decoder drift permanent. (5) **The client's behind-skip broke its own reference chain and then kept decoding anyway**: `STREAMBEAM_DUMP_VIDEO` (new host debug tee of the exact sent bitstream) + ffmpeg/dav1d replay proved the host's AV1 output bit-clean (3627 frames, zero errors, crisp mid-GOP content) while the Mac showed purple smear — so the corruption was client-side. The desktop loop (and Android's `play.rs`) skipped non-keyframe completions only *per drain batch*, then resumed feeding P-frames whose references were just skipped; VideoToolbox/MediaCodec decode those "successfully" into progressively drifting garbage for the rest of the GOP. Both loops now latch `awaiting_keyframe` on the first skipped P-frame, feed nothing but keyframes until one arrives, and request an IDR (shared recovery cooldown) so the blank-out is bounded. Also new host diagnostics kept in-tree: every keyframe logged explicitly, OBU-layout traces (`av1_obu_type_summary`) for session-opening/post-event frames — these disproved two plausible theories (NVENC AV1 emits composite `OBU_FRAME`, so the client's redundant-header stripping is harmless; `repeatSeqHdr` works). Remaining known non-bug: negotiated 120fps vs ~13fps real DXGI cadence starves CBR per-frame budget and stretches the nominal 3s GOP to ~27s wall-clock — tracked, not yet addressed.
 - 2026-07-18 — **Fixed causes (1) and (2) of the diagnosis below.** (1) `build_config` now sets `repeatSeqHdr` in `NV_ENC_CONFIG_AV1` (bitfield word 4, bit 5, cross-checked against nv-codec-headers `nvEncodeAPI.h`) so every AV1 keyframe carries its sequence header and both ends' presence-based keyframe detection works past frame 0. (2) Real `NvEncInvalidateRefFrames`: the function-table slot got its true signature, `EncodedFrame` now carries the encoder's DPB timestamp (`LockBitstream::output_time_stamp`), `stream_video` keeps a 128-deep wire-frame-id→timestamp ring (cleared on every forced IDR, since a recreate restarts timestamps at 0), and a client `InvalidateRefFrames` range that maps fully resolves to `VideoEncoder::invalidate_ref_timestamps` — on NVENC a set of cheap driver calls with **no keyframe burst and no session recreate** (NVIDIA's docs: transitively-corrupt frames are invalidated too, and the driver intra-codes if no valid ref remains). Unmappable/too-wide ranges, driver errors, and the software/mock encoders keep the old forced-IDR fallback, so recovery can only get cheaper, never lost. Trait change: `invalidate_ref_frames(first, last)` → `invalidate_ref_timestamps(&[u64])`; the id→timestamp mapping lives in `server.rs` because only the send loop knows both halves. Cause (3), capture-bound fps at 120fps negotiation, is untouched. `cargo check -p streambeam-host` passes on the Windows box; tests pass; **not yet re-verified against a live Windows→Mac session**.
