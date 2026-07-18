@@ -5,14 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Base64
 import android.view.KeyEvent
 import android.view.MotionEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity : FlutterActivity() {
     private var deepLinkChannel: MethodChannel? = null
@@ -21,6 +26,10 @@ class MainActivity : FlutterActivity() {
     private var streamingWifiLock: WifiManager.WifiLock? = null
     private var gamepadBridge: GamepadBridge? = null
     private var pendingCaptureResult: MethodChannel.Result? = null
+    private val nativeHosts = ConcurrentHashMap<String, Map<String, Any>>()
+    private val pendingResolves = ArrayDeque<NsdServiceInfo>()
+    private var resolvingService = false
+    private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
 
     private companion object {
         const val REQUEST_SCREEN_CAPTURE = 9731
@@ -84,6 +93,19 @@ class MainActivity : FlutterActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getName" -> result.success(deviceName())
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "streambeam/native_discovery",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> {
+                    startNativeDiscovery()
+                    result.success(null)
+                }
+                "getHosts" -> result.success(nativeHosts.values.toList())
                 else -> result.notImplemented()
             }
         }
@@ -197,11 +219,89 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        stopNativeDiscovery()
         gamepadBridge?.dispose()
         gamepadBridge = null
         releaseMulticastLock()
         releaseStreamingWifiLock()
         super.onDestroy()
+    }
+
+    private fun startNativeDiscovery() {
+        if (nsdDiscoveryListener != null) return
+        val nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+            override fun onDiscoveryStopped(serviceType: String) = Unit
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                nsdDiscoveryListener = null
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
+
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (!serviceInfo.serviceType.startsWith("_streambeam._udp")) return
+                pendingResolves.addLast(serviceInfo)
+                resolveNext(nsd)
+            }
+
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                nativeHosts.remove(serviceInfo.serviceName)
+            }
+        }
+        nsdDiscoveryListener = listener
+        try {
+            nsd.discoverServices("_streambeam._udp.", NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (_: Exception) {
+            nsdDiscoveryListener = null
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveNext(nsd: NsdManager) {
+        if (resolvingService || pendingResolves.isEmpty()) return
+        resolvingService = true
+        val candidate = pendingResolves.removeFirst()
+        nsd.resolveService(candidate, object : NsdManager.ResolveListener {
+            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                resolvingService = false
+                resolveNext(nsd)
+            }
+
+            override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                val fingerprint = serviceInfo.attributes["fp"]
+                    ?.toString(Charsets.UTF_8)
+                    ?.let {
+                        try {
+                            Base64.decode(it, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                        } catch (_: IllegalArgumentException) {
+                            null
+                        }
+                    }
+                val address = serviceInfo.host?.hostAddress
+                if (fingerprint != null && address != null) {
+                    nativeHosts[serviceInfo.serviceName] = mapOf(
+                        "name" to serviceInfo.serviceName,
+                        "port" to serviceInfo.port,
+                        "addrs" to listOf(address),
+                        "pubkey" to fingerprint,
+                    )
+                }
+                resolvingService = false
+                resolveNext(nsd)
+            }
+        })
+    }
+
+    private fun stopNativeDiscovery() {
+        val listener = nsdDiscoveryListener ?: return
+        nsdDiscoveryListener = null
+        try {
+            val nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
+            nsd.stopServiceDiscovery(listener)
+        } catch (_: Exception) {
+        }
+        pendingResolves.clear()
+        resolvingService = false
     }
 
     private fun acquireMulticastLock() {

@@ -722,7 +722,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       final List<DiscoveredHost> hosts;
       if (Platform.isAndroid) {
         await _ensureMdnsLock();
-        hosts = await discoverHosts(timeoutMs: 6000);
+        final rustHosts = await discoverHosts(timeoutMs: 6000);
+        // Some Samsung builds hold the multicast lock but still feed raw UDP
+        // browsers only empty DNS packets. Android's NSD service goes through
+        // the platform mDNS responder and remains reliable there.
+        hosts = rustHosts.isEmpty ? await _discoverHostsNative() : rustHosts;
       } else {
         // macOS: Rust mdns-sd can't reliably receive (mDNSResponder owns 5353),
         // so browse via native Bonjour instead.
