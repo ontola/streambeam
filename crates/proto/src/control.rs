@@ -37,6 +37,15 @@ pub struct AudioParams {
     pub frame_ms: u8,
 }
 
+/// Input semantics exposed by the host OS for this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HostInputMode {
+    /// Desktop-style pointer, wheel and keyboard injection.
+    Mouse,
+    /// Native absolute touch contacts, including multi-touch.
+    Touch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMsg {
     Hello {
@@ -87,6 +96,7 @@ pub enum HostMsg {
         height: u16,
         fps: u8,
         audio: AudioParams,
+        input_mode: HostInputMode,
     },
     CodecConfig {
         data: Vec<u8>,

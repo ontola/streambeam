@@ -22,6 +22,7 @@ static DISPLAYS: Mutex<Vec<DisplayInfo>> = Mutex::new(Vec::new());
 static REMOTE_CLIPBOARD: Mutex<Option<String>> = Mutex::new(None);
 const NO_DISPLAY: u32 = u32::MAX;
 static REQUESTED_DISPLAY: AtomicU32 = AtomicU32::new(NO_DISPLAY);
+static HOST_ACCEPTS_TOUCH: AtomicU32 = AtomicU32::new(0);
 
 pub fn reset() {
     FRAMES_RENDERED.store(0, Ordering::Relaxed);
@@ -58,6 +59,14 @@ pub fn requested_display_id() -> Option<u32> {
 
 pub fn request_display(id: u32) {
     REQUESTED_DISPLAY.store(id, Ordering::Relaxed);
+}
+
+pub fn set_host_accepts_touch(accepts: bool) {
+    HOST_ACCEPTS_TOUCH.store(u32::from(accepts), Ordering::Relaxed);
+}
+
+pub fn host_accepts_touch() -> bool {
+    HOST_ACCEPTS_TOUCH.load(Ordering::Relaxed) != 0
 }
 
 pub fn receive_remote_clipboard(text: String) {

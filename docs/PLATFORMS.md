@@ -25,7 +25,7 @@ receives. "Control my phone from my PC" needs the host half on the target.
 | Platform | As viewer (capture & send) | As host (inject received) |
 |---|---|---|
 | **Windows** | ➖ (no desktop watch yet) | ✅ mouse (SendInput, incl. back/forward buttons + smooth wheel) · ✅ gamepad (VIIPER virtual pad) · 🔨 keyboard (SendInput VK injection landed 2026-07-07; verify on device) |
-| **Android** | ✅ mouse (touch + trackpad) · ✅ gamepad · ✅ software/physical keyboard | ⬜ needs an AccessibilityService / Shizuku — no unrestricted inject API (this is why PC→phone control isn't wired) |
+| **Android** | ✅ host-aware full multi-touch from touchscreens · ✅ mouse/trackpad for desktop hosts · ✅ gamepad · ✅ software/physical keyboard | 🔨 AccessibilityService gesture injection landed (up to 10 simultaneous contacts); permission + real-device verification pending · unrestricted mouse/keyboard injection still needs Shizuku |
 | **macOS** | ✅ mouse (hover/click/drag/scroll map 1:1 while watching) · ✅ keyboard (physical keys → VK while streaming) | ✅ touch/mouse (absolute + relative, tap, drag, smooth scroll) · ✅ keyboard (VK→macOS keycode), via CGEvent after the Accessibility grant · ⬜ gamepad |
 | **Linux** | ➖ | ⬜ uinput / XTest |
 | **iOS** | ⬜ later | ➖ |
@@ -41,9 +41,10 @@ receives. "Control my phone from my PC" needs the host half on the target.
   the Flutter window. macOS: VideoToolbox → `AVSampleBufferDisplayLayer` platform
   view, fed by the shared `crates/core` reassembly. The network + FEC + jitter
   path is reused; only decode + present is new per-OS.
-- **Android as host / control (PC→phone)** — an AccessibilityService to dispatch
-  gestures + key events (or Shizuku/ADB for full `injectInputEvent`). Video
-  beaming already works; this is the missing control back-channel.
+- **Android as host / control (PC→phone)** — the AccessibilityService now
+  dispatches full-state multi-touch gestures. Android requires the user to
+  enable `Remote touch control` in Accessibility settings. Shizuku/ADB remains
+  the likely follow-up for unrestricted native mouse and keyboard injection.
 - **Keyboard injection (remaining hosts)** — Windows `SendInput` and macOS
   `CGEvent` are wired. Linux still needs uinput; touch viewers expose the
   system on-screen keyboard.

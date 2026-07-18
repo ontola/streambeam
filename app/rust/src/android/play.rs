@@ -356,6 +356,10 @@ async fn play_session(
     max_video_frames: u32,
 ) -> Result<StreamStats, String> {
     crate::playback::reset();
+    crate::playback::set_host_accepts_touch(matches!(
+        session.input_mode,
+        streambeam_proto::control::HostInputMode::Touch
+    ));
     crate::playback::set_displays(session.displays.clone(), session.selected_display_id);
     let runtime = tokio::runtime::Handle::current();
     let input = session.input.take().ok_or("input stream not open")?;

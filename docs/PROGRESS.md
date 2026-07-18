@@ -11,7 +11,7 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 | M3 — Android video path vs fakehost | ✅ done | MediaCodec→Surface, discovery, persistent pairing; verified watching and beaming on Xiaomi 15 |
 | M4 — End-to-end video | ⬜ | |
 | M5 — Audio | ⬜ | |
-| M6 — Input | 🔨 in progress | Windows + macOS mouse/keyboard injection; phone gamepad→VIIPER (USBIP); bundle viiper + usbip-win2 in Win installer (M8); rumble + macOS gamepad pending |
+| M6 — Input | 🔨 in progress | Windows + macOS mouse/keyboard; Android multi-touch AccessibilityService awaiting device verification; phone gamepad→VIIPER; rumble + macOS gamepad pending |
 | M7 — Pairing/discovery polish | ⬜ | |
 | M8 — Robustness + v1 tag | ⬜ | |
 
@@ -61,6 +61,7 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [x] Android software/physical keyboard → protocol VK events
 - [x] Windows mouse/keyboard injection implementation via `SendInput`
 - [x] macOS mouse/keyboard injection via `CGEvent`, including selected-display mapping
+- [ ] Verify Android-host full multi-touch injection via AccessibilityService on phone/tablet
 - [x] Android gamepad state → Windows VIIPER virtual Xbox controller path
 - [ ] Verify Windows keyboard + VIIPER gamepad on real hardware
 - [ ] Rumble backchannel
@@ -68,6 +69,8 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [ ] 240 fps input-latency measurement + stuck-button loss soak
 
 ## Decisions log
+
+- 2026-07-18 — **Input semantics now follow both the host capability and the viewer's physical input device.** Protocol v3 adds `HostInputMode` to `SessionAccept` and a full-state `TouchFrame` carrying up to ten stable contacts. A touchscreen sends real multi-touch only when an Android host advertises `Touch`; when watching a desktop it retains StreamBeam's mouse gesture mapping. Mouse/trackpad viewers continue to send mouse events. The Android host has an opt-in `RemoteTouchService` AccessibilityService that translates the reliable touch-state stream into chained system gestures, plus an in-app setup link and status. Android's official Accessibility API cannot inject unrestricted native mouse/keyboard events, so those still need a future Shizuku/privileged path; Mac-to-Android click/drag fallback remains follow-up. Rust tests, Flutter analysis, and an Android debug APK build pass; permission and cross-device gesture verification are still pending, so the M6 device checkbox stays open.
 
 - 2026-07-17 — **Beam sessions are client-initiated; host approval is pairing, not a per-session gate.** The trust layer already persisted approved Ed25519 client keys and accepted `HelloVerdict::AcceptedKnown` without prompting, but the macOS UI contradicted that model by requiring `Start beaming` on the host before it even listened. macOS now starts the QUIC/mDNS host idle with the app, shows `Ready — start from a paired device`, and labels the first prompt `Pair with this device?` with explicit one-time-trust copy. A verified new client still requires that single human approval; after it is stored in `paired.json`, tapping the saved host on the client starts later sessions directly. An authorized `SessionRequest` sets a native capture-demand flag; the Swift runner polls it on the main thread and starts ScreenCaptureKit/VideoToolbox only then, stopping capture when the active stream ends. This preserves the macOS privacy indicator/resource boundary without reintroducing host-side initiation. First Screen Recording consent gets a longer finite 60 s handshake window; failure now aborts instead of silently streaming the bundled mock clip. Verified end-to-end on 2026-07-17: the idle Mac appeared online on an already-paired Xiaomi 15, one client tap started the real 1920×1080 Mac stream without host interaction or another approval, and disconnect ended the stream cleanly. Android-host sessions still require Android's per-session MediaProjection confirmation, an OS constraint rather than the desired desktop UX. No wire change.
 - 2026-07-17 — **A device never lists its own host identity on Watch.** Symmetric desktop hosting and watching made macOS discover its own mDNS advertisement and even allowed that identity to become the saved Watch host. The app now exposes the running host's Ed25519 public key locally and filters that exact key from both live discovery and saved-host presentation. Identity matching avoids incorrectly hiding a different machine with the same display name or IP address; presentation filtering also avoids an unexpected destructive deletion of saved state. No wire change.

@@ -82,6 +82,35 @@ pub fn send_mouse_move(dx: i16, dy: i16) {
 }
 
 #[flutter_rust_bridge::frb(sync)]
+pub fn send_touch_frame(ids: Vec<u8>, xs: Vec<u16>, ys: Vec<u16>, ref_w: u16, ref_h: u16) {
+    use streambeam_proto::input::{InputEvent, TouchContact};
+    if ids.len() != xs.len() || ids.len() != ys.len() || ids.len() > 10 {
+        return;
+    }
+    let contacts = ids
+        .into_iter()
+        .zip(xs)
+        .zip(ys)
+        .map(|((id, x), y)| TouchContact {
+            id,
+            x,
+            y,
+            pressure: u16::MAX,
+        })
+        .collect();
+    crate::input::send(InputEvent::TouchFrame {
+        contacts,
+        ref_w,
+        ref_h,
+    });
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn playback_host_accepts_touch() -> bool {
+    crate::playback::host_accepts_touch()
+}
+
+#[flutter_rust_bridge::frb(sync)]
 pub fn send_mouse_scroll(dx: i16, dy: i16) {
     crate::input::send(streambeam_proto::input::InputEvent::Scroll { dx, dy });
 }
@@ -603,6 +632,10 @@ async fn desktop_stream_loop(
     mut session: streambeam_core::ClientSession,
     sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
+    crate::playback::set_host_accepts_touch(matches!(
+        session.input_mode,
+        streambeam_proto::control::HostInputMode::Touch
+    ));
     use streambeam_proto::media::CHANNEL_VIDEO;
 
     // Feed the shared playback counters so `playback_diagnostics()` /

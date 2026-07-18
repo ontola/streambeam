@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">StreamBeam</string>
+    <string name="remote_touch_service_description">Allow paired StreamBeam devices to control this screen with touch.</string>
+</resources>

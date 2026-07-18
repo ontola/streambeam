@@ -10,7 +10,7 @@ use streambeam_net::{
     peer_pubkey, read_msg, server_config, write_msg,
 };
 use streambeam_proto::PROTO_VERSION;
-use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
+use streambeam_proto::control::{AudioParams, ClientMsg, HostInputMode, HostMsg};
 use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
@@ -1050,6 +1050,11 @@ async fn handle_client(
                             sample_rate: 48_000,
                             channels: 2,
                             frame_ms: 10,
+                        },
+                        input_mode: if cfg!(target_os = "android") {
+                            HostInputMode::Touch
+                        } else {
+                            HostInputMode::Mouse
                         },
                     },
                 )

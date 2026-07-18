@@ -24,6 +24,10 @@ object NativeStream {
     /** True when a client asked for a keyframe; ask MediaCodec for a sync frame. */
     external fun nativeTakeIdrRequest(): Boolean
 
+    /** `[refW, refH, count, id, x, y, pressure, ...]`, or null while idle. */
+    external fun nativeTakeTouchFrame(): IntArray?
+    external fun nativeSetTouchInjectionEnabled(enabled: Boolean)
+
     // Pairing approval (raised as a notification while the app is backgrounded).
     /** Pending pairing request as "id|clientName", or null. */
     external fun nativePollApprovalRequest(): String?

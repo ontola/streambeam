@@ -27,6 +27,23 @@ int? selectedPlaybackDisplay() =>
 void sendMouseMove({required int dx, required int dy}) =>
     StreambeamFfi.instance.api.crateApiSendMouseMove(dx: dx, dy: dy);
 
+void sendTouchFrame({
+  required List<int> ids,
+  required List<int> xs,
+  required List<int> ys,
+  required int refW,
+  required int refH,
+}) => StreambeamFfi.instance.api.crateApiSendTouchFrame(
+  ids: ids,
+  xs: xs,
+  ys: ys,
+  refW: refW,
+  refH: refH,
+);
+
+bool playbackHostAcceptsTouch() =>
+    StreambeamFfi.instance.api.crateApiPlaybackHostAcceptsTouch();
+
 void sendMouseScroll({required int dx, required int dy}) =>
     StreambeamFfi.instance.api.crateApiSendMouseScroll(dx: dx, dy: dy);
 

@@ -17,7 +17,12 @@ pub fn apply(event: InputEvent) {
         apply_macos(event);
         return;
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    {
+        crate::android_input::submit(event);
+        return;
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
     let _ = event;
 }
 
@@ -156,7 +161,8 @@ fn apply_macos(event: InputEvent) {
                 event.post(CGEventTapLocation::HIDEventTap);
             }
         }
-        InputEvent::GamepadPlug { .. }
+        InputEvent::TouchFrame { .. }
+        | InputEvent::GamepadPlug { .. }
         | InputEvent::GamepadState { .. }
         | InputEvent::ClipboardText { .. } => {}
     }
@@ -309,6 +315,7 @@ fn apply_windows(event: InputEvent) {
                 crate::gamepad_inject::apply(event);
             }
             InputEvent::ClipboardText { .. } => {}
+            InputEvent::TouchFrame { .. } => {}
             _ => {}
         }
     }

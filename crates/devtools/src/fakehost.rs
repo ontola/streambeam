@@ -17,7 +17,7 @@ use streambeam_net::{
     peer_pubkey, read_msg, server_config, write_msg,
 };
 use streambeam_proto::PROTO_VERSION;
-use streambeam_proto::control::{AudioParams, ClientMsg, HostMsg};
+use streambeam_proto::control::{AudioParams, ClientMsg, HostInputMode, HostMsg};
 use streambeam_proto::fec::{encode_audio_packet, encode_video_frame};
 use streambeam_proto::pair::PairInfo;
 use tokio::signal;
@@ -261,6 +261,7 @@ async fn handle(
                             channels: 2,
                             frame_ms: 10,
                         },
+                        input_mode: HostInputMode::Mouse,
                     },
                 )
                 .await?;

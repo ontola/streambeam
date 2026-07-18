@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.MotionEvent
 import io.flutter.embedding.android.FlutterActivity
@@ -99,6 +100,19 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "streambeam/remote_input",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isEnabled" -> result.success(remoteTouchEnabled())
+                "openSettings" -> {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         pendingLink = linkFrom(intent)
         requestPostNotifications()
     }
@@ -129,6 +143,15 @@ class MainActivity : FlutterActivity() {
         ) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9732)
         }
+    }
+
+    private fun remoteTouchEnabled(): Boolean {
+        val enabled = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ) ?: return false
+        val component = "$packageName/${RemoteTouchService::class.java.name}"
+        return enabled.split(':').any { it.equals(component, ignoreCase = true) }
     }
 
     private fun requestScreenCapture(result: MethodChannel.Result) {

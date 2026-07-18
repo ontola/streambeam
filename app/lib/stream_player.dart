@@ -159,6 +159,7 @@ class StreamPlayerScreen extends StatefulWidget {
     required this.onCustomSettingsCommitted,
     required this.onDisplayChanged,
     this.inputSupported = true,
+    this.hostAcceptsTouch = false,
     this.touchControls = true,
     this.upscaleSupported = false,
     this.upscaleActive = false,
@@ -188,6 +189,9 @@ class StreamPlayerScreen extends StatefulWidget {
   /// Whether this build can capture & send input to the host at all.
   /// False skips the input layers entirely.
   final bool inputSupported;
+
+  /// Whether the host accepts native full-state touch contacts.
+  final bool hostAcceptsTouch;
 
   /// Whether the primary pointer is touch (phone). False (desktop mouse)
   /// hides the touch-only UI (pointer-mode picker, keyboard, edge-drag
@@ -911,6 +915,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             mode: _pointerMode,
                             screenEdgeGrab: edgeGrab,
                             mouseControlEnabled: mouseControlEnabled,
+                            hostAcceptsTouch: widget.hostAcceptsTouch,
                             multiTouchSession: _multiTouchSession,
                             onMultiTouchSessionChanged: (active) {
                               if (_multiTouchSession != active) {
@@ -926,8 +931,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                               transformationController: _transformController,
                               minScale: 1,
                               maxScale: 4,
-                              scaleEnabled: widget.touchControls,
-                              panEnabled: _panEnabled && _multiTouchSession,
+                              scaleEnabled:
+                                  widget.touchControls &&
+                                  !widget.hostAcceptsTouch,
+                              panEnabled:
+                                  !widget.hostAcceptsTouch &&
+                                  _panEnabled &&
+                                  _multiTouchSession,
                               clipBehavior: Clip.none,
                               // Fill the viewport so a pinch can begin in
                               // letterbox space above or below the video.
@@ -1203,6 +1213,7 @@ class _StreamInputLayer extends StatefulWidget {
     required this.mode,
     required this.screenEdgeGrab,
     required this.mouseControlEnabled,
+    required this.hostAcceptsTouch,
     required this.multiTouchSession,
     required this.onMultiTouchSessionChanged,
     required this.child,
@@ -1215,6 +1226,7 @@ class _StreamInputLayer extends StatefulWidget {
   final PointerMode mode;
   final double screenEdgeGrab;
   final bool mouseControlEnabled;
+  final bool hostAcceptsTouch;
   final bool multiTouchSession;
   final ValueChanged<bool> onMultiTouchSessionChanged;
   final Widget child;
@@ -1231,6 +1243,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   final _activePointers = <int>{};
   final _pointers = <int, Offset>{};
+  final _touchIds = <int, int>{};
 
   /// Currently-pressed mouse buttons (Flutter bitmask), for real
   /// press/release semantics (drag & select) on mouse-driven platforms.
@@ -1293,6 +1306,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _flushRel();
     _activePointers.clear();
     _pointers.clear();
+    _touchIds.clear();
     _singleOrigin = null;
     _singleDownAt = null;
     _singleTravel = 0;
@@ -1331,6 +1345,38 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _refH,
     );
     sendMouseAbs(x: x, y: y, refW: _refW, refH: _refH);
+  }
+
+  int _touchIdFor(int pointer) {
+    return _touchIds.putIfAbsent(pointer, () {
+      for (var id = 0; id < 10; id++) {
+        if (!_touchIds.containsValue(id)) return id;
+      }
+      return 9;
+    });
+  }
+
+  void _sendTouchState() {
+    if (!widget.hostAcceptsTouch || !widget.mouseControlEnabled) return;
+    final contacts =
+        _pointers.entries
+            .where((entry) => _touchIds.containsKey(entry.key))
+            .toList(growable: false)
+          ..sort((a, b) => _touchIds[a.key]!.compareTo(_touchIds[b.key]!));
+    final ids = <int>[];
+    final xs = <int>[];
+    final ys = <int>[];
+    for (final entry in contacts.take(10)) {
+      final local = _videoLocal(entry.value, clamp: true)!;
+      ids.add(_touchIds[entry.key]!);
+      xs.add(
+        (local.dx / widget.videoSize.width * _refW).round().clamp(0, _refW),
+      );
+      ys.add(
+        (local.dy / widget.videoSize.height * _refH).round().clamp(0, _refH),
+      );
+    }
+    sendTouchFrame(ids: ids, xs: xs, ys: ys, refW: _refW, refH: _refH);
   }
 
   void _sendRel(Offset delta) {
@@ -1529,6 +1575,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   void _removePointer(int pointer) {
     _activePointers.remove(pointer);
     _pointers.remove(pointer);
+    _touchIds.remove(pointer);
   }
 
   void _onPointerDown(PointerDownEvent event) {
@@ -1544,6 +1591,12 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     // clamped video coordinate only at send time.
     final local = event.localPosition;
     _pointers[event.pointer] = local;
+
+    if (widget.hostAcceptsTouch) {
+      _touchIdFor(event.pointer);
+      _sendTouchState();
+      return;
+    }
 
     if (_pointers.length >= 2) {
       _pendingTwoFinger = true;
@@ -1577,6 +1630,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
     final local = event.localPosition;
     _pointers[event.pointer] = local;
+
+    if (widget.hostAcceptsTouch) {
+      _sendTouchState();
+      return;
+    }
 
     if (_multiFingerContact) {
       if (_pointers.length >= 2) {
@@ -1615,6 +1673,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   void _onPointerUp(PointerUpEvent event) {
     if (_isMouse(event)) {
       _onMouseUp(event);
+      return;
+    }
+    if (widget.hostAcceptsTouch) {
+      _removePointer(event.pointer);
+      _sendTouchState();
       return;
     }
     final wasDrag = _touchDragActive;
@@ -1673,6 +1736,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   void _onPointerCancel(PointerCancelEvent event) {
     if (_isMouse(event)) {
       _syncMouseButtons(0);
+      return;
+    }
+    if (widget.hostAcceptsTouch) {
+      _removePointer(event.pointer);
+      _sendTouchState();
       return;
     }
     _removePointer(event.pointer);

@@ -75,6 +75,12 @@ abstract class StreambeamFfiApiImplPlatform
   List<PlaybackDisplay> dco_decode_list_playback_display(dynamic raw);
 
   @protected
+  List<int> dco_decode_list_prim_u_16_loose(dynamic raw);
+
+  @protected
+  Uint16List dco_decode_list_prim_u_16_strict(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -185,6 +191,12 @@ abstract class StreambeamFfiApiImplPlatform
   List<PlaybackDisplay> sse_decode_list_playback_display(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<int> sse_decode_list_prim_u_16_loose(SseDeserializer deserializer);
+
+  @protected
+  Uint16List sse_decode_list_prim_u_16_strict(SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
@@ -324,6 +336,18 @@ abstract class StreambeamFfiApiImplPlatform
   @protected
   void sse_encode_list_playback_display(
     List<PlaybackDisplay> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_16_loose(
+    List<int> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_16_strict(
+    Uint16List self,
     SseSerializer serializer,
   );
 

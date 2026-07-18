@@ -1,7 +1,7 @@
-# StreamBeam protocol v2
+# StreamBeam protocol v3
 
 Everything runs over a single QUIC connection (client-initiated), mutual TLS with
-pinned Ed25519 keys. `PROTO_VERSION = 2`.
+pinned Ed25519 keys. `PROTO_VERSION = 3`.
 
 ## Identity & transport security
 
@@ -35,7 +35,7 @@ builds where the https link isn't verified.
 
 ```rust
 PairInfo {
-    version: u8,            // 2
+    version: u8,            // 3
     host_name: String,
     host_pubkey: [u8; 32],  // Ed25519
     addrs: Vec<SocketAddr>,
@@ -117,7 +117,8 @@ ClientMsg { Hello { proto_version, client_name, pair_proof: Option<[u8;32]> },
 HostMsg   { PairAck, PairReject { reason },
             DisplayList { displays: Vec<DisplayInfo>, selected_id },
             SessionAccept { session_id, codec, width,
-            height, fps, audio: AudioParams }, CodecConfig { data },
+            height, fps, audio: AudioParams, input_mode: HostInputMode },
+            CodecConfig { data },
             Rumble { pad, low, high }, HostStats { capture_us, encode_us, send_queue },
             ClipboardText { text }, Pong { t_us }, Bye }
 ```
@@ -133,6 +134,7 @@ one session boundary.
 ```rust
 InputEvent { MouseMove { dx, dy },                       // coalesced ≤ 250 Hz
              MouseAbs { x, y, ref_w, ref_h },            // touch/mouse position; host scales
+             TouchFrame { contacts, ref_w, ref_h },      // full active touch set; up to 10 contacts
              MouseButton { button, down },               // 0 left · 1 right · 2 middle · 3 back · 4 forward
              Scroll { dx, dy },                          // wheel units: ±120 = one notch; fractions allowed (trackpads)
              ClipboardText { text },                     // UTF-8 text, reliable, max 60 KB
@@ -141,12 +143,19 @@ InputEvent { MouseMove { dx, dy },                       // coalesced ≤ 250 Hz
              GamepadPlug { pad, connected } }
 ```
 
+`HostInputMode` is `Mouse` for desktop hosts and `Touch` for Android hosts.
+Touch-capable viewers send a full `TouchFrame` on every contact transition or
+move when the host advertises `Touch`; because each frame is self-contained, a
+coalesced move cannot leave a contact stuck. Each contact has a stable `u8` id,
+`u16 x/y` in the advertised reference space, and `u16 pressure`. A mouse or
+trackpad remains mouse input even for a touch host.
+
 Text clipboard sync is active only for the authenticated device currently in
 a stream session. Client→host updates use S1; host→client updates use S0. Both
 sides de-duplicate the last applied value to prevent echo loops. Images, files,
-and rich clipboard formats are not part of v2.
+and rich clipboard formats are not part of v3.
 
 ## Discovery
 
-mDNS `_streambeam._udp.local`, TXT: `v=2`, `name=...`, `fp=<b64 host pubkey>`, `port=...`.
+mDNS `_streambeam._udp.local`, TXT: `v=3`, `name=...`, `fp=<b64 host pubkey>`, `port=...`.
 QR is only needed for first pairing; paired hosts reconnect via mDNS + pinned key.

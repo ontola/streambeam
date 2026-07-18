@@ -88,6 +88,8 @@ class _BeamPageState extends State<BeamPage> {
   String _notifiedViewers = '';
 
   static const _screencast = MethodChannel('streambeam/screencast');
+  static const _remoteInput = MethodChannel('streambeam/remote_input');
+  bool _remoteInputEnabled = false;
 
   /// Android starts capture explicitly. On macOS the host stays ready and the
   /// native runner toggles capture on demand when a client starts/stops.
@@ -105,6 +107,22 @@ class _BeamPageState extends State<BeamPage> {
       _screencast.setMethodCallHandler(_handleNativeCaptureEvent);
     }
     _poll = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+    if (Platform.isAndroid) unawaited(_refreshRemoteInput());
+  }
+
+  Future<void> _refreshRemoteInput() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final enabled =
+          await _remoteInput.invokeMethod<bool>('isEnabled') ?? false;
+      if (mounted && enabled != _remoteInputEnabled) {
+        setState(() => _remoteInputEnabled = enabled);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _openRemoteInputSettings() async {
+    await _remoteInput.invokeMethod<void>('openSettings');
   }
 
   @override
@@ -209,6 +227,7 @@ class _BeamPageState extends State<BeamPage> {
 
   void _refresh() {
     if (!mounted || !hostPlatformSupported()) return;
+    if (Platform.isAndroid) unawaited(_refreshRemoteInput());
     final next = hostSnapshot();
     setState(() => _snap = next);
     _syncViewerNotification(next.viewers);
@@ -335,6 +354,29 @@ class _BeamPageState extends State<BeamPage> {
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: Icon(
+                        _remoteInputEnabled
+                            ? Icons.touch_app
+                            : Icons.touch_app_outlined,
+                      ),
+                      title: const Text('Remote touch control'),
+                      subtitle: Text(
+                        _remoteInputEnabled
+                            ? 'Enabled — paired viewers can send native multi-touch'
+                            : 'Enable Android Accessibility gesture access',
+                      ),
+                      trailing: _remoteInputEnabled
+                          ? const Icon(Icons.check_circle, color: Colors.green)
+                          : TextButton(
+                              onPressed: () =>
+                                  unawaited(_openRemoteInputSettings()),
+                              child: const Text('Set up'),
+                            ),
                     ),
                   ),
                   const SizedBox(height: 24),

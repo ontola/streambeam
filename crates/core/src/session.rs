@@ -8,7 +8,7 @@ use streambeam_net::{
     Identity, build_pair_proof, client_config, export_pairing_secret, read_msg, write_msg,
 };
 use streambeam_proto::PROTO_VERSION;
-use streambeam_proto::control::{AudioCaps, ClientMsg, HostMsg, VideoCaps};
+use streambeam_proto::control::{AudioCaps, ClientMsg, HostInputMode, HostMsg, VideoCaps};
 use streambeam_proto::input::InputEvent;
 use streambeam_proto::pair::PairInfo;
 
@@ -25,6 +25,7 @@ pub struct ClientSession {
     pub codec_config: Option<Vec<u8>>,
     pub displays: Vec<streambeam_proto::control::DisplayInfo>,
     pub selected_display_id: u32,
+    pub input_mode: HostInputMode,
     pub input: Option<quinn::SendStream>,
 }
 
@@ -237,15 +238,16 @@ async fn finish_session_inner(
     let mut codec_config = None;
     let mut displays = Vec::new();
     let mut selected_display_id = 0;
-    let (width, height, fps, codec) = loop {
+    let (width, height, fps, codec, input_mode) = loop {
         match read_msg::<HostMsg>(&mut recv, &mut buf).await? {
             HostMsg::SessionAccept {
                 width,
                 height,
                 fps,
                 codec,
+                input_mode,
                 ..
-            } => break (width, height, fps, codec),
+            } => break (width, height, fps, codec, input_mode),
             HostMsg::CodecConfig { data } => {
                 codec_config = Some(data);
             }
@@ -274,6 +276,7 @@ async fn finish_session_inner(
         codec_config,
         displays,
         selected_display_id,
+        input_mode,
         input: Some(input),
     })
 }

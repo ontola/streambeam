@@ -21,7 +21,7 @@ symmetry is nearly free at the wire level. It is *not* free at the OS level:
 |---|---|---|
 | Windows | ✅ | ✅ WGC + NVENC/AMF/QSV (v1 path, unchanged) |
 | macOS | ✅ | ✅ ScreenCaptureKit + VideoToolbox |
-| Android | ✅ | ✅ MediaProjection + MediaCodec (no input inject) |
+| Android | ✅ | ✅ MediaProjection + MediaCodec; AccessibilityService touch injection |
 | iOS | ✅ later | ❌ effectively impossible (no background capture/inject) |
 | Linux | ✅ later | ⚠️ later (PipeWire portal + VAAPI) |
 

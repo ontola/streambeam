@@ -3,7 +3,25 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TouchContact {
+    /// Stable only for the lifetime of this contact.
+    pub id: u8,
+    pub x: u16,
+    pub y: u16,
+    /// 0..=65535, with 65535 used when the viewer has no pressure sensor.
+    pub pressure: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputEvent {
+    /// Full current touch state. An empty list releases every contact. Full
+    /// state makes move coalescing and packet recovery unable to stick a
+    /// finger down indefinitely.
+    TouchFrame {
+        contacts: Vec<TouchContact>,
+        ref_w: u16,
+        ref_h: u16,
+    },
     MouseMove {
         dx: i16,
         dy: i16,
@@ -72,6 +90,31 @@ mod tests {
     fn clipboard_roundtrip() {
         let event = InputEvent::ClipboardText {
             text: "hello from phone 👋".into(),
+        };
+        let bytes = frame::encode_frame(&event).unwrap();
+        let (decoded, _) = frame::decode_frame::<InputEvent>(&bytes).unwrap();
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn multitouch_roundtrip() {
+        let event = InputEvent::TouchFrame {
+            contacts: vec![
+                TouchContact {
+                    id: 1,
+                    x: 100,
+                    y: 200,
+                    pressure: 65_535,
+                },
+                TouchContact {
+                    id: 2,
+                    x: 300,
+                    y: 400,
+                    pressure: 32_768,
+                },
+            ],
+            ref_w: 1920,
+            ref_h: 1080,
         };
         let bytes = frame::encode_frame(&event).unwrap();
         let (decoded, _) = frame::decode_frame::<InputEvent>(&bytes).unwrap();

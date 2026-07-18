@@ -3,7 +3,7 @@
 
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JObject};
-use jni::sys::{jboolean, jint, jlong, jstring};
+use jni::sys::{jboolean, jint, jintArray, jlong, jstring};
 
 /// Returns a raw `ANativeWindow*` suitable for [`ndk::native_window::NativeWindow::from_ptr`].
 pub fn native_window_from_surface(env: JNIEnv, surface: JObject) -> i64 {
@@ -81,6 +81,36 @@ pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeTakeIdrR
     _class: JClass<'local>,
 ) -> jboolean {
     jboolean::from(streambeam_host::android_screen::take_idr_request())
+}
+
+/// Next full touch frame for the AccessibilityService, packed as documented
+/// by `streambeam_host::android_input::take_packed`, or null when idle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeTakeTouchFrame<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jintArray {
+    let Some(frame) = streambeam_host::android_input::take_packed() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(array) = env.new_int_array(frame.len() as i32) else {
+        return std::ptr::null_mut();
+    };
+    if env.set_int_array_region(&array, 0, &frame).is_err() {
+        return std::ptr::null_mut();
+    }
+    array.into_raw()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeSetTouchInjectionEnabled<
+    'local,
+>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    enabled: jboolean,
+) {
+    streambeam_host::android_input::set_enabled(enabled != 0);
 }
 
 // --- Pairing approval (raised as a notification while backgrounded) ---
