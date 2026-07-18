@@ -34,5 +34,6 @@ pub fn build_host_config(
         pairing_payload_tx,
         pairing_request_tx,
         controls,
+        audio_tone_fallback: false,
     }
 }

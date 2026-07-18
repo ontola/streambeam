@@ -109,6 +109,10 @@ pub struct HostConfig {
     pub pairing_request_tx: Option<std::sync::mpsc::Sender<PairApproval>>,
     /// Live toggles + connected-client list shared with the UI.
     pub controls: Arc<HostControls>,
+    /// Stream the bundled 440 Hz tone when no live capture feeds
+    /// `audio::live` — dev/mock hosts only. Real hosts stay silent instead of
+    /// playing a test tone at the viewer.
+    pub audio_tone_fallback: bool,
 }
 
 /// Runtime state the tray GUI reads and flips: discoverability, whether new
@@ -592,7 +596,13 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     log!("streambeam-host listening on {addr} — scan QR or paste sbm1: into the Android app");
     log!("LAN addresses: {:?}", pairing_addrs(addr));
 
-    let audio = Arc::new(OpusCatalog::bundled());
+    let audio = Arc::new(if config.audio_tone_fallback {
+        OpusCatalog::bundled()
+    } else {
+        OpusCatalog {
+            packets: Vec::new(),
+        }
+    });
 
     loop {
         if controls.is_shutdown_requested() {
@@ -1026,11 +1036,18 @@ async fn handle_client(
                         }
                     });
                     controls.set_stream_task(conn.remote_address(), video_task);
+                    // Drop packets a previous session encoded but never sent,
+                    // so the new viewer doesn't start with a stale burst.
+                    crate::audio::live::reset();
                     let audio_conn = conn.clone();
                     let audio_cat = audio.clone();
+                    let audio_controls = controls.clone();
                     let audio_interval = Duration::from_millis(10);
                     tokio::spawn(async move {
-                        if let Err(e) = stream_audio(audio_conn, audio_cat, audio_interval).await {
+                        if let Err(e) =
+                            stream_audio(audio_conn, audio_cat, audio_controls, audio_interval)
+                                .await
+                        {
                             log!("audio stream ended: {e}");
                         }
                     });
@@ -1586,32 +1603,54 @@ async fn stream_video(
 async fn stream_audio(
     conn: quinn::Connection,
     catalog: Arc<OpusCatalog>,
+    controls: Arc<HostControls>,
     packet_interval: Duration,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // No audio (e.g. Android host, video-only build): nothing to stream.
-    if catalog.is_empty() {
+    // Video-only build with no tone fallback: nothing will ever be queued.
+    if catalog.is_empty() && !cfg!(feature = "audio") {
         return Ok(());
     }
 
+    let addr = conn.remote_address();
     let mut packet_id: u16 = 0;
     let mut idx = 0usize;
+    let mut ticker = tokio::time::interval(packet_interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        ticker.tick().await;
         if conn.close_reason().is_some() {
             break;
         }
-
-        let opus = &catalog.packets[idx % catalog.len()];
-        let shard = encode_audio_packet(packet_id, opus, capture_ts_us());
-        let mut dg = shard.header.encode().to_vec();
-        dg.extend_from_slice(&shard.payload);
-        if conn.send_datagram_wait(dg.into()).await.is_err() {
-            return Ok(());
+        // The live queue is shared; only the connection that owns the stream
+        // may drain it, or a superseded session would steal packets.
+        if !controls.is_active_stream(addr) {
+            break;
         }
 
-        idx += 1;
-        packet_id = packet_id.wrapping_add(1);
-        tokio::time::sleep(packet_interval).await;
+        if crate::audio::live::is_active() {
+            // Capture is real-time, so normally one packet per tick; after a
+            // hiccup a couple queued up — send them all to catch back up.
+            while let Some(opus) = crate::audio::live::take_packet() {
+                let shard = encode_audio_packet(packet_id, &opus, capture_ts_us());
+                let mut dg = shard.header.encode().to_vec();
+                dg.extend_from_slice(&shard.payload);
+                if conn.send_datagram_wait(dg.into()).await.is_err() {
+                    return Ok(());
+                }
+                packet_id = packet_id.wrapping_add(1);
+            }
+        } else if !catalog.is_empty() {
+            let opus = &catalog.packets[idx % catalog.len()];
+            let shard = encode_audio_packet(packet_id, opus, capture_ts_us());
+            let mut dg = shard.header.encode().to_vec();
+            dg.extend_from_slice(&shard.payload);
+            if conn.send_datagram_wait(dg.into()).await.is_err() {
+                return Ok(());
+            }
+            idx += 1;
+            packet_id = packet_id.wrapping_add(1);
+        }
     }
     Ok(())
 }

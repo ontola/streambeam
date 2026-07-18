@@ -98,7 +98,7 @@ fn build_config(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(opt.max_encode_dim);
-    build_host_config(
+    let mut config = build_host_config(
         listen,
         opt.name
             .or_else(|| std::env::var("STREAMBEAM_HOST_NAME").ok())
@@ -109,7 +109,11 @@ fn build_config(
         pairing_payload_tx,
         pairing_request_tx,
         controls,
-    )
+    );
+    // Dev/demo runs (mock encoder) can opt into the 440 Hz test tone so the
+    // audio path stays exercisable without real capture.
+    config.audio_tone_fallback = std::env::var("STREAMBEAM_TONE").is_ok_and(|v| v == "1");
+    config
 }
 
 fn run_cli(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
