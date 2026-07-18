@@ -20,7 +20,6 @@ use tokio::sync::oneshot;
 use crate::active_stream::{ActiveStreamTracker, CloseableConn};
 use crate::audio::OpusCatalog;
 use crate::encode::{Codec, VideoEncoder, default_bitrate_bps};
-#[cfg(not(target_os = "macos"))]
 use crate::mock::MockEncoder;
 
 impl CloseableConn for quinn::Connection {
@@ -399,6 +398,13 @@ fn build_encoder(
     max_encode_dim: u32,
     wanted_codec: Codec,
 ) -> Result<Box<dyn VideoEncoder>, String> {
+    // Explicit dev/test opt-in (set by the e2e harness): the platform branches
+    // below otherwise wait on real capture — on macOS a Swift layer that only
+    // exists inside the app bundle, never in the CLI bin.
+    if std::env::var("STREAMBEAM_MOCK").is_ok_and(|v| v == "1") {
+        let _ = (fps, max_encode_dim, wanted_codec);
+        return Ok(Box::new(MockEncoder::bundled()));
+    }
     #[cfg(windows)]
     {
         match crate::capture::DesktopEncoder::new(fps, max_encode_dim, wanted_codec) {

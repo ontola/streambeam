@@ -61,6 +61,9 @@ pub fn spawn_host(data_dir: &Path) -> (std::process::Child, String) {
     let mut child = Command::new(host_bin())
         .env("STREAMBEAM_LISTEN", "127.0.0.1:0")
         .env("STREAMBEAM_NO_MDNS", "1")
+        // The CLI bin has no Swift/consent capture layer; without the mock,
+        // macOS sessions wait 30s for ScreenCaptureKit and fail.
+        .env("STREAMBEAM_MOCK", "1")
         .env("STREAMBEAM_DATA_DIR", data_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
