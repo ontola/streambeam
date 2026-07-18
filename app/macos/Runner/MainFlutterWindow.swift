@@ -177,6 +177,26 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
         return
       }
       switch call.method {
+      case "permissionStatus":
+        result([
+          "screenRecording": CGPreflightScreenCaptureAccess(),
+          "accessibility": CGPreflightPostEventAccess(),
+        ])
+      case "openPermissionSettings":
+        let args = call.arguments as? [String: Any]
+        let permission = args?["permission"] as? String
+        let pane = permission == "screenRecording"
+          ? "Privacy_ScreenCapture" : "Privacy_Accessibility"
+        if let url = URL(
+          string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
+        {
+          NSWorkspace.shared.open(url)
+          result(nil)
+        } else {
+          result(FlutterError(
+            code: "settings", message: "Could not open Privacy & Security settings.",
+            details: nil))
+        }
       case "requestInputAccess":
         if CGPreflightPostEventAccess() {
           result(true)

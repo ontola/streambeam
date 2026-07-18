@@ -75,7 +75,7 @@ class BeamPage extends StatefulWidget {
   State<BeamPage> createState() => _BeamPageState();
 }
 
-class _BeamPageState extends State<BeamPage> {
+class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
   Timer? _poll;
   HostSnapshot _snap = HostSnapshot(
     running: false,
@@ -96,6 +96,9 @@ class _BeamPageState extends State<BeamPage> {
   static const _screencast = MethodChannel('streambeam/screencast');
   static const _remoteInput = MethodChannel('streambeam/remote_input');
   bool _remoteInputEnabled = false;
+  bool? _macScreenRecordingGranted;
+  bool? _macAccessibilityGranted;
+  DateTime? _lastPermissionRefresh;
 
   /// Android starts capture explicitly. On macOS the host stays ready and the
   /// native runner toggles capture on demand when a client starts/stops.
@@ -104,6 +107,7 @@ class _BeamPageState extends State<BeamPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Every host stays ready: a paired client initiates the actual session.
     // Android raises its mandatory per-session MediaProjection picker only
     // after that authenticated request arrives.
@@ -117,7 +121,42 @@ class _BeamPageState extends State<BeamPage> {
       const Duration(milliseconds: 250),
       (_) => _refresh(),
     );
-    if (Platform.isAndroid) unawaited(_refreshRemoteInput());
+    unawaited(_refreshPermissions(force: true));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshPermissions(force: true));
+    }
+  }
+
+  Future<void> _refreshPermissions({bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        _lastPermissionRefresh != null &&
+        now.difference(_lastPermissionRefresh!) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastPermissionRefresh = now;
+    if (Platform.isAndroid) {
+      await _refreshRemoteInput();
+    } else if (Platform.isMacOS) {
+      try {
+        final raw = await _screencast.invokeMethod<dynamic>('permissionStatus');
+        final status = Map<Object?, Object?>.from(raw as Map);
+        final screenRecording = status['screenRecording'] == true;
+        final accessibility = status['accessibility'] == true;
+        if (mounted &&
+            (screenRecording != _macScreenRecordingGranted ||
+                accessibility != _macAccessibilityGranted)) {
+          setState(() {
+            _macScreenRecordingGranted = screenRecording;
+            _macAccessibilityGranted = accessibility;
+          });
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> _refreshRemoteInput() async {
@@ -137,6 +176,7 @@ class _BeamPageState extends State<BeamPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
     if (Platform.isMacOS) {
       unawaited(
@@ -240,8 +280,10 @@ class _BeamPageState extends State<BeamPage> {
   void _refresh() {
     if (!mounted || !hostPlatformSupported()) return;
     if (Platform.isAndroid) {
-      unawaited(_refreshRemoteInput());
+      unawaited(_refreshPermissions());
       unawaited(_refreshAndroidCapture());
+    } else if (Platform.isMacOS) {
+      unawaited(_refreshPermissions());
     }
     final next = hostSnapshot();
     setState(() => _snap = next);
@@ -412,6 +454,60 @@ class _BeamPageState extends State<BeamPage> {
     );
   }
 
+  Future<void> _showPermissionHelp({required String permission}) async {
+    final androidAccessibility =
+        Platform.isAndroid && permission == 'accessibility';
+    final screenRecording = permission == 'screenRecording';
+    final title = androidAccessibility
+        ? 'Allow remote control'
+        : screenRecording
+        ? 'Allow Screen Recording'
+        : 'Allow Accessibility';
+    final instructions = androidAccessibility
+        ? 'Android uses an Accessibility service to apply remote touch and keyboard input.\n\n'
+              '1. Open Accessibility settings.\n'
+              '2. Find StreamBeam under installed or downloaded apps.\n'
+              '3. Enable “Use StreamBeam” and confirm the warning.\n\n'
+              'StreamBeam only uses this while a paired device controls this screen.'
+        : screenRecording
+        ? 'Open System Settings → Privacy & Security → Screen & System Audio Recording, then enable StreamBeam.\n\n'
+              'If StreamBeam was already enabled, toggle it off and on once. macOS may ask you to restart the app.'
+        : 'Open System Settings → Privacy & Security → Accessibility, then enable StreamBeam.\n\n'
+              'This lets paired devices send mouse and keyboard input to this Mac.';
+    if (!mounted) return;
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.admin_panel_settings_outlined),
+        title: Text(title),
+        content: Text(instructions),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.settings),
+            label: const Text('Open settings'),
+          ),
+        ],
+      ),
+    );
+    if (open != true) return;
+    try {
+      if (androidAccessibility) {
+        await _openRemoteInputSettings();
+      } else {
+        await _screencast.invokeMethod<void>('openPermissionSettings', {
+          'permission': permission,
+        });
+      }
+    } catch (e) {
+      _setStatus(e.toString(), error: true);
+    }
+  }
+
   void _stopViewer(HostClientInfo viewer) {
     try {
       final stopped = hostDisconnectClient(addr: viewer.addr);
@@ -444,6 +540,16 @@ class _BeamPageState extends State<BeamPage> {
     final viewers = _snap.viewers;
     final running = _snap.running;
     final link = _snap.pairingLink;
+    final missingAndroidAccessibility =
+        Platform.isAndroid && !_remoteInputEnabled;
+    final missingMacScreenRecording =
+        Platform.isMacOS && _macScreenRecordingGranted == false;
+    final missingMacAccessibility =
+        Platform.isMacOS && _macAccessibilityGranted == false;
+    final hasMissingPermissions =
+        missingAndroidAccessibility ||
+        missingMacScreenRecording ||
+        missingMacAccessibility;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -483,6 +589,63 @@ class _BeamPageState extends State<BeamPage> {
                           trailing: TextButton(
                             onPressed: () => _stopViewer(viewer),
                             child: const Text('Stop'),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+              ],
+              if (hasMissingPermissions) ...[
+                ColoredBox(
+                  color: theme.colorScheme.errorContainer,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+                        child: Text(
+                          'Permissions needed',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: theme.colorScheme.onErrorContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      if (missingAndroidAccessibility)
+                        ListTile(
+                          leading: const Icon(Icons.touch_app_outlined),
+                          title: const Text('Remote control is disabled'),
+                          subtitle: const Text(
+                            'Allow Accessibility access for touch and keyboard control',
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => unawaited(
+                            _showPermissionHelp(permission: 'accessibility'),
+                          ),
+                        ),
+                      if (missingMacScreenRecording)
+                        ListTile(
+                          leading: const Icon(Icons.screen_share_outlined),
+                          title: const Text('Screen Recording is disabled'),
+                          subtitle: const Text(
+                            'Allow access so this Mac can share its screen',
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => unawaited(
+                            _showPermissionHelp(permission: 'screenRecording'),
+                          ),
+                        ),
+                      if (missingMacAccessibility)
+                        ListTile(
+                          leading: const Icon(Icons.keyboard_alt_outlined),
+                          title: const Text('Remote input is disabled'),
+                          subtitle: const Text(
+                            'Allow Accessibility access for mouse and keyboard control',
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => unawaited(
+                            _showPermissionHelp(permission: 'accessibility'),
                           ),
                         ),
                     ],
