@@ -7,6 +7,10 @@ private func rustCaptureWanted() -> UInt8
 
 class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   private static let activeStreamNotificationId = "streambeam.active-viewers"
+  // UserNotifications uses synchronous XPC internally for removal calls.
+  // Never let a wedged notification daemon block Flutter's platform thread.
+  private static let notificationQueue = DispatchQueue(
+    label: "io.streambeam.notifications", qos: .utility)
   private var videoChannel: FlutterMethodChannel?
   private var video: StreamBeamVideo?
   private var discoveryChannel: FlutterMethodChannel?
@@ -53,35 +57,39 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   }
 
   private func updateViewerNotification(names: [String]) {
-    let center = UNUserNotificationCenter.current()
     guard !names.isEmpty else {
       clearViewerNotification()
       return
     }
 
-    center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-      guard granted else { return }
-      let content = UNMutableNotificationContent()
-      if names.count == 1 {
-        content.title = "\(names[0]) is watching your screen"
-      } else {
-        content.title = "\(names.count) devices are watching your screen"
+    Self.notificationQueue.async {
+      let center = UNUserNotificationCenter.current()
+      center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        guard granted else { return }
+        let content = UNMutableNotificationContent()
+        if names.count == 1 {
+          content.title = "\(names[0]) is watching your screen"
+        } else {
+          content.title = "\(names.count) devices are watching your screen"
+        }
+        content.body = "A StreamBeam session is open. Open StreamBeam to stop it or remove access."
+        content.sound = .default
+        let request = UNNotificationRequest(
+          identifier: Self.activeStreamNotificationId,
+          content: content,
+          trigger: nil)
+        center.add(request)
       }
-      content.body = "A StreamBeam session is open. Open StreamBeam to stop it or remove access."
-      content.sound = .default
-      let request = UNNotificationRequest(
-        identifier: Self.activeStreamNotificationId,
-        content: content,
-        trigger: nil)
-      center.add(request)
     }
   }
 
   private func clearViewerNotification() {
-    let center = UNUserNotificationCenter.current()
-    let ids = [Self.activeStreamNotificationId]
-    center.removePendingNotificationRequests(withIdentifiers: ids)
-    center.removeDeliveredNotifications(withIdentifiers: ids)
+    Self.notificationQueue.async {
+      let center = UNUserNotificationCenter.current()
+      let ids = [Self.activeStreamNotificationId]
+      center.removePendingNotificationRequests(withIdentifiers: ids)
+      center.removeDeliveredNotifications(withIdentifiers: ids)
+    }
   }
 
   /// The Rust host is always available, but ScreenCaptureKit only runs while
