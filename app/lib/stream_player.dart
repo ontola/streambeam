@@ -704,6 +704,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     const inset = 10.0;
     final pad = MediaQuery.paddingOf(context);
     final drag = _buttonDragPos;
+    final hasLeftCutout = pad.left > 0;
+    final hasRightCutout = pad.right > 0;
 
     final double left;
     final double top;
@@ -712,8 +714,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       top = (drag.dy - buttonSize / 2).clamp(0.0, viewport.height - buttonSize);
     } else {
       left = _menuOnLeft
-          ? inset + pad.left
-          : viewport.width - buttonSize - inset - pad.right;
+          ? (hasLeftCutout ? 0 : inset)
+          : viewport.width - buttonSize - (hasRightCutout ? 0 : inset);
       top =
           (_menuCorner == _MenuCorner.topLeft ||
               _menuCorner == _MenuCorner.topRight)
@@ -1918,422 +1920,445 @@ class _StreamMenu extends StatelessWidget {
     );
 
     const edgeSide = BorderSide(color: Color(0x33000000), width: 1);
-    return Material(
-      color: theme.colorScheme.surface.withValues(alpha: 0.96),
-      elevation: 0,
-      shape: anchorLeft
-          ? const Border(right: edgeSide)
-          : const Border(left: edgeSide),
-      child: SafeArea(
-        left: anchorLeft,
-        right: !anchorLeft,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                metrics.horizontal + 4,
-                metrics.top,
-                metrics.horizontal + 4,
-                compact ? 4 : 8,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'StreamBeam',
-                      style:
-                          (compact
-                                  ? theme.textTheme.titleSmall
-                                  : theme.textTheme.titleMedium)
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                    ),
+    final cutoutInset = anchorLeft ? insets.left : insets.right;
+    return ColoredBox(
+      // The camera-cutout gutter is intentionally part of the black player,
+      // not the light settings surface. It remains free of labels and controls.
+      color: Colors.black,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: anchorLeft ? cutoutInset : 0,
+          right: anchorLeft ? 0 : cutoutInset,
+        ),
+        child: Material(
+          color: theme.colorScheme.surface.withValues(alpha: 0.96),
+          elevation: 0,
+          shape: anchorLeft
+              ? const Border(right: edgeSide)
+              : const Border(left: edgeSide),
+          child: SafeArea(
+            left: false,
+            right: false,
+            top: true,
+            bottom: true,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    metrics.horizontal + 4,
+                    metrics.top,
+                    metrics.horizontal + 4,
+                    compact ? 4 : 8,
                   ),
-                  if (onClose != null)
-                    IconButton(
-                      tooltip: 'Close menu',
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: onClose,
-                    ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.fromLTRB(
-                  metrics.horizontal,
-                  0,
-                  metrics.horizontal,
-                  metrics.bottom,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'StreamBeam',
+                          style:
+                              (compact
+                                      ? theme.textTheme.titleSmall
+                                      : theme.textTheme.titleMedium)
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (onClose != null)
+                        IconButton(
+                          tooltip: 'Close menu',
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: onClose,
+                        ),
+                    ],
+                  ),
                 ),
-                children: [
-                  if (showDiagnostics) ...[
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        metrics.horizontal + 4,
-                        compact ? 4 : 8,
-                        metrics.horizontal + 4,
-                        compact ? 2 : 4,
-                      ),
-                      child: Text(
-                        'Connection',
-                        style: theme.textTheme.titleSmall,
-                      ),
+                Expanded(
+                  child: ListView(
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.horizontal,
+                      0,
+                      metrics.horizontal,
+                      metrics.bottom,
                     ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: metrics.horizontal,
-                      ),
-                      child: _DiagnosticsPanel(
-                        diagnostics: diagnostics,
-                        compact: compact,
-                      ),
-                    ),
-                    const Divider(height: 1),
-                  ],
-                  if (displays.length > 1) ...[
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        metrics.horizontal + 4,
-                        compact ? 4 : 8,
-                        metrics.horizontal + 4,
-                        compact ? 2 : 4,
-                      ),
-                      child: Text('Screen', style: theme.textTheme.titleSmall),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: metrics.horizontal,
-                      ),
-                      child: DropdownButtonFormField<int>(
-                        key: ValueKey(selectedDisplayId),
-                        initialValue:
-                            displays.any((d) => d.id == selectedDisplayId)
-                            ? selectedDisplayId
-                            : displays.first.id,
-                        isExpanded: true,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
+                    children: [
+                      if (showDiagnostics) ...[
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            metrics.horizontal + 4,
+                            compact ? 4 : 8,
+                            metrics.horizontal + 4,
+                            compact ? 2 : 4,
                           ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
+                          child: Text(
+                            'Connection',
+                            style: theme.textTheme.titleSmall,
                           ),
                         ),
-                        items: [
-                          for (final display in displays)
-                            DropdownMenuItem(
-                              value: display.id,
-                              child: Text(
-                                '${display.name} · ${display.width}×${display.height}',
-                                overflow: TextOverflow.ellipsis,
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.horizontal,
+                          ),
+                          child: _DiagnosticsPanel(
+                            diagnostics: diagnostics,
+                            compact: compact,
+                          ),
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      if (displays.length > 1) ...[
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            metrics.horizontal + 4,
+                            compact ? 4 : 8,
+                            metrics.horizontal + 4,
+                            compact ? 2 : 4,
+                          ),
+                          child: Text(
+                            'Screen',
+                            style: theme.textTheme.titleSmall,
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.horizontal,
+                          ),
+                          child: DropdownButtonFormField<int>(
+                            key: ValueKey(selectedDisplayId),
+                            initialValue:
+                                displays.any((d) => d.id == selectedDisplayId)
+                                ? selectedDisplayId
+                                : displays.first.id,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                        ],
-                        onChanged: (id) {
-                          if (id != null && id != selectedDisplayId) {
-                            onDisplayChanged(id);
-                          }
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Divider(height: 1),
-                  ],
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      metrics.horizontal + 4,
-                      compact ? 4 : 8,
-                      metrics.horizontal + 4,
-                      compact ? 2 : 4,
-                    ),
-                    child: Text(
-                      'Streaming mode',
-                      style: theme.textTheme.titleSmall,
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: metrics.horizontal,
-                    ),
-                    child: DropdownButtonFormField<StreamMode>(
-                      initialValue: streamMode,
-                      isExpanded: true,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      items: [
-                        for (final mode in StreamMode.values)
-                          DropdownMenuItem(
-                            value: mode,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(mode.icon, size: compact ? 18 : 20),
-                                const SizedBox(width: 8),
-                                Flexible(
+                            items: [
+                              for (final display in displays)
+                                DropdownMenuItem(
+                                  value: display.id,
                                   child: Text(
-                                    mode.label,
+                                    '${display.name} · ${display.width}×${display.height}',
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                              ],
+                            ],
+                            onChanged: (id) {
+                              if (id != null && id != selectedDisplayId) {
+                                onDisplayChanged(id);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Divider(height: 1),
+                      ],
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          metrics.horizontal + 4,
+                          compact ? 4 : 8,
+                          metrics.horizontal + 4,
+                          compact ? 2 : 4,
+                        ),
+                        child: Text(
+                          'Streaming mode',
+                          style: theme.textTheme.titleSmall,
+                        ),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: metrics.horizontal,
+                        ),
+                        child: DropdownButtonFormField<StreamMode>(
+                          initialValue: streamMode,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
                             ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          items: [
+                            for (final mode in StreamMode.values)
+                              DropdownMenuItem(
+                                value: mode,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(mode.icon, size: compact ? 18 : 20),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        mode.label,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                          onChanged: (mode) {
+                            if (mode != null) onStreamModeChanged(mode);
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          metrics.horizontal + 4,
+                          compact ? 2 : 6,
+                          metrics.horizontal + 4,
+                          compact ? 4 : 8,
+                        ),
+                        child: Text(
+                          streamMode.description,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      if (streamMode == StreamMode.custom) ...[
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.horizontal + 4,
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Resolution',
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                              ),
+                              Text(
+                                '${(customSettings.resolutionScale * 100).round()}%',
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: math.max(0.0, metrics.horizontal - 8),
+                          ),
+                          child: Slider(
+                            value: customSettings.resolutionScale,
+                            min: 0.25,
+                            max: 1.0,
+                            divisions: 15,
+                            label:
+                                '${(customSettings.resolutionScale * 100).round()}%',
+                            onChanged: (value) => onCustomSettingsChanged(
+                              customSettings.copyWith(resolutionScale: value),
+                            ),
+                            onChangeEnd: (_) => onCustomSettingsCommitted(),
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.horizontal + 4,
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Max frame rate',
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                              ),
+                              Text(
+                                '${customSettings.maxFps} fps',
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: math.max(0.0, metrics.horizontal - 8),
+                          ),
+                          child: Slider(
+                            value: customSettings.maxFps.toDouble(),
+                            min: 15,
+                            max: 120,
+                            divisions: 21,
+                            label: '${customSettings.maxFps} fps',
+                            onChanged: (value) => onCustomSettingsChanged(
+                              customSettings.copyWith(maxFps: value.round()),
+                            ),
+                            onChangeEnd: (_) => onCustomSettingsCommitted(),
+                          ),
+                        ),
+                      ],
+                      const Divider(height: 1),
+                      if (upscaleSupported) ...[
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            metrics.horizontal + 4,
+                            compact ? 4 : 8,
+                            metrics.horizontal + 4,
+                            compact ? 2 : 4,
+                          ),
+                          child: Text(
+                            'Video',
+                            style: theme.textTheme.titleSmall,
+                          ),
+                        ),
+                        SwitchListTile(
+                          value: upscaleActive,
+                          onChanged: onToggleUpscale == null
+                              ? null
+                              : (_) => onToggleUpscale!(),
+                          title: const Text('Upscaling'),
+                          subtitle: Text(
+                            'Sharper image via GPU (MetalFX)',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          dense: compact,
+                          contentPadding: tilePadding,
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      if (touchControls) ...[
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            metrics.horizontal + 4,
+                            compact ? 4 : 8,
+                            metrics.horizontal + 4,
+                            compact ? 2 : 4,
+                          ),
+                          child: Text(
+                            'Pointer mode',
+                            style: theme.textTheme.titleSmall,
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.horizontal,
+                          ),
+                          child: SegmentedButton<PointerMode>(
+                            segments: [
+                              ButtonSegment(
+                                value: PointerMode.direct,
+                                icon: Icon(
+                                  Icons.touch_app,
+                                  size: compact ? 18 : 20,
+                                ),
+                                label: compact ? null : const Text('Direct'),
+                                tooltip: 'Direct touch — finger maps to screen',
+                              ),
+                              ButtonSegment(
+                                value: PointerMode.trackpad,
+                                icon: Icon(
+                                  Icons.swipe,
+                                  size: compact ? 18 : 20,
+                                ),
+                                label: compact ? null : const Text('Trackpad'),
+                                tooltip: 'Trackpad — drag moves cursor',
+                              ),
+                            ],
+                            selected: {pointerMode},
+                            emptySelectionAllowed: false,
+                            showSelectedIcon: false,
+                            onSelectionChanged: (selected) {
+                              if (selected.isNotEmpty) {
+                                onPointerModeChanged(selected.first);
+                              }
+                            },
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            metrics.horizontal + 4,
+                            compact ? 2 : 6,
+                            metrics.horizontal + 4,
+                            compact ? 4 : 8,
+                          ),
+                          child: Text(
+                            trackpad
+                                ? 'Drag to move the cursor · tap to left-click'
+                                : 'Your finger position maps to the PC screen · tap to click',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        if (onMenuButtonEnabledChanged != null)
+                          SwitchListTile(
+                            value: menuButtonEnabled,
+                            onChanged: onMenuButtonEnabledChanged,
+                            title: const Text('Floating menu button'),
+                            subtitle: Text(
+                              'Drag it to any corner · edge-swipe always works',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            dense: compact,
+                            contentPadding: tilePadding,
                           ),
                       ],
-                      onChanged: (mode) {
-                        if (mode != null) onStreamModeChanged(mode);
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      metrics.horizontal + 4,
-                      compact ? 2 : 6,
-                      metrics.horizontal + 4,
-                      compact ? 4 : 8,
-                    ),
-                    child: Text(
-                      streamMode.description,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  if (streamMode == StreamMode.custom) ...[
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: metrics.horizontal + 4,
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Resolution',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ),
-                          Text(
-                            '${(customSettings.resolutionScale * 100).round()}%',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: math.max(0.0, metrics.horizontal - 8),
-                      ),
-                      child: Slider(
-                        value: customSettings.resolutionScale,
-                        min: 0.25,
-                        max: 1.0,
-                        divisions: 15,
-                        label:
-                            '${(customSettings.resolutionScale * 100).round()}%',
-                        onChanged: (value) => onCustomSettingsChanged(
-                          customSettings.copyWith(resolutionScale: value),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: Icon(
+                          Icons.stop_circle_outlined,
+                          size: compact ? 22 : 24,
                         ),
-                        onChangeEnd: (_) => onCustomSettingsCommitted(),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: metrics.horizontal + 4,
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Max frame rate',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ),
-                          Text(
-                            '${customSettings.maxFps} fps',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: math.max(0.0, metrics.horizontal - 8),
-                      ),
-                      child: Slider(
-                        value: customSettings.maxFps.toDouble(),
-                        min: 15,
-                        max: 120,
-                        divisions: 21,
-                        label: '${customSettings.maxFps} fps',
-                        onChanged: (value) => onCustomSettingsChanged(
-                          customSettings.copyWith(maxFps: value.round()),
-                        ),
-                        onChangeEnd: (_) => onCustomSettingsCommitted(),
-                      ),
-                    ),
-                  ],
-                  const Divider(height: 1),
-                  if (upscaleSupported) ...[
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        metrics.horizontal + 4,
-                        compact ? 4 : 8,
-                        metrics.horizontal + 4,
-                        compact ? 2 : 4,
-                      ),
-                      child: Text('Video', style: theme.textTheme.titleSmall),
-                    ),
-                    SwitchListTile(
-                      value: upscaleActive,
-                      onChanged: onToggleUpscale == null
-                          ? null
-                          : (_) => onToggleUpscale!(),
-                      title: const Text('Upscaling'),
-                      subtitle: Text(
-                        'Sharper image via GPU (MetalFX)',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                      dense: compact,
-                      contentPadding: tilePadding,
-                    ),
-                    const Divider(height: 1),
-                  ],
-                  if (touchControls) ...[
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        metrics.horizontal + 4,
-                        compact ? 4 : 8,
-                        metrics.horizontal + 4,
-                        compact ? 2 : 4,
-                      ),
-                      child: Text(
-                        'Pointer mode',
-                        style: theme.textTheme.titleSmall,
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: metrics.horizontal,
-                      ),
-                      child: SegmentedButton<PointerMode>(
-                        segments: [
-                          ButtonSegment(
-                            value: PointerMode.direct,
-                            icon: Icon(
-                              Icons.touch_app,
-                              size: compact ? 18 : 20,
-                            ),
-                            label: compact ? null : const Text('Direct'),
-                            tooltip: 'Direct touch — finger maps to screen',
-                          ),
-                          ButtonSegment(
-                            value: PointerMode.trackpad,
-                            icon: Icon(Icons.swipe, size: compact ? 18 : 20),
-                            label: compact ? null : const Text('Trackpad'),
-                            tooltip: 'Trackpad — drag moves cursor',
-                          ),
-                        ],
-                        selected: {pointerMode},
-                        emptySelectionAllowed: false,
-                        showSelectedIcon: false,
-                        onSelectionChanged: (selected) {
-                          if (selected.isNotEmpty) {
-                            onPointerModeChanged(selected.first);
-                          }
-                        },
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        metrics.horizontal + 4,
-                        compact ? 2 : 6,
-                        metrics.horizontal + 4,
-                        compact ? 4 : 8,
-                      ),
-                      child: Text(
-                        trackpad
-                            ? 'Drag to move the cursor · tap to left-click'
-                            : 'Your finger position maps to the PC screen · tap to click',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                    if (onMenuButtonEnabledChanged != null)
-                      SwitchListTile(
-                        value: menuButtonEnabled,
-                        onChanged: onMenuButtonEnabledChanged,
-                        title: const Text('Floating menu button'),
-                        subtitle: Text(
-                          'Drag it to any corner · edge-swipe always works',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                        dense: compact,
+                        title: const Text('Stop'),
+                        visualDensity: tileDensity,
                         contentPadding: tilePadding,
+                        onTap: onStop,
                       ),
-                  ],
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: Icon(
-                      Icons.stop_circle_outlined,
-                      size: compact ? 22 : 24,
-                    ),
-                    title: const Text('Stop'),
-                    visualDensity: tileDensity,
-                    contentPadding: tilePadding,
-                    onTap: onStop,
+                      if (touchControls)
+                        ListTile(
+                          leading: Icon(
+                            Icons.keyboard_outlined,
+                            size: compact ? 22 : 24,
+                          ),
+                          title: const Text('Keyboard'),
+                          subtitle: Text(
+                            'Send text to your PC',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          visualDensity: tileDensity,
+                          contentPadding: tilePadding,
+                          onTap: onKeyboard,
+                        ),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          metrics.horizontal + 4,
+                          compact ? 4 : 8,
+                          metrics.horizontal + 4,
+                          compact ? 4 : 8,
+                        ),
+                        child: Text(
+                          touchControls
+                              ? 'Drag from the left or right edge for menu\n'
+                                    '1 finger: move cursor · tap: left click\n'
+                                    '2 fingers: pinch zoom / pan (local only)\n'
+                                    'Quick 2-finger tap: right click'
+                              : 'Mouse controls the remote device directly:\n'
+                                    'click · drag · right-click · scroll',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            height: compact ? 1.25 : 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  if (touchControls)
-                    ListTile(
-                      leading: Icon(
-                        Icons.keyboard_outlined,
-                        size: compact ? 22 : 24,
-                      ),
-                      title: const Text('Keyboard'),
-                      subtitle: Text(
-                        'Send text to your PC',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                      visualDensity: tileDensity,
-                      contentPadding: tilePadding,
-                      onTap: onKeyboard,
-                    ),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      metrics.horizontal + 4,
-                      compact ? 4 : 8,
-                      metrics.horizontal + 4,
-                      compact ? 4 : 8,
-                    ),
-                    child: Text(
-                      touchControls
-                          ? 'Drag from the left or right edge for menu\n'
-                                '1 finger: move cursor · tap: left click\n'
-                                '2 fingers: pinch zoom / pan (local only)\n'
-                                'Quick 2-finger tap: right click'
-                          : 'Mouse controls the remote device directly:\n'
-                                'click · drag · right-click · scroll',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        height: compact ? 1.25 : 1.35,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

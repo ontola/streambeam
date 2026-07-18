@@ -19,6 +19,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -52,6 +53,16 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Let the fullscreen player own the landscape cutout strip. Flutter's
+        // normal screens still respect MediaQuery/SafeArea, while the player
+        // paints the exposed strip black and can place its menu affordance in
+        // it instead of leaving the activity theme's white background visible.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val attributes = window.attributes
+            attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = attributes
+        }
         flutterEngine.platformViewsController.registry.registerViewFactory(
             "streambeam/video",
             StreamViewFactory(flutterEngine.dartExecutor.binaryMessenger),
