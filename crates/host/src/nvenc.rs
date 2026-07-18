@@ -614,6 +614,22 @@ unsafe fn build_config(
     if codec == Codec::Av1 {
         config.encode_codec_config[4] |= 1 << 5;
     }
+    // The codec-specific `idrPeriod` must be set to match: the top-level
+    // `gopLength` only becomes the IDR interval "if [idrPeriod is] not set"
+    // (nvEncodeAPI.h), and the ultra-low-latency preset DOES set it — to
+    // NVENC_INFINITE_GOPLENGTH, the header's own suggestion for low-latency
+    // clients. Proven live 2026-07-18 (AV1): 650+ frames after a forced IDR
+    // with `gop_len = 360` and not one periodic keyframe — so any decoder
+    // drift (client-local datagram loss, an imperfect ref invalidation)
+    // was *permanent* between forced IDRs. Offsets cross-checked against
+    // nvEncodeAPI.h: NV_ENC_CONFIG_AV1 = level, tier, minPartSize,
+    // maxPartSize, bitfield word, idrPeriod → u32 index 5;
+    // NV_ENC_CONFIG_H264 = bitfield word, level, idrPeriod → u32 index 2.
+    let idr_period_word = match codec {
+        Codec::Av1 => 5,
+        Codec::H264 => 2,
+    };
+    config.encode_codec_config[idr_period_word] = config.gop_len;
     Ok(config)
 }
 
