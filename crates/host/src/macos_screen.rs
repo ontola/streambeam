@@ -29,6 +29,10 @@ struct ScreenSource {
     /// Longest encoded side requested by the client that owns the stream.
     /// Swift reads this immediately before starting ScreenCaptureKit.
     requested_max_dimension: AtomicU32,
+    /// Monotonically changes for every client-owned capture session. Native
+    /// code uses it to notice a stop/start handoff even when its polling
+    /// interval misses the brief `capture_wanted = false` transition.
+    capture_request_revision: AtomicU32,
     width: AtomicU32,
     height: AtomicU32,
     requested_display: AtomicU32,
@@ -44,6 +48,7 @@ static SOURCE: ScreenSource = ScreenSource {
     active: AtomicBool::new(false),
     capture_wanted: AtomicBool::new(false),
     requested_max_dimension: AtomicU32::new(1920),
+    capture_request_revision: AtomicU32::new(0),
     width: AtomicU32::new(0),
     height: AtomicU32::new(0),
     requested_display: AtomicU32::new(NO_DISPLAY),
@@ -116,9 +121,16 @@ pub fn is_ready() -> bool {
 }
 
 pub fn request_capture(max_dimension: u32) {
+    // A cached native source must not make the next session's build return
+    // early with stale dimensions/display. Swift will rebuild for the new
+    // revision and call `begin_session` once its codec config is ready.
+    end_session();
     SOURCE
         .requested_max_dimension
         .store(max_dimension.max(2), Ordering::Release);
+    SOURCE
+        .capture_request_revision
+        .fetch_add(1, Ordering::AcqRel);
     SOURCE.capture_wanted.store(true, Ordering::Release);
 }
 
@@ -127,6 +139,10 @@ pub fn requested_max_dimension() -> u32 {
         .requested_max_dimension
         .load(Ordering::Acquire)
         .max(2)
+}
+
+pub fn capture_request_revision() -> u32 {
+    SOURCE.capture_request_revision.load(Ordering::Acquire)
 }
 
 pub fn release_capture() {

@@ -437,12 +437,11 @@ fn build_encoder(
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = (fps, wanted_codec);
+        let _ = (fps, max_encode_dim, wanted_codec);
         // The listener stays idle until an authorized client sends its
         // SessionRequest. That request makes capture wanted; the Swift runner
         // observes it and starts ScreenCaptureKit/VideoToolbox on the main
         // thread. The longer wait covers the one-time macOS consent prompt.
-        crate::macos_screen::request_capture(max_encode_dim);
         for _ in 0..300 {
             if crate::macos_screen::is_ready() {
                 crate::logging::log("macOS screen capture ready — streaming live screen");
@@ -910,6 +909,8 @@ async fn handle_client(
                 // the same connection.
                 controls.start_streaming(conn.remote_address(), &conn).await;
 
+                #[cfg(target_os = "macos")]
+                crate::macos_screen::request_capture(build_dim);
                 #[cfg(target_os = "android")]
                 crate::android_screen::request_capture();
 

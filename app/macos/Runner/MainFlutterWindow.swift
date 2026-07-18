@@ -6,6 +6,8 @@ import UserNotifications
 private func rustCaptureWanted() -> UInt8
 @_silgen_name("streambeam_macos_capture_requested_max_dimension")
 private func rustCaptureRequestedMaxDimension() -> UInt32
+@_silgen_name("streambeam_macos_capture_request_revision")
+private func rustCaptureRequestRevision() -> UInt32
 
 class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   private static let activeStreamNotificationId = "streambeam.active-viewers"
@@ -21,7 +23,8 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   private var screenCapture: AnyObject?
   private var captureDemandTimer: Timer?
   private var captureStarting = false
-  private var captureAttemptedForDemand = false
+  private var activeCaptureRevision: UInt32?
+  private var captureRetryAfter = Date.distantPast
   private let discovery = StreamBeamDiscovery()
 
   override func awakeFromNib() {
@@ -110,16 +113,24 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     guard #available(macOS 13.0, *) else { return }
     let wanted = rustCaptureWanted() != 0
     if wanted {
-      guard screenCapture == nil, !captureStarting, !captureAttemptedForDemand else { return }
-      captureAttemptedForDemand = true
+      let revision = rustCaptureRequestRevision()
+      guard !captureStarting else { return }
+      guard screenCapture == nil || activeCaptureRevision != revision else { return }
+      guard Date() >= captureRetryAfter else { return }
       captureStarting = true
+      let previous = screenCapture as? StreamBeamCapture
+      screenCapture = nil
+      activeCaptureRevision = nil
       let capture = StreamBeamCapture()
       Task { @MainActor [weak self] in
         guard let self else { return }
+        await previous?.stop()
         do {
           try await capture.start(maxDimension: Int(rustCaptureRequestedMaxDimension()))
-          if rustCaptureWanted() != 0 {
+          if rustCaptureWanted() != 0 && rustCaptureRequestRevision() == revision {
             self.screenCapture = capture
+            self.activeCaptureRevision = revision
+            self.captureRetryAfter = .distantPast
             self.screencastChannel?.invokeMethod(
               "captureState", arguments: ["active": true])
           } else {
@@ -127,6 +138,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
           }
         } catch {
           NSLog("StreamBeam on-demand capture failed: \(error.localizedDescription)")
+          self.captureRetryAfter = Date().addingTimeInterval(1)
           self.screencastChannel?.invokeMethod(
             "captureState",
             arguments: ["active": false, "error": error.localizedDescription])
@@ -134,9 +146,10 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
         self.captureStarting = false
       }
     } else {
-      captureAttemptedForDemand = false
+      captureRetryAfter = .distantPast
       guard let capture = screenCapture as? StreamBeamCapture, !captureStarting else { return }
       screenCapture = nil
+      activeCaptureRevision = nil
       captureStarting = true
       Task { @MainActor [weak self] in
         await capture.stop()
@@ -174,6 +187,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
           do {
             try await capture.start(maxDimension: 1920)
             self.screenCapture = capture
+            self.activeCaptureRevision = nil
             result(true)
           } catch {
             result(FlutterError(
@@ -183,6 +197,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       case "stopCapture":
         let capture = self.screenCapture as? StreamBeamCapture
         self.screenCapture = nil
+        self.activeCaptureRevision = nil
         Task { @MainActor in
           await capture?.stop()
           result(nil)

@@ -38,6 +38,11 @@ pub extern "C" fn streambeam_macos_capture_requested_max_dimension() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn streambeam_macos_capture_request_revision() -> u32 {
+    streambeam_host::macos_screen::capture_request_revision()
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn streambeam_macos_capture_set_displays(
     json: *const u8,
     len: usize,
