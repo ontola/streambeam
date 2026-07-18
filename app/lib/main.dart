@@ -24,14 +24,36 @@ final _githubReleasesUrl = Uri.parse(
 final _ontolaUrl = Uri.parse('https://ontola.io');
 const _logoAsset = 'assets/streambeam-logo.svg';
 
-/// Computed the same way as `MaterialApp`'s theme below (same seed color),
-/// but standalone — no `BuildContext` needed — so `main()` can also use it
-/// to color the system nav bar before the first frame. Explicitly set as
-/// `streamBeamAppBar`'s own background too, rather than trusting Material's
-/// default elevation-tinted app bar color to land on the exact same value.
-final _appBarColor = ColorScheme.fromSeed(
-  seedColor: Colors.indigo,
-).surfaceContainer;
+ThemeData _streamBeamTheme(Brightness brightness) {
+  final colors = ColorScheme.fromSeed(
+    seedColor: Colors.indigo,
+    brightness: brightness,
+  );
+  return ThemeData(
+    colorScheme: colors,
+    useMaterial3: true,
+    scaffoldBackgroundColor: colors.surface,
+    appBarTheme: AppBarTheme(
+      backgroundColor: colors.surfaceContainer,
+      foregroundColor: colors.onSurface,
+    ),
+  );
+}
+
+SystemUiOverlayStyle _systemUiStyle(ColorScheme colors) {
+  final iconBrightness = colors.brightness == Brightness.dark
+      ? Brightness.light
+      : Brightness.dark;
+  return SystemUiOverlayStyle(
+    statusBarColor: colors.surfaceContainer,
+    statusBarIconBrightness: iconBrightness,
+    statusBarBrightness: colors.brightness,
+    systemNavigationBarColor: colors.surfaceContainer,
+    systemNavigationBarDividerColor: colors.outlineVariant,
+    systemNavigationBarIconBrightness: iconBrightness,
+    systemNavigationBarContrastEnforced: false,
+  );
+}
 
 Future<void> openGithubRepo() async {
   await launchUrl(_githubRepoUrl, mode: LaunchMode.externalApplication);
@@ -68,11 +90,7 @@ List<Widget> _appBarActions() => [
 /// The shared top bar (logo + "StreamBeam" + GitHub link), identical on every
 /// tab so the header doesn't change as you switch between Watch and Beam.
 AppBar streamBeamAppBar() {
-  return AppBar(
-    backgroundColor: _appBarColor,
-    title: _appBarTitle(),
-    actions: _appBarActions(),
-  );
+  return AppBar(title: _appBarTitle(), actions: _appBarActions());
 }
 
 /// True while a tab is showing fullscreen content (the video player), so the
@@ -169,18 +187,6 @@ Future<void> main() async {
   setAppDataDir(dir: dir);
   await _applyDeviceName();
   if (Platform.isAndroid) {
-    // Without this, the system nav bar (back/home buttons) defaults to a
-    // plain white background — indistinguishable from this app's white
-    // body behind it, so the (also white-ish) nav icons effectively
-    // disappear. Match it to the same surface tone the app bar uses (see
-    // `streamBeamAppBar`'s `backgroundColor`) so the two bars read as one
-    // continuous grey strip, with dark icons for contrast against it.
-    SystemChrome.setSystemUIOverlayStyle(
-      SystemUiOverlayStyle(
-        systemNavigationBarColor: _appBarColor,
-        systemNavigationBarIconBrightness: Brightness.dark,
-      ),
-    );
     // Keep the system nav (back/home) visible; the fullscreen player goes
     // immersive on its own while watching.
     SystemChrome.setEnabledSystemUIMode(
@@ -219,10 +225,16 @@ class StreamBeamApp extends StatelessWidget {
     return MaterialApp(
       title: 'StreamBeam',
       scaffoldMessengerKey: streamBeamMessengerKey,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
+      theme: _streamBeamTheme(Brightness.light),
+      darkTheme: _streamBeamTheme(Brightness.dark),
+      themeMode: ThemeMode.system,
+      builder: (context, child) {
+        final colors = Theme.of(context).colorScheme;
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: _systemUiStyle(colors),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const AppShell(),
     );
   }
@@ -1441,7 +1453,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
         SliverAppBar(
-          backgroundColor: _appBarColor,
           title: _appBarTitle(),
           actions: _appBarActions(),
           floating: true,
