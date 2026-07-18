@@ -24,7 +24,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   private var captureDemandTimer: Timer?
   private var captureStarting = false
   private var activeCaptureRevision: UInt32?
-  private var captureRetryAfter = Date.distantPast
+  private var failedCaptureRevision: UInt32?
   private let discovery = StreamBeamDiscovery()
 
   override func awakeFromNib() {
@@ -116,7 +116,10 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       let revision = rustCaptureRequestRevision()
       guard !captureStarting else { return }
       guard screenCapture == nil || activeCaptureRevision != revision else { return }
-      guard Date() >= captureRetryAfter else { return }
+      // A permission denial is not transient within one request. Retrying it
+      // on every 200 ms poll makes macOS show the same Screen Recording alert
+      // forever. A fresh user connection has a new revision and may try once.
+      guard failedCaptureRevision != revision else { return }
       captureStarting = true
       let previous = screenCapture as? StreamBeamCapture
       screenCapture = nil
@@ -130,7 +133,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
           if rustCaptureWanted() != 0 && rustCaptureRequestRevision() == revision {
             self.screenCapture = capture
             self.activeCaptureRevision = revision
-            self.captureRetryAfter = .distantPast
+            self.failedCaptureRevision = nil
             self.screencastChannel?.invokeMethod(
               "captureState", arguments: ["active": true])
           } else {
@@ -138,7 +141,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
           }
         } catch {
           NSLog("StreamBeam on-demand capture failed: \(error.localizedDescription)")
-          self.captureRetryAfter = Date().addingTimeInterval(1)
+          self.failedCaptureRevision = revision
           self.screencastChannel?.invokeMethod(
             "captureState",
             arguments: ["active": false, "error": error.localizedDescription])
@@ -146,7 +149,6 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
         self.captureStarting = false
       }
     } else {
-      captureRetryAfter = .distantPast
       guard let capture = screenCapture as? StreamBeamCapture, !captureStarting else { return }
       screenCapture = nil
       activeCaptureRevision = nil
