@@ -1121,7 +1121,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                               ),
                             ),
                           ),
-                        if (widget.touchControls) ...[
+                        // These transparent edge zones exist only to begin a
+                        // fresh open gesture. Leaving them above an open panel
+                        // makes its outer 64–96 px win the hit test, swallowing
+                        // taps on sidebar controls.
+                        if (widget.touchControls && !_menuOpen) ...[
                           Positioned(
                             right: 0,
                             top: 0,
