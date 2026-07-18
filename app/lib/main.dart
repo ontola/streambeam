@@ -462,7 +462,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       }
     });
     _viewerTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(milliseconds: 250),
       (_) => _refreshViewers(),
     );
     _deepLinkChannel.setMethodCallHandler((call) async {
@@ -933,6 +933,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     // on the platform channel and can take a moment.
     final sub = _desktopSub;
     _desktopSub = null;
+    stopPlayback();
     appImmersive.value = false;
     if (mounted) {
       setState(() {
@@ -1318,6 +1319,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   void _stopStreaming() {
     _cancelSurfaceTimeout();
     ++_sessionId;
+    stopPlayback();
     setState(() {
       _teardownVideo();
       _busy = false;

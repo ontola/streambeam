@@ -107,7 +107,7 @@ class _BeamPageState extends State<BeamPage> {
     if (Platform.isMacOS) {
       _screencast.setMethodCallHandler(_handleNativeCaptureEvent);
     }
-    _poll = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+    _poll = Timer.periodic(const Duration(milliseconds: 250), (_) => _refresh());
     if (Platform.isAndroid) unawaited(_refreshRemoteInput());
   }
 

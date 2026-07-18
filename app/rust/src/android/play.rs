@@ -355,6 +355,7 @@ async fn play_session(
     native_window: i64,
     max_video_frames: u32,
 ) -> Result<StreamStats, String> {
+    let _active_connection = crate::playback::ActiveConnectionGuard::new(&session.conn);
     crate::playback::reset();
     crate::playback::set_host_accepts_touch(matches!(
         session.input_mode,

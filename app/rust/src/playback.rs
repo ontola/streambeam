@@ -23,6 +23,46 @@ static REMOTE_CLIPBOARD: Mutex<Option<String>> = Mutex::new(None);
 const NO_DISPLAY: u32 = u32::MAX;
 static REQUESTED_DISPLAY: AtomicU32 = AtomicU32::new(NO_DISPLAY);
 static HOST_ACCEPTS_TOUCH: AtomicU32 = AtomicU32::new(0);
+static ACTIVE_CONNECTION: Mutex<Option<quinn::Connection>> = Mutex::new(None);
+
+/// Keeps the currently visible playback connection addressable from the UI's
+/// synchronous Stop action. Dropping an older session must not clear a newer
+/// one that already replaced it, hence the stable-id comparison.
+pub struct ActiveConnectionGuard {
+    stable_id: usize,
+}
+
+impl ActiveConnectionGuard {
+    pub fn new(conn: &quinn::Connection) -> Self {
+        let mut active = ACTIVE_CONNECTION.lock().unwrap();
+        if let Some(previous) = active.replace(conn.clone())
+            && previous.stable_id() != conn.stable_id()
+        {
+            previous.close(0u32.into(), b"playback replaced");
+        }
+        Self {
+            stable_id: conn.stable_id(),
+        }
+    }
+}
+
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_CONNECTION.lock().unwrap();
+        if active
+            .as_ref()
+            .is_some_and(|conn| conn.stable_id() == self.stable_id)
+        {
+            *active = None;
+        }
+    }
+}
+
+pub fn stop_active_connection() {
+    if let Some(conn) = ACTIVE_CONNECTION.lock().unwrap().take() {
+        conn.close(0u32.into(), b"viewer stopped");
+    }
+}
 
 pub fn reset() {
     FRAMES_RENDERED.store(0, Ordering::Relaxed);

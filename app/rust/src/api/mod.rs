@@ -13,6 +13,13 @@ pub fn playback_frames_rendered() -> u64 {
     crate::playback::frames_rendered()
 }
 
+/// Stop the active watch session immediately instead of waiting for the
+/// decoder/media receive loop's network timeout to notice that its UI left.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stop_playback() {
+    crate::playback::stop_active_connection();
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaybackDiagnostics {
     pub width: u16,
@@ -632,6 +639,7 @@ async fn desktop_stream_loop(
     mut session: streambeam_core::ClientSession,
     sink: &crate::frb_generated::StreamSink<DesktopStreamEvent>,
 ) -> Result<(), String> {
+    let _active_connection = crate::playback::ActiveConnectionGuard::new(&session.conn);
     crate::playback::set_host_accepts_touch(matches!(
         session.input_mode,
         streambeam_proto::control::HostInputMode::Touch
