@@ -525,6 +525,22 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
   }
 
+  void _stopViewer(HostClientInfo viewer) {
+    try {
+      final stopped = hostDisconnectClient(addr: viewer.addr);
+      if (!stopped) {
+        throw StateError('${viewer.name} is no longer connected.');
+      }
+      // Reflect the explicit user action immediately; the regular 250 ms
+      // snapshot poll remains the source of truth for subsequent changes.
+      setState(() {
+        _viewers = _viewers.where((item) => item.addr != viewer.addr).toList();
+      });
+    } catch (e) {
+      _reportError(_humanizeError(e.toString()));
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && !_busy) {
@@ -1424,6 +1440,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     onForgetHost: _busy
                         ? null
                         : (_) => unawaited(_forgetSavedHost()),
+                    onStopViewer: _stopViewer,
                   ),
                   if (_status != null) ...[
                     const SizedBox(height: 12),
@@ -1619,6 +1636,7 @@ class _DevicesSection extends StatelessWidget {
     this.discoveryError,
     this.onHostTap,
     this.onForgetHost,
+    this.onStopViewer,
   });
 
   final bool busy;
@@ -1628,6 +1646,7 @@ class _DevicesSection extends StatelessWidget {
   final String? discoveryError;
   final void Function(_HostListEntry host)? onHostTap;
   final void Function(_HostListEntry host)? onForgetHost;
+  final void Function(HostClientInfo viewer)? onStopViewer;
 
   @override
   Widget build(BuildContext context) {
@@ -1675,7 +1694,19 @@ class _DevicesSection extends StatelessWidget {
             title: viewer.name,
             subtitle: 'Watching your screen · ${viewer.addr}',
             active: true,
-            trailing: const StatusChip(label: 'Watching', highlight: true),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const StatusChip(label: 'Watching', highlight: true),
+                const SizedBox(width: 4),
+                TextButton(
+                  onPressed: onStopViewer == null
+                      ? null
+                      : () => onStopViewer!(viewer),
+                  child: const Text('Stop'),
+                ),
+              ],
+            ),
           ),
         ),
         if (hosts.isEmpty && viewers.isEmpty)
