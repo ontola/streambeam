@@ -77,6 +77,19 @@ pub unsafe extern "C" fn streambeam_macos_capture_submit(
     streambeam_host::macos_screen::submit(data, keyframe != 0, is_config != 0);
 }
 
+/// Interleaved 48 kHz stereo i16 PCM from ScreenCaptureKit system audio.
+/// `len` is the total sample count (frames × 2 channels).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn streambeam_macos_capture_submit_audio(samples: *const i16, len: usize) {
+    if samples.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: Swift keeps the buffer alive for this synchronous call; Rust
+    // copies the samples into its own ring before returning.
+    let pcm = unsafe { slice::from_raw_parts(samples, len) };
+    streambeam_host::audio::live::submit_pcm(pcm);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn streambeam_macos_capture_take_idr_request() -> u8 {
     u8::from(streambeam_host::macos_screen::take_idr_request())

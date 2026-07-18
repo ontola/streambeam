@@ -20,9 +20,12 @@ private func rustCaptureSubmit(
   _ bytes: UnsafePointer<UInt8>, _ length: Int, _ keyframe: UInt8, _ isConfig: UInt8)
 @_silgen_name("streambeam_macos_capture_take_idr_request")
 private func rustCaptureTakeIDRRequest() -> UInt8
+@_silgen_name("streambeam_macos_capture_submit_audio")
+private func rustCaptureSubmitAudio(_ samples: UnsafePointer<Int16>, _ count: Int)
 
 /// ScreenCaptureKit → VideoToolbox H.264 encoder for the macOS Beam role.
-/// Encoded access units cross directly into Rust; no video bytes touch Dart.
+/// Encoded access units and captured system-audio PCM cross directly into
+/// Rust; no media bytes touch Dart.
 @available(macOS 13.0, *)
 final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
   enum CaptureError: LocalizedError {
@@ -40,6 +43,8 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
   }
 
   private let captureQueue = DispatchQueue(label: "io.streambeam.capture", qos: .userInteractive)
+  private let audioQueue = DispatchQueue(label: "io.streambeam.audio", qos: .userInteractive)
+  private var warnedAudioFormat = false
   private var stream: SCStream?
   private var encoder: VTCompressionSession?
   private var codecConfig = Data()
@@ -92,7 +97,12 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     configuration.queueDepth = 3
     configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     configuration.showsCursor = true
-    configuration.capturesAudio = false
+    // System audio rides the same SCStream. Own-process audio is excluded so a
+    // self-viewing session doesn't feed back its own playback.
+    configuration.capturesAudio = true
+    configuration.sampleRate = 48_000
+    configuration.channelCount = 2
+    configuration.excludesCurrentProcessAudio = true
 
     try createEncoder()
     let bounds = CGDisplayBounds(display.displayID)
@@ -103,6 +113,7 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
     do {
       try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
+      try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
       self.stream = stream
       try await stream.startCapture()
     } catch {
@@ -181,6 +192,10 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
   func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
               of outputType: SCStreamOutputType) {
+    if outputType == .audio {
+      if sampleBuffer.isValid { handleAudio(sampleBuffer) }
+      return
+    }
     guard outputType == .screen, sampleBuffer.isValid,
           let imageBuffer = sampleBuffer.imageBuffer, let encoder else { return }
 
@@ -202,6 +217,88 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
   func stream(_ stream: SCStream, didStopWithError error: Error) {
     NSLog("StreamBeam: screen capture stopped: %@", error.localizedDescription)
+  }
+
+  /// Converts a captured system-audio buffer to interleaved 48 kHz stereo i16
+  /// and hands it to Rust, which Opus-encodes it for the audio channel.
+  private func handleAudio(_ sampleBuffer: CMSampleBuffer) {
+    guard let format = sampleBuffer.formatDescription,
+          let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+          asbd.mFormatID == kAudioFormatLinearPCM,
+          asbd.mSampleRate == 48_000
+    else {
+      warnAudioFormatOnce("unexpected stream format")
+      return
+    }
+    let channels = Int(asbd.mChannelsPerFrame)
+    let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+    let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+    guard frames > 0, channels >= 1 else { return }
+
+    let bufferList = AudioBufferList.allocate(maximumBuffers: max(2, channels))
+    defer { free(bufferList.unsafeMutablePointer) }
+    var blockBuffer: CMBlockBuffer?
+    let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+      sampleBuffer,
+      bufferListSizeNeededOut: nil,
+      bufferListOut: bufferList.unsafeMutablePointer,
+      bufferListSize: AudioBufferList.sizeInBytes(maximumBuffers: max(2, channels)),
+      blockBufferAllocator: nil,
+      blockBufferMemoryAllocator: nil,
+      flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+      blockBufferOut: &blockBuffer)
+    guard status == noErr else { return }
+
+    var interleaved = [Int16](repeating: 0, count: frames * 2)
+    if isFloat {
+      let nonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
+      if nonInterleaved {
+        // One buffer per channel; mono duplicates into both output channels.
+        guard let left = bufferList[0].mData?.assumingMemoryBound(to: Float32.self) else { return }
+        let right = bufferList.count > 1
+          ? bufferList[1].mData?.assumingMemoryBound(to: Float32.self) : nil
+        for frame in 0..<frames {
+          interleaved[frame * 2] = pcm16(left[frame])
+          interleaved[frame * 2 + 1] = pcm16((right ?? left)[frame])
+        }
+      } else {
+        guard let data = bufferList[0].mData?.assumingMemoryBound(to: Float32.self) else { return }
+        for frame in 0..<frames {
+          let left = data[frame * channels]
+          let right = channels > 1 ? data[frame * channels + 1] : left
+          interleaved[frame * 2] = pcm16(left)
+          interleaved[frame * 2 + 1] = pcm16(right)
+        }
+      }
+    } else if asbd.mBitsPerChannel == 16,
+              asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0 {
+      guard let data = bufferList[0].mData?.assumingMemoryBound(to: Int16.self) else { return }
+      for frame in 0..<frames {
+        let left = data[frame * channels]
+        let right = channels > 1 ? data[frame * channels + 1] : left
+        interleaved[frame * 2] = left
+        interleaved[frame * 2 + 1] = right
+      }
+    } else {
+      warnAudioFormatOnce("unsupported PCM layout")
+      return
+    }
+
+    interleaved.withUnsafeBufferPointer { buffer in
+      guard let base = buffer.baseAddress else { return }
+      rustCaptureSubmitAudio(base, buffer.count)
+    }
+  }
+
+  private func warnAudioFormatOnce(_ reason: String) {
+    if !warnedAudioFormat {
+      warnedAudioFormat = true
+      NSLog("StreamBeam: audio capture disabled — %@", reason)
+    }
+  }
+
+  private func pcm16(_ sample: Float32) -> Int16 {
+    Int16(max(-1.0, min(1.0, sample)) * Float32(Int16.max))
   }
 
   private func handleEncoded(_ sampleBuffer: CMSampleBuffer) {

@@ -24,7 +24,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 streambeam-host = { path = "../../crates/host" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-streambeam-host = { path = "../../crates/host", default-features = false }
+# Default features include `audio`: the macOS host Opus-encodes live
+# ScreenCaptureKit system audio in Rust (see crates/host/src/audio.rs).
+streambeam-host = { path = "../../crates/host" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 streambeam-host = { path = "../../crates/host", default-features = false }
