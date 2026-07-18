@@ -643,56 +643,79 @@ impl Pipeline {
     unsafe fn encode(&mut self, force_idr: bool) -> Result<Option<EncodedFrame>, String> {
         self.pending_force_idr |= force_idr;
         match &mut self.backend {
-            EncoderBackend::Nvenc { encoder, .. } => {
-                if self.pending_force_idr || self.bitrate_dirty {
-                    // A single real network hiccup routinely fires two
-                    // *independent* reconfigure triggers a few hundred ms
-                    // apart: the client's own loss-driven recovery request
-                    // (forced IDR) and the host's adaptive bitrate controller
-                    // backing off on the same detected loss (bitrate_dirty) —
-                    // neither knows about the other. Both force a fresh
-                    // keyframe (see `NvencEncoder::reconfigure`'s
-                    // `resetEncoder` doc comment), so back-to-back triggers
-                    // just mean two unnecessary keyframes (bandwidth) instead
-                    // of one. Coalesce: skip the reconfigure if one just
-                    // happened, but keep both flags pending rather than
-                    // dropping them, so a real request is only ever delayed,
-                    // never lost.
-                    const RECONFIGURE_COALESCE_WINDOW: std::time::Duration =
+            EncoderBackend::Nvenc {
+                encoder,
+                encode_texture,
+                ..
+            } => {
+                if self.pending_force_idr {
+                    // A real session recreate (destroy + brand-new NVENC
+                    // session) rather than the live `NvEncReconfigureEncoder`
+                    // call: two independent real-hardware tests of forcing a
+                    // keyframe through live reconfigure (2026-07-08, both
+                    // with and without also forcing resetEncoder on pure
+                    // bitrate nudges) reproduced a permanent post-breakdown
+                    // black screen on every platform watching a Windows host.
+                    // The one thing that never broke down for the same host
+                    // is a brand-new NVENC session's first frame, which is
+                    // always a real IDR regardless of driver quirks around
+                    // resetEncoder/FORCEIDR (see the 2026-07-05 PROGRESS
+                    // entry). Recreate is visibly disruptive per event (see
+                    // the 2026-07-08 entry that motivated moving away from it
+                    // in the first place, and 2026-07-18's stutter regression
+                    // from applying it to every bitrate nudge too) — reserved
+                    // for genuine forced-IDR needs (connect, reconnect, real
+                    // client recovery requests), which are comparatively
+                    // rare, unlike routine bitrate adjustments below.
+                    const RECREATE_COALESCE_WINDOW: std::time::Duration =
                         std::time::Duration::from_millis(1000);
                     let coalescing = self
                         .last_reconfigure
-                        .map(|t| t.elapsed() < RECONFIGURE_COALESCE_WINDOW)
+                        .map(|t| t.elapsed() < RECREATE_COALESCE_WINDOW)
                         .unwrap_or(false);
                     if !coalescing {
-                        // Live reconfigure (`NvEncReconfigureEncoder`) on the
-                        // *existing* session, not a destroy+recreate — see
-                        // `NvencEncoder::reconfigure`'s doc comment for why
-                        // that changed. `resetEncoder=1` there gives the same
-                        // "next frame is a real IDR" guarantee the old
-                        // recreate-based approach relied on, so both trigger
-                        // reasons are still satisfied by one call.
-                        let mut reasons = Vec::new();
-                        if self.pending_force_idr {
-                            reasons.push("forced IDR".to_string());
-                        }
-                        if self.bitrate_dirty {
-                            reasons.push(format!("bitrate -> {} kbps", self.bitrate_bps / 1000));
-                        }
-                        crate::logging::log(&format!(
-                            "NVENC: reconfiguring encoder session ({})",
-                            reasons.join(", ")
-                        ));
-                        match encoder.reconfigure(self.bitrate_bps, self.pending_force_idr) {
-                            Ok(()) => {
+                        crate::logging::log("NVENC: recreating encoder session (forced IDR)");
+                        match NvencEncoder::new(
+                            &self.device,
+                            encode_texture,
+                            self.width,
+                            self.height,
+                            self.fps,
+                            self.bitrate_bps,
+                            encoder.codec(),
+                        ) {
+                            Ok(fresh) => {
+                                *encoder = fresh;
                                 self.bitrate_dirty = false;
                                 self.pending_force_idr = false;
                                 self.last_reconfigure = Some(std::time::Instant::now());
                             }
                             Err(e) => crate::logging::log(&format!(
-                                "NVENC: reconfigure failed, continuing with existing session: {e}"
+                                "NVENC: session recreate failed, continuing with existing session: {e}"
                             )),
                         }
+                    }
+                } else if self.bitrate_dirty {
+                    // Pure bitrate nudges (no keyframe need) stay on the
+                    // cheap live-reconfigure path with resetEncoder=0 —
+                    // this specific combination (bitrate-only, no forced
+                    // IDR) was never isolated as the cause of the black
+                    // screen on its own; every real-hardware test that
+                    // reproduced it also had forced-IDR reconfigures going
+                    // through the same live-reconfigure call. Adaptive
+                    // bitrate fires far too often (every 1-15s during a
+                    // real session) for a full recreate to be tolerable —
+                    // that's what caused 2026-07-18's "one frame every few
+                    // seconds" regression.
+                    crate::logging::log(&format!(
+                        "NVENC: reconfiguring encoder session (bitrate -> {} kbps)",
+                        self.bitrate_bps / 1000
+                    ));
+                    match encoder.reconfigure(self.bitrate_bps, false) {
+                        Ok(()) => self.bitrate_dirty = false,
+                        Err(e) => crate::logging::log(&format!(
+                            "NVENC: reconfigure failed, continuing with existing session: {e}"
+                        )),
                     }
                 }
                 encoder.encode(false)
