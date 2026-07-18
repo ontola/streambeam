@@ -1561,6 +1561,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                           context,
                         ).colorScheme.onSurfaceVariant,
                         textStyle: Theme.of(context).textTheme.bodySmall,
+                        enabledMouseCursor: SystemMouseCursors.click,
                       ),
                       child: const Text('Made with <3 by Ontola.io'),
                     ),
