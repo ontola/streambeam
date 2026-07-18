@@ -562,22 +562,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
   }
 
-  void _stopViewer(HostClientInfo viewer) {
-    try {
-      final stopped = hostDisconnectClient(addr: viewer.addr);
-      if (!stopped) {
-        throw StateError('${viewer.name} is no longer connected.');
-      }
-      // Reflect the explicit user action immediately; the regular 250 ms
-      // snapshot poll remains the source of truth for subsequent changes.
-      setState(() {
-        _viewers = _viewers.where((item) => item.addr != viewer.addr).toList();
-      });
-    } catch (e) {
-      _reportError(_humanizeError(e.toString()));
-    }
-  }
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && !_busy) {
@@ -1474,7 +1458,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   _DevicesSection(
                     busy: _busy,
                     hosts: _hostEntries(),
-                    viewers: _viewers,
                     discovering: _discoveryBusy,
                     onHostTap: _busy
                         ? null
@@ -1482,7 +1465,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     onForgetHost: _busy
                         ? null
                         : (_) => unawaited(_forgetSavedHost()),
-                    onStopViewer: _stopViewer,
                   ),
                   if (_status != null) ...[
                     const SizedBox(height: 12),
@@ -1534,6 +1516,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   const SizedBox(height: 24),
                   // Onboarding / "get the host" info, de-emphasised below.
                   _StreamFromPromo(compact: _hostEntries().isNotEmpty),
+                  const SizedBox(height: 24),
+                  const BeamPage(embedded: true),
                   const SizedBox(height: 20),
                   Center(
                     child: TextButton(
@@ -1666,20 +1650,16 @@ class _DevicesSection extends StatelessWidget {
   const _DevicesSection({
     required this.busy,
     required this.hosts,
-    required this.viewers,
     required this.discovering,
     this.onHostTap,
     this.onForgetHost,
-    this.onStopViewer,
   });
 
   final bool busy;
   final List<_HostListEntry> hosts;
-  final List<HostClientInfo> viewers;
   final bool discovering;
   final void Function(_HostListEntry host)? onHostTap;
   final void Function(_HostListEntry host)? onForgetHost;
-  final void Function(HostClientInfo viewer)? onStopViewer;
 
   @override
   Widget build(BuildContext context) {
@@ -1709,8 +1689,6 @@ class _DevicesSection extends StatelessWidget {
               Text(
                 discovering
                     ? 'Searching…'
-                    : viewers.isNotEmpty
-                    ? '${viewers.length} watching${onlineCount > 0 ? ' · $onlineCount online' : ''}'
                     : hosts.isEmpty
                     ? 'None found'
                     : '$onlineCount online · ${hosts.length} listed',
@@ -1721,28 +1699,7 @@ class _DevicesSection extends StatelessWidget {
             ],
           ),
         ),
-        ...viewers.map(
-          (viewer) => DeviceTile(
-            icon: Icons.visibility,
-            title: viewer.name,
-            subtitle: 'Watching your screen · ${viewer.addr}',
-            active: true,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const StatusChip(label: 'Watching', highlight: true),
-                const SizedBox(width: 4),
-                TextButton(
-                  onPressed: onStopViewer == null
-                      ? null
-                      : () => onStopViewer!(viewer),
-                  child: const Text('Stop'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (hosts.isEmpty && viewers.isEmpty)
+        if (hosts.isEmpty)
           _EmptyDevices(discovering: discovering)
         else
           ...hosts.map((h) {

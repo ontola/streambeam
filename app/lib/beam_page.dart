@@ -64,7 +64,12 @@ AppCapabilities appCapabilities() {
 
 /// Shared host UI — pair via QR, manage connected viewers.
 class BeamPage extends StatefulWidget {
-  const BeamPage({super.key});
+  const BeamPage({super.key, this.embedded = false});
+
+  /// Renders only the compact "This Device" controls for the unified home
+  /// screen. The full page remains available for platform-specific fallback
+  /// flows, but is no longer exposed as a separate navigation tab.
+  final bool embedded;
 
   @override
   State<BeamPage> createState() => _BeamPageState();
@@ -343,6 +348,168 @@ class _BeamPageState extends State<BeamPage> {
     }
   }
 
+  Future<void> _showPairingQr() async {
+    final link = _snap.pairingLink;
+    if (link == null || link.isEmpty || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pair this device'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 300),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: QrImageView(
+                  data: link,
+                  size: 240,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Scan once to pair. After approval, this device can start future beams directly.',
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: _copyLink,
+            icon: const Icon(Icons.link),
+            label: const Text('Copy link'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _stopViewer(HostClientInfo viewer) {
+    try {
+      final stopped = hostDisconnectClient(addr: viewer.addr);
+      if (!stopped) {
+        throw StateError('${viewer.name} is no longer connected.');
+      }
+      setState(() {
+        _snap = HostSnapshot(
+          running: _snap.running,
+          hostName: _snap.hostName,
+          listenAddr: _snap.listenAddr,
+          discoverable: _snap.discoverable,
+          acceptsConnections: _snap.acceptsConnections,
+          pairingLink: _snap.pairingLink,
+          clients: _snap.clients,
+          viewers: _snap.viewers
+              .where((item) => item.addr != viewer.addr)
+              .toList(),
+          error: _snap.error,
+          pendingApproval: _snap.pendingApproval,
+        );
+      });
+    } catch (e) {
+      _setStatus(e.toString(), error: true);
+    }
+  }
+
+  Widget _buildThisDevice(BuildContext context) {
+    final theme = Theme.of(context);
+    final viewers = _snap.viewers;
+    final running = _snap.running;
+    final link = _snap.pairingLink;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(
+          'This Device',
+          trailing: Text(
+            !running
+                ? 'Starting…'
+                : viewers.isEmpty
+                ? 'Ready'
+                : '${viewers.length} watching',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              if (viewers.isEmpty)
+                ListTile(
+                  leading: const Icon(Icons.visibility_off_outlined),
+                  title: const Text('No one is watching'),
+                  subtitle: Text(
+                    running
+                        ? 'This device is ready for paired devices'
+                        : 'Starting StreamBeam…',
+                  ),
+                )
+              else
+                for (final viewer in viewers)
+                  ListTile(
+                    leading: Icon(
+                      Icons.visibility,
+                      color: theme.colorScheme.primary,
+                    ),
+                    title: Text(viewer.name),
+                    subtitle: Text('Watching your screen · ${viewer.addr}'),
+                    trailing: TextButton(
+                      onPressed: () => _stopViewer(viewer),
+                      child: const Text('Stop'),
+                    ),
+                  ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.qr_code_2),
+                title: const Text('Pair another device'),
+                subtitle: const Text('Show this device’s QR code'),
+                trailing: FilledButton.tonal(
+                  onPressed: link == null || link.isEmpty
+                      ? null
+                      : () => unawaited(_showPairingQr()),
+                  child: const Text('Show QR'),
+                ),
+              ),
+              const Divider(height: 1),
+              SwitchListTile(
+                secondary: const Icon(Icons.wifi_find),
+                title: const Text('Discoverable'),
+                subtitle: const Text(
+                  'Let paired devices find this one on the local network',
+                ),
+                value: _snap.discoverable,
+                onChanged: running
+                    ? (on) {
+                        try {
+                          hostSetDiscoverable(on_: on);
+                          _refresh();
+                        } catch (e) {
+                          _setStatus(e.toString(), error: true);
+                        }
+                      }
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!hostPlatformSupported()) {
@@ -355,6 +522,10 @@ class _BeamPageState extends State<BeamPage> {
           ),
         ),
       );
+    }
+
+    if (widget.embedded) {
+      return _buildThisDevice(context);
     }
 
     final theme = Theme.of(context);
@@ -641,19 +812,11 @@ class _BeamPageState extends State<BeamPage> {
   }
 }
 
-/// App shell shared by every platform: two tabs — **Watch** (stream *from*
-/// another device) and **Beam** (stream *to* another device). Each platform
-/// leads with the tab it actually supports (phones watch, desktops beam) and
-/// shows a "coming soon" placeholder for the other.
-class AppShell extends StatefulWidget {
+/// One shared home surface: remote devices first, followed by controls and
+/// status for this device. Streaming itself still becomes immersive inside
+/// [WatchPage], without swapping the surrounding widget tree.
+class AppShell extends StatelessWidget {
   const AppShell({super.key});
-
-  @override
-  State<AppShell> createState() => _AppShellState();
-}
-
-class _AppShellState extends State<AppShell> {
-  int _index = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -663,112 +826,7 @@ class _AppShellState extends State<AppShell> {
       return _DesktopUnsupportedPage(platformLabel: caps.platformLabel);
     }
 
-    // Both tabs use the same pages on every platform ("Watch" = stream FROM
-    // another device, "Beam" = stream TO another device). Each page gates its
-    // own not-yet-wired functionality per platform (e.g. WatchPage shows a
-    // "coming soon" on desktop playback; BeamPage on a host it can't run).
-    final Widget watchTab = const WatchPage();
-    final Widget beamTab = const BeamPage();
-
-    const watchDest = NavigationDestination(
-      icon: Icon(Icons.download_for_offline_outlined),
-      selectedIcon: Icon(Icons.download_for_offline),
-      label: 'Watch',
-    );
-    const beamDest = NavigationDestination(
-      icon: Icon(Icons.cast),
-      selectedIcon: Icon(Icons.cast_connected),
-      label: 'Beam',
-    );
-
-    // Lead with the tab this platform supports.
-    final List<Widget> pages;
-    final List<NavigationDestination> destinations;
-    if (caps.host && !caps.watch) {
-      pages = [beamTab, watchTab];
-      destinations = [beamDest, watchDest];
-    } else {
-      pages = [watchTab, beamTab];
-      destinations = [watchDest, beamDest];
-    }
-
-    // While a tab is playing fullscreen video, drop the tab bar so the stream
-    // fills the screen (and the immersive player isn't framed by chrome).
-    return ValueListenableBuilder<bool>(
-      valueListenable: appImmersive,
-      builder: (context, immersive, _) {
-        // `content` (and the WatchPage/BeamPage State it keeps alive via
-        // IndexedStack) must stay at the *same position* in the tree across
-        // every branch below — Flutter can't reconcile a widget that moves
-        // to a different parent/depth between rebuilds (no matching
-        // ancestor to diff against), so it tears down and rebuilds the
-        // whole subtree's State instead of preserving it. That previously
-        // happened here: tapping a device to connect flips `appImmersive`
-        // true, which used to make this builder return a *differently
-        // shaped* tree in landscape (dropping the Row/NavigationRail
-        // wrapper) — destroying WatchPage's State (and the connection
-        // attempt it had just started) the instant the tap set it in
-        // motion. Second tap "worked" only because by then `appImmersive`
-        // was already true, so this builder didn't rebuild at all. Always
-        // building the same Row/Expanded/NavigationRail shape and only
-        // toggling which parts are *visible* keeps one stable position for
-        // `content` no matter what changes.
-        final content = IndexedStack(
-          index: _index.clamp(0, pages.length - 1),
-          children: pages,
-        );
-
-        final media = MediaQuery.of(context);
-        final isPhoneLandscape =
-            media.orientation == Orientation.landscape &&
-            media.size.shortestSide < 600;
-        final showChrome = !immersive;
-        final showRail = showChrome && isPhoneLandscape;
-        final showBottomBar = showChrome && !isPhoneLandscape;
-
-        final body = Row(
-          children: [
-            Expanded(child: content),
-            if (showRail) ...[
-              const VerticalDivider(width: 1),
-              NavigationRail(
-                selectedIndex: _index.clamp(0, destinations.length - 1),
-                onDestinationSelected: (i) => setState(() => _index = i),
-                labelType: NavigationRailLabelType.all,
-                destinations: [
-                  for (final d in destinations)
-                    NavigationRailDestination(
-                      icon: d.icon,
-                      selectedIcon: d.selectedIcon,
-                      label: Text(d.label),
-                    ),
-                ],
-              ),
-            ],
-          ],
-        );
-
-        return Scaffold(
-          // The on-screen system nav bar (back/home/recents) sits along
-          // whichever edge is physically "down" in landscape — often the
-          // same right edge the rail lives on — so without a SafeArea the
-          // rail's destinations render right underneath/behind it. Applied
-          // unconditionally (not just when the rail shows) so this doesn't
-          // change `body`'s ancestry depth between states either. `top:
-          // false` — WatchPage's own SliverAppBar already reserves the
-          // status-bar inset itself (`primary: true`); doubling it here
-          // would push its header down an extra status-bar's worth.
-          body: SafeArea(top: false, child: body),
-          bottomNavigationBar: showBottomBar
-              ? NavigationBar(
-                  selectedIndex: _index.clamp(0, destinations.length - 1),
-                  onDestinationSelected: (i) => setState(() => _index = i),
-                  destinations: destinations,
-                )
-              : null,
-        );
-      },
-    );
+    return const WatchPage();
   }
 }
 
