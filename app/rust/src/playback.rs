@@ -39,6 +39,16 @@ pub fn set_session(width: u16, height: u16, fps: u8, codec: String) {
     });
 }
 
+pub fn update_dimensions(width: u16, height: u16) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    if let Some(session) = SESSION.lock().unwrap().as_mut() {
+        session.width = width;
+        session.height = height;
+    }
+}
+
 pub fn set_displays(displays: Vec<DisplayInfo>, selected_id: u32) {
     *DISPLAYS.lock().unwrap() = displays;
     if REQUESTED_DISPLAY.load(Ordering::Relaxed) == NO_DISPLAY {

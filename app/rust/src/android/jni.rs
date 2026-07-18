@@ -103,6 +103,26 @@ pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeTakeTouc
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeTakeKeyEvent<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jintArray {
+    let Some((vk, down)) = streambeam_host::android_input::take_key() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(array) = env.new_int_array(2) else {
+        return std::ptr::null_mut();
+    };
+    if env
+        .set_int_array_region(&array, 0, &[i32::from(vk), i32::from(down)])
+        .is_err()
+    {
+        return std::ptr::null_mut();
+    }
+    array.into_raw()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_streambeam_streambeam_NativeStream_nativeSetTouchInjectionEnabled<
     'local,
 >(

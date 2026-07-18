@@ -735,8 +735,21 @@ fn drain_output(codec: &mut MediaCodec) -> Result<u32, String> {
             }
             DequeuedOutputBufferInfoResult::TryAgainLater => break,
             DequeuedOutputBufferInfoResult::OutputFormatChanged => {
-                let _ = codec.output_format();
-                log::info!("streambeam decoder output format changed");
+                let format = codec.output_format();
+                let coded_width = format.i32("width").unwrap_or(0);
+                let coded_height = format.i32("height").unwrap_or(0);
+                let width = match (format.i32("crop-left"), format.i32("crop-right")) {
+                    (Some(left), Some(right)) if right >= left => right - left + 1,
+                    _ => coded_width,
+                };
+                let height = match (format.i32("crop-top"), format.i32("crop-bottom")) {
+                    (Some(top), Some(bottom)) if bottom >= top => bottom - top + 1,
+                    _ => coded_height,
+                };
+                if let (Ok(width), Ok(height)) = (u16::try_from(width), u16::try_from(height)) {
+                    crate::playback::update_dimensions(width, height);
+                    log::info!("streambeam decoder output format changed to {width}x{height}");
+                }
             }
             DequeuedOutputBufferInfoResult::OutputBuffersChanged => {}
         }

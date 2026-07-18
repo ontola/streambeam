@@ -9,6 +9,7 @@ use streambeam_proto::input::{InputEvent, TouchContact};
 const MAX_PENDING: usize = 64;
 static FRAMES: LazyLock<Mutex<VecDeque<(Vec<TouchContact>, u16, u16)>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
+static KEYS: LazyLock<Mutex<VecDeque<(u16, bool)>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static MOUSE: LazyLock<Mutex<MouseState>> = LazyLock::new(|| Mutex::new(MouseState::default()));
 
@@ -25,6 +26,7 @@ pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
     if !enabled {
         FRAMES.lock().unwrap().clear();
+        KEYS.lock().unwrap().clear();
         *MOUSE.lock().unwrap() = MouseState::default();
     }
 }
@@ -72,6 +74,13 @@ pub fn submit(event: InputEvent) {
                 enqueue(Vec::new(), mouse.ref_w, mouse.ref_h);
             }
         }
+        InputEvent::Key { vk, down } => {
+            let mut keys = KEYS.lock().unwrap();
+            if keys.len() >= MAX_PENDING {
+                keys.pop_front();
+            }
+            keys.push_back((vk, down));
+        }
         _ => {}
     }
 }
@@ -117,6 +126,10 @@ pub fn take_packed() -> Option<Vec<i32>> {
         ]);
     }
     Some(packed)
+}
+
+pub fn take_key() -> Option<(u16, bool)> {
+    KEYS.lock().unwrap().pop_front()
 }
 
 #[cfg(test)]
@@ -177,6 +190,24 @@ mod tests {
             Some(vec![100, 200, 1, 0, 30, 40, i32::from(u16::MAX)])
         );
         assert_eq!(take_packed(), Some(vec![100, 200, 0]));
+        set_enabled(false);
+    }
+
+    #[test]
+    fn queues_keyboard_transitions() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        set_enabled(true);
+        submit(InputEvent::Key {
+            vk: 0x41,
+            down: true,
+        });
+        submit(InputEvent::Key {
+            vk: 0x41,
+            down: false,
+        });
+        assert_eq!(take_key(), Some((0x41, true)));
+        assert_eq!(take_key(), Some((0x41, false)));
+        assert_eq!(take_key(), None);
         set_enabled(false);
     }
 }

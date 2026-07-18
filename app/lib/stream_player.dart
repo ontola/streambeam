@@ -268,6 +268,8 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _multiTouchSession = false;
   PointerMode _pointerMode = PointerMode.trackpad;
   final _liveDiagListenable = ValueNotifier(const _LiveDiagnostics());
+  int _decodedWidth = 0;
+  int _decodedHeight = 0;
   int _diagLastBytes = 0;
   int _diagLastFrames = 0;
   DateTime? _diagLastSampleAt;
@@ -443,7 +445,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   }
 
   void _syncDiagnosticsPoll() {
-    if (!widget.isStreaming || !_menuOpen) {
+    if (!widget.isStreaming) {
       _diagPoll?.cancel();
       _diagPoll = null;
       return;
@@ -481,6 +483,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
     final width = snap.width > 0 ? snap.width : widget.streamWidth;
     final height = snap.height > 0 ? snap.height : widget.streamHeight;
+    if (width > 0 &&
+        height > 0 &&
+        (width != _decodedWidth || height != _decodedHeight)) {
+      setState(() {
+        _decodedWidth = width;
+        _decodedHeight = height;
+      });
+    }
     final next = _LiveDiagnostics(
       width: width,
       height: height,
@@ -824,7 +834,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   }
 
   Size _fitVideoSize(Size viewport) {
-    final ratio = widget.aspectRatio;
+    final ratio = _decodedWidth > 0 && _decodedHeight > 0
+        ? _decodedWidth / _decodedHeight
+        : widget.aspectRatio;
     if (ratio <= 0 || !ratio.isFinite) {
       return viewport;
     }
@@ -910,8 +922,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             key: const ValueKey('stream-input'),
                             videoRect: videoRect,
                             videoSize: videoSize,
-                            refWidth: widget.streamWidth,
-                            refHeight: widget.streamHeight,
+                            refWidth: _decodedWidth > 0
+                                ? _decodedWidth
+                                : widget.streamWidth,
+                            refHeight: _decodedHeight > 0
+                                ? _decodedHeight
+                                : widget.streamHeight,
                             mode: _pointerMode,
                             screenEdgeGrab: edgeGrab,
                             mouseControlEnabled: mouseControlEnabled,

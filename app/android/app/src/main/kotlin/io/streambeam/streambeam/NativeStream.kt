@@ -26,6 +26,7 @@ object NativeStream {
 
     /** `[refW, refH, count, id, x, y, pressure, ...]`, or null while idle. */
     external fun nativeTakeTouchFrame(): IntArray?
+    external fun nativeTakeKeyEvent(): IntArray?
     external fun nativeSetTouchInjectionEnabled(enabled: Boolean)
 
     // Pairing approval (raised as a notification while the app is backgrounded).
