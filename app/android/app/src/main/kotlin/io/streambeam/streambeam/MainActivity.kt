@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -156,7 +157,18 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "isEnabled" -> result.success(remoteTouchEnabled())
                 "openSettings" -> {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    val component = ComponentName(this, RemoteTouchService::class.java)
+                    val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
+                        putExtra(
+                            "android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME",
+                            component,
+                        )
+                    }
+                    try {
+                        startActivity(details)
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }
                     result.success(null)
                 }
                 else -> result.notImplemented()
