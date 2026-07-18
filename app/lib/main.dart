@@ -799,7 +799,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     await _stopDesktopPlayback();
     setState(() {
       _busy = true;
-      _status = 'Connecting…';
+      _status =
+          'Connecting… If the other device is Android, choose what to share there and confirm its screen-sharing prompt.';
       _statusIsError = false;
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
@@ -823,7 +824,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     await _stopDesktopPlayback();
     setState(() {
       _busy = true;
-      _status = 'Connecting…';
+      _status =
+          'Connecting to ${host.name}… On the Android device, choose what to share and confirm the screen-sharing prompt.';
       _statusIsError = false;
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
@@ -938,7 +940,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         _showVideo = false;
         _busy = false;
         _upscaleActive = false;
-        if (_status == 'Streaming…' || _status == 'Connecting…') _status = null;
+        if (_status == 'Streaming…' ||
+            (_status?.startsWith('Connecting') ?? false)) {
+          _status = null;
+        }
       });
     }
     await sub?.cancel();
