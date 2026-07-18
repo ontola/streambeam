@@ -597,59 +597,85 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
                 const Divider(height: 1),
               ],
               if (hasMissingPermissions) ...[
-                ColoredBox(
-                  color: theme.colorScheme.errorContainer,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
-                        child: Text(
-                          'Permissions needed',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.onErrorContainer,
-                            fontWeight: FontWeight.w600,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.errorContainer.withValues(
+                              alpha: 0.55,
+                            ),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  size: 16,
+                                  color: theme.colorScheme.onErrorContainer
+                                      .withValues(alpha: 0.8),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Permissions needed',
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    color: theme.colorScheme.onErrorContainer,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                      if (missingAndroidAccessibility)
-                        ListTile(
-                          leading: const Icon(Icons.touch_app_outlined),
-                          title: const Text('Remote control is disabled'),
-                          subtitle: const Text(
-                            'Allow Accessibility access for touch and keyboard control',
-                          ),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => unawaited(
-                            _showPermissionHelp(permission: 'accessibility'),
-                          ),
+                    ),
+                    if (missingAndroidAccessibility)
+                      ListTile(
+                        leading: const Icon(Icons.touch_app_outlined),
+                        title: const Text('Remote control is disabled'),
+                        subtitle: const Text(
+                          'Allow Accessibility access for touch and keyboard control',
                         ),
-                      if (missingMacScreenRecording)
-                        ListTile(
-                          leading: const Icon(Icons.screen_share_outlined),
-                          title: const Text('Screen Recording is disabled'),
-                          subtitle: const Text(
-                            'Allow access so this Mac can share its screen',
-                          ),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => unawaited(
-                            _showPermissionHelp(permission: 'screenRecording'),
-                          ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => unawaited(
+                          _showPermissionHelp(permission: 'accessibility'),
                         ),
-                      if (missingMacAccessibility)
-                        ListTile(
-                          leading: const Icon(Icons.keyboard_alt_outlined),
-                          title: const Text('Remote input is disabled'),
-                          subtitle: const Text(
-                            'Allow Accessibility access for mouse and keyboard control',
-                          ),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => unawaited(
-                            _showPermissionHelp(permission: 'accessibility'),
-                          ),
+                      ),
+                    if (missingMacScreenRecording)
+                      ListTile(
+                        leading: const Icon(Icons.screen_share_outlined),
+                        title: const Text('Screen Recording is disabled'),
+                        subtitle: const Text(
+                          'Allow access so this Mac can share its screen',
                         ),
-                    ],
-                  ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => unawaited(
+                          _showPermissionHelp(permission: 'screenRecording'),
+                        ),
+                      ),
+                    if (missingMacAccessibility)
+                      ListTile(
+                        leading: const Icon(Icons.keyboard_alt_outlined),
+                        title: const Text('Remote input is disabled'),
+                        subtitle: const Text(
+                          'Allow Accessibility access for mouse and keyboard control',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => unawaited(
+                          _showPermissionHelp(permission: 'accessibility'),
+                        ),
+                      ),
+                  ],
                 ),
                 const Divider(height: 1),
               ],
