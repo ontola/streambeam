@@ -83,10 +83,8 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     width = Int32(max(2, Int(Double(display.width) * scale) & ~1))
     height = Int32(max(2, Int(Double(display.height) * scale) & ~1))
 
-    let ownBundle = Bundle.main.bundleIdentifier
-    let ownApps = content.applications.filter { $0.bundleIdentifier == ownBundle }
     let filter = SCContentFilter(
-      display: display, excludingApplications: ownApps, exceptingWindows: [])
+      display: display, excludingApplications: [], exceptingWindows: [])
     let configuration = SCStreamConfiguration()
     configuration.width = Int(width)
     configuration.height = Int(height)
