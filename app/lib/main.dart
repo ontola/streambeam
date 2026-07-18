@@ -1548,9 +1548,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     ],
                   ),
                   const SizedBox(height: 24),
-                  // Onboarding / "get the host" info, de-emphasised below.
-                  _StreamFromPromo(compact: _hostEntries().isNotEmpty),
-                  const SizedBox(height: 24),
                   const BeamPage(embedded: true),
                   const SizedBox(height: 20),
                   Center(
@@ -1895,85 +1892,15 @@ class _EmptyDevices extends StatelessWidget {
             ),
             textAlign: TextAlign.center,
           ),
-        ],
-      ),
-    );
-  }
-}
-
-/// "Get the host" onboarding, shown BELOW the device list: a full hero when no
-/// PCs are listed yet, or a slim reminder once some are.
-class _StreamFromPromo extends StatelessWidget {
-  const _StreamFromPromo({required this.compact});
-
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    if (compact) {
-      return Row(
-        children: [
-          Icon(
-            Icons.info_outline,
-            size: 18,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Don\'t see your device? Make sure StreamBeam is running on it, '
-              'on the same Wi‑Fi.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          TextButton(
-            onPressed: openGithubReleases,
-            child: const Text('Get app'),
-          ),
-        ],
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Icon(
-            Icons.cast_connected,
-            size: 56,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Stream from / to anywhere',
-            style: theme.textTheme.titleMedium,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Install StreamBeam on your phone to watch this Mac or beam your '
-            'phone to it. Pair once, then start from either device.',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            textAlign: TextAlign.center,
-          ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: openGithubReleases,
             icon: const Icon(Icons.download),
-            label: const Text('Install StreamBeam on your phone'),
+            label: const Text('Install StreamBeam on another device'),
           ),
         ],
       ),
     );
   }
 }
+
