@@ -23,7 +23,11 @@ final class StreamBeamAudioOut {
     guard !running else { return }
     guard
       let format = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true)
+        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true),
+      // Engine connections must use a deinterleaved ("standard") format —
+      // connecting with the interleaved render format raises an NSException
+      // inside AVAudioEngine. The engine converts between the two.
+      let connectFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)
     else { return }
     let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
       let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -32,7 +36,7 @@ final class StreamBeamAudioOut {
       return noErr
     }
     engine.attach(node)
-    engine.connect(node, to: engine.mainMixerNode, format: format)
+    engine.connect(node, to: engine.mainMixerNode, format: connectFormat)
     do {
       try engine.start()
       source = node
