@@ -209,7 +209,7 @@ class StreamPlayerScreen extends StatefulWidget {
 }
 
 class _StreamPlayerScreenState extends State<StreamPlayerScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const _openThreshold = 48.0;
   static const _hintPeek = 72.0;
 
@@ -261,7 +261,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _keyboardOpen = false;
   bool _hasVideo = false;
   bool _videoTimedOut = false;
+  bool _videoStalled = false;
   DateTime? _streamStartedAt;
+  DateTime? _lastVideoFrameAt;
+  BigInt _lastRenderedFrames = BigInt.zero;
   Timer? _videoPoll;
   Timer? _diagPoll;
   bool _panEnabled = false;
@@ -321,6 +324,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
@@ -397,25 +401,40 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   void _beginVideoWatch() {
     _hasVideo = false;
     _videoTimedOut = false;
+    _videoStalled = false;
     _streamStartedAt = DateTime.now();
+    _lastVideoFrameAt = _streamStartedAt;
+    _lastRenderedFrames = playbackFramesRendered();
     _videoPoll?.cancel();
     _videoPoll = Timer.periodic(const Duration(milliseconds: 400), (_) {
       if (!mounted || !widget.isStreaming) return;
+      final now = DateTime.now();
       final frames = playbackFramesRendered();
-      if (frames > BigInt.zero && !_hasVideo) {
+      final advanced = frames > _lastRenderedFrames;
+      if (advanced) {
+        _lastRenderedFrames = frames;
+        _lastVideoFrameAt = now;
+      }
+      if ((frames > BigInt.zero && !_hasVideo) || (advanced && _videoStalled)) {
         setState(() {
           _hasVideo = true;
           _videoTimedOut = false;
+          _videoStalled = false;
         });
-        _videoPoll?.cancel();
-        _videoPoll = null;
-        return;
       }
       final started = _streamStartedAt;
       if (!_videoTimedOut &&
+          !_hasVideo &&
           started != null &&
-          DateTime.now().difference(started) > const Duration(seconds: 12)) {
+          now.difference(started) > const Duration(seconds: 12)) {
         setState(() => _videoTimedOut = true);
+      }
+      final lastFrame = _lastVideoFrameAt;
+      if (_hasVideo &&
+          !_videoStalled &&
+          lastFrame != null &&
+          now.difference(lastFrame) > const Duration(seconds: 5)) {
+        setState(() => _videoStalled = true);
       }
     });
   }
@@ -424,8 +443,22 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _videoPoll?.cancel();
     _videoPoll = null;
     _streamStartedAt = null;
+    _lastVideoFrameAt = null;
+    _lastRenderedFrames = BigInt.zero;
     _hasVideo = false;
     _videoTimedOut = false;
+    _videoStalled = false;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && widget.isStreaming) {
+      // Timers pause while Android sleeps. Give a resumed decoder/Surface a
+      // short chance to produce again instead of declaring the whole sleep
+      // interval a live-stream stall on the first resumed timer tick.
+      _lastRenderedFrames = playbackFramesRendered();
+      _lastVideoFrameAt = DateTime.now();
+    }
   }
 
   void _beginDiagnostics() {
@@ -515,6 +548,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _videoPoll?.cancel();
     _diagPoll?.cancel();
     _hintController.removeListener(_onHintTick);
@@ -906,6 +940,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         widget.inputSupported &&
                         widget.isStreaming &&
                         _hasVideo &&
+                        !_videoStalled &&
                         !_menuBlocksPointer &&
                         !_keyboardOpen;
                     final mouseControlEnabled = showStreamInput;
@@ -1029,7 +1064,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                               ),
                             ),
                           ),
-                        if (widget.isStreaming && !_hasVideo)
+                        if (widget.isStreaming && (!_hasVideo || _videoStalled))
                           ColoredBox(
                             color: Colors.black,
                             child: Center(
@@ -1041,7 +1076,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
-                                      _videoTimedOut
+                                      _videoStalled
+                                          ? Icons.sync_problem_outlined
+                                          : _videoTimedOut
                                           ? Icons.videocam_off_outlined
                                           : Icons.hourglass_top,
                                       color: Colors.white70,
@@ -1049,8 +1086,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                     ),
                                     const SizedBox(height: 16),
                                     Text(
-                                      _videoTimedOut
-                                          ? 'No video from your PC'
+                                      _videoStalled
+                                          ? 'Stream stopped responding'
+                                          : _videoTimedOut
+                                          ? 'No video received'
                                           : 'Waiting for video…',
                                       textAlign: TextAlign.center,
                                       style: theme.textTheme.titleMedium
@@ -1058,14 +1097,16 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                     ),
                                     const SizedBox(height: 10),
                                     Text(
-                                      _videoTimedOut
-                                          ? 'Check that streambeam-host is running on your PC and both devices are on the same Wi‑Fi. The host may still be using a test clip — if this persists, restart the host app.'
+                                      _videoStalled
+                                          ? 'No new video frames arrived for 5 seconds. The other device may be asleep or the connection may have closed.'
+                                          : _videoTimedOut
+                                          ? 'The connection opened, but no video arrived. Check that the other device is awake and still sharing its screen.'
                                           : 'Connected to your PC. The first video frame has not arrived yet.',
                                       textAlign: TextAlign.center,
                                       style: theme.textTheme.bodyMedium
                                           ?.copyWith(color: Colors.white60),
                                     ),
-                                    if (!_videoTimedOut) ...[
+                                    if (!_videoTimedOut && !_videoStalled) ...[
                                       const SizedBox(height: 20),
                                       const SizedBox(
                                         width: 28,
@@ -1074,6 +1115,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                           strokeWidth: 2,
                                           color: Colors.white54,
                                         ),
+                                      ),
+                                    ],
+                                    if (_videoTimedOut || _videoStalled) ...[
+                                      const SizedBox(height: 20),
+                                      FilledButton.icon(
+                                        onPressed: _handleStop,
+                                        icon: const Icon(Icons.stop_circle),
+                                        label: const Text('Stop watching'),
                                       ),
                                     ],
                                   ],
