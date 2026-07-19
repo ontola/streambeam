@@ -1838,7 +1838,12 @@ class _DevicesSection extends StatelessWidget {
                     label: h.online ? 'Online' : 'Offline',
                     highlight: h.online,
                   ),
-                  if (h.isSaved && !h.online && canWakeSaved && onWakeHost != null)
+                  // Not gated on !online: a sleeping host can linger as
+                  // "Online" in the discovery snapshot (mDNS cache) long
+                  // enough to hide the one button that could wake it —
+                  // observed live 2026-07-19. Waking an awake machine is a
+                  // harmless no-op, so just always offer it.
+                  if (h.isSaved && canWakeSaved && onWakeHost != null)
                     IconButton(
                       icon: const Icon(Icons.power_settings_new),
                       color: theme.colorScheme.primary,
