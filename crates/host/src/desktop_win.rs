@@ -15,9 +15,11 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-/// Desktop-following is active only in the SYSTEM service worker, flagged by
-/// the env var the service sets when it launches the worker. Read once.
-fn following_enabled() -> bool {
+/// True only in the SYSTEM service worker (flagged by the env var the service
+/// sets when it launches the worker). Gates every secure-desktop behavior —
+/// desktop-following capture/inject — so the normal in-app host is untouched.
+/// Read once.
+pub fn secure_desktop_worker() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("STREAMBEAM_SECURE_DESKTOP").is_ok())
 }
@@ -70,7 +72,7 @@ impl Follower {
         // `SendInput` (silent dead input, seen 2026-07-19). The service sets
         // `STREAMBEAM_SECURE_DESKTOP=1` when it launches the worker; without
         // it this is a no-op that reports success.
-        if !following_enabled() {
+        if !secure_desktop_worker() {
             return true;
         }
         unsafe {

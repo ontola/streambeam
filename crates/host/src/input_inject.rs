@@ -304,6 +304,20 @@ fn apply_windows(event: InputEvent) {
     use std::sync::OnceLock;
     use std::sync::mpsc::{Sender, channel};
 
+    // Normal in-app host: inject directly on the calling thread, exactly as
+    // before the secure-desktop work — that thread is already on the one
+    // interactive desktop, and the dedicated-thread + desktop-follow routing
+    // only exists for the SYSTEM service worker. Routing normal input through
+    // a spawned thread was a needless behavior change that broke injection
+    // (dead mouse/keys, 2026-07-19), so it's now strictly opt-in.
+    if !crate::desktop_win::secure_desktop_worker() {
+        inject_windows(event);
+        return;
+    }
+
+    // Service worker only: a single dedicated thread that re-attaches to the
+    // current input desktop before each event, so SendInput reaches the
+    // lock/login/UAC desktop (tokio workers can't switch desktops safely).
     static INJECTOR: OnceLock<Sender<InputEvent>> = OnceLock::new();
     let tx = INJECTOR.get_or_init(|| {
         let (tx, rx) = channel::<InputEvent>();
@@ -318,7 +332,6 @@ fn apply_windows(event: InputEvent) {
             .expect("spawn input injector thread");
         tx
     });
-    // Drop events only if the injector thread is gone (never in practice).
     let _ = tx.send(event);
 }
 
