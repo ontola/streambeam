@@ -687,6 +687,11 @@ fn play_session_blocking(
                 streambeam_proto::control::PowerAction::Sleep
             };
             let _ = runtime.block_on(streambeam_core::request_power(&mut session, action));
+            // Deterministic session end — same reasoning as the desktop
+            // loop in `api/mod.rs`: don't leave a frozen 'connected' UI
+            // while the host suspends underneath it.
+            std::thread::sleep(Duration::from_millis(300));
+            return Ok(stats);
         }
 
         if consecutive_skipped >= IDR_RESYNC_THRESHOLD {

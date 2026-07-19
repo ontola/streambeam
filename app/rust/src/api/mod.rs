@@ -958,6 +958,13 @@ async fn desktop_stream_loop(
                 streambeam_proto::control::PowerAction::Sleep
             };
             let _ = streambeam_core::request_power(&mut session, action).await;
+            // End the session deterministically: the suspending host won't
+            // close the connection, and waiting out the media timeout leaves
+            // the player frozen on 'connected' for ~10s — long enough that a
+            // user reasonably concludes sleep failed (observed 2026-07-19).
+            // The request is already flushed; give the host a beat, then go.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            break;
         }
 
         // Recover from unrecoverable loss the same way the other clients do
