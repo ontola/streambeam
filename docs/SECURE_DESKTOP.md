@@ -110,6 +110,40 @@ all the login box needs.
 - Running the *Flutter app itself* as a service (it stays the user-session
   control panel; only the headless host logic moves into the service).
 
+## Testing phases 1+2 (do this AT the machine, elevated)
+
+Phases 1 and 2 are built (`streambeam-svc`, `desktop_win.rs`). Verifying them
+needs an Administrator prompt and reboots/lock cycles — never install this
+remotely over the only control path.
+
+Two gotchas to know first:
+- **Port collision**: the service's worker binds `47989`, same as the in-app
+  host. Quit the StreamBeam app (or stop its host) before starting the
+  service, or one will fail to bind.
+- **Separate identity (phase-1.5 gap)**: the SYSTEM worker reads
+  `%APPDATA%` as `C:\Windows\System32\config\systemprofile\...`, a *different*
+  host identity + pairing store than the logged-in app. So the first
+  service-hosted session needs a fresh pair from the client. Sharing the
+  logged-in user's data dir (so pairing carries over) is the next task.
+
+```powershell
+# From an elevated PowerShell, in the build output dir with both exes:
+#   streambeam-svc.exe, streambeam-host.exe
+.\streambeam-svc.exe install          # registers the SYSTEM auto-start service
+.\streambeam-svc.exe start            # launches a worker in the console session
+# Watch C:\ProgramData\streambeam\svc.log for "worker launched in session N".
+# Then from the client: pair fresh, start a stream — expect normal desktop.
+# Lock the PC (Win+L): capture should keep going (svc.log shows re-follow /
+# the worker re-attaching), and you should see + be able to type into the
+# login box from the client.
+.\streambeam-svc.exe stop
+.\streambeam-svc.exe uninstall        # full removal
+```
+
+If capture goes black specifically on the secure desktop (some GPUs/drivers
+refuse DXGI Duplication there), that's the known phase-3 item: add the WinRT
+`Windows.Graphics.Capture` fallback.
+
 ## Relationship to other docs
 
 - [WOL.md](WOL.md) — waking the box; this doc is what makes a woken box
