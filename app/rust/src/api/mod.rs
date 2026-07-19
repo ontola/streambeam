@@ -811,6 +811,16 @@ async fn desktop_stream_loop(
         // backlog is the point where skipping starts beating decoding.
         let behind_threshold = (u32::from(session.fps) / 4).max(10);
         let behind = completions.len() as u32 > behind_threshold;
+        // Skip-mode for THIS batch: entered by a backlog or a still-armed
+        // `awaiting_keyframe`, and — critically — *exited by the first
+        // keyframe in the batch*, feeding everything after it. The previous
+        // shape re-checked `behind` per completion, so the P-frames right
+        // behind a recovery keyframe (which arrive in the same large drain
+        // — the host's forced-IDR recreate stalls ~400ms, guaranteeing a
+        // "behind" batch) re-armed the latch that keyframe had just
+        // cleared: one rendered frame per IDR request, a ~5s slideshow,
+        // reported live 2026-07-19 as "no flashes but about 0fps".
+        let mut resync = awaiting_keyframe || behind;
         let mut dart_closed = false;
 
         for (keyframe, frame) in completions {
@@ -825,8 +835,9 @@ async fn desktop_stream_loop(
             // documents for MediaCodec), and it stays garbage for the rest
             // of the GOP.
             if keyframe {
+                resync = false;
                 awaiting_keyframe = false;
-            } else if behind || awaiting_keyframe {
+            } else if resync {
                 awaiting_keyframe = true;
                 continue;
             }

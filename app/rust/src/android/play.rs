@@ -604,7 +604,22 @@ fn play_session_blocking(
         // self-inflicted a resync-request cycle even with zero real network
         // loss. A real, growing backlog keeps piling up far more than a
         // short burst, so require a much larger one to call it in.
-        let behind = completions.len() > 5;
+        // Scaled with the negotiated fps (was a flat 5, tuned when streams
+        // capped at 60fps): once hosts delivered an honest 120fps cadence,
+        // a single ~50ms app hiccup legitimately completes 6+ frames in one
+        // drain, and with the `awaiting_keyframe` latch each false "behind"
+        // escalated into an IDR request — observed live 2026-07-19 as a
+        // banded intra flash every cooldown tick. A quarter-second of real
+        // backlog is where skipping starts beating decoding (same threshold
+        // as the desktop loop in `api/mod.rs`).
+        let behind = completions.len() > usize::from(session.fps / 4).max(10);
+        // Batch-scoped skip-mode, exited by the first keyframe so the
+        // P-frames delivered right behind a recovery keyframe (same large
+        // drain — the host's forced-IDR recreate stalls long enough to
+        // guarantee a "behind" batch) don't re-arm the latch that keyframe
+        // just cleared. See the desktop loop in `api/mod.rs` for the
+        // one-frame-per-IDR "0fps slideshow" this fixes.
+        let mut resync = awaiting_keyframe || behind;
 
         for (is_keyframe, frame) in completions {
             // Always decode a keyframe (it resets the reference chain and is
@@ -619,8 +634,9 @@ fn play_session_blocking(
             // screen. Better to show nothing until the next keyframe resyncs
             // the reference chain than to render corrupted frames.
             if is_keyframe {
+                resync = false;
                 awaiting_keyframe = false;
-            } else if behind || awaiting_keyframe {
+            } else if resync {
                 awaiting_keyframe = true;
                 consecutive_skipped += 1;
                 diag.skipped_behind += 1;
