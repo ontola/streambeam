@@ -1,5 +1,7 @@
 //! Control messages on stream S0 (client ↔ host).
 
+use std::net::SocketAddr;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +37,13 @@ pub struct AudioParams {
     pub sample_rate: u32,
     pub channels: u8,
     pub frame_ms: u8,
+}
+
+/// Host power transition a client may request (v4+).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PowerAction {
+    Sleep,
+    Hibernate,
 }
 
 /// Input semantics exposed by the host OS for this session.
@@ -77,6 +86,13 @@ pub enum ClientMsg {
         t_us: u64,
     },
     Bye,
+    /// Ask the host to suspend (v4+). Only honored on an authenticated
+    /// session, like every other control message; the host sends
+    /// [`HostMsg::PowerAck`] best-effort before the box goes down (the QUIC
+    /// connection dies the moment it suspends — don't wait for more).
+    RequestPower {
+        action: PowerAction,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +136,18 @@ pub enum HostMsg {
         t_us: u64,
     },
     Bye,
+    /// Best-effort acknowledgement of [`ClientMsg::RequestPower`] (v4+).
+    PowerAck,
+    /// Wake-on-LAN facts (v4+), sent once after session accept so the client
+    /// can cache them (`SavedHost`) and wake this host later while it is
+    /// unreachable. Inside the authenticated post-`Hello` channel, same
+    /// trust level as everything else here. `broadcast` is the subnet
+    /// broadcast for the interface the host serves on (falls back to
+    /// 255.255.255.255:9 client-side when `None`).
+    WakeInfo {
+        mac: [u8; 6],
+        broadcast: Option<SocketAddr>,
+    },
 }
 
 #[cfg(test)]

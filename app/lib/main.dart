@@ -397,6 +397,18 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     });
   }
 
+  void _wakeSavedHost(_HostListEntry host) {
+    // Fire the magic packets; discovery keeps polling, so the tile flips to
+    // Online by itself once the machine is up (S3 resume is typically a few
+    // seconds; a cold machine may not support wake at all — see docs/WOL.md).
+    final sent = wakeSavedHost();
+    setState(() {
+      _status = sent
+          ? 'Wake signal sent to ${host.name} — it should appear online in a few seconds.'
+          : 'No Wake-on-LAN info for ${host.name} yet. Connect to it once while it is on.';
+    });
+  }
+
   void _refreshSavedHost() {
     setState(() {
       _savedHostInfo = loadSavedHostInfo();
@@ -1499,6 +1511,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     onForgetHost: _busy
                         ? null
                         : (_) => unawaited(_forgetSavedHost()),
+                    canWakeSaved: savedHostCanWake(),
+                    onWakeHost: _busy ? null : (h) => _wakeSavedHost(h),
                   ),
                   if (_status != null) ...[
                     const SizedBox(height: 12),
@@ -1753,6 +1767,8 @@ class _DevicesSection extends StatelessWidget {
     required this.discovering,
     this.onHostTap,
     this.onForgetHost,
+    this.onWakeHost,
+    this.canWakeSaved = false,
   });
 
   final bool busy;
@@ -1760,6 +1776,11 @@ class _DevicesSection extends StatelessWidget {
   final bool discovering;
   final void Function(_HostListEntry host)? onHostTap;
   final void Function(_HostListEntry host)? onForgetHost;
+
+  /// Wake-on-LAN: shown on the saved host while it's offline, when the app
+  /// has cached wake facts for it (see `savedHostCanWake`).
+  final void Function(_HostListEntry host)? onWakeHost;
+  final bool canWakeSaved;
 
   @override
   Widget build(BuildContext context) {
@@ -1817,6 +1838,13 @@ class _DevicesSection extends StatelessWidget {
                     label: h.online ? 'Online' : 'Offline',
                     highlight: h.online,
                   ),
+                  if (h.isSaved && !h.online && canWakeSaved && onWakeHost != null)
+                    IconButton(
+                      icon: const Icon(Icons.power_settings_new),
+                      color: theme.colorScheme.primary,
+                      tooltip: 'Wake ${h.name} (Wake-on-LAN)',
+                      onPressed: busy ? null : () => onWakeHost!(h),
+                    ),
                   if (h.isSaved && onForgetHost != null)
                     IconButton(
                       icon: const Icon(Icons.delete_outline),

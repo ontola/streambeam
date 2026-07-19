@@ -19,6 +19,43 @@ pub fn set_audio_muted(muted: bool) {
     crate::audio_play::set_muted(muted);
 }
 
+/// Wake-on-LAN: whether the saved host has cached wake facts
+/// (`HostMsg::WakeInfo` from a previous session).
+#[flutter_rust_bridge::frb(sync)]
+pub fn saved_host_can_wake() -> bool {
+    load_saved_host(&saved_host_path())
+        .ok()
+        .flatten()
+        .is_some_and(|h| h.mac.is_some())
+}
+
+/// Send Wake-on-LAN magic packets at the saved host. Returns false when no
+/// wake facts are cached; the send itself is fire-and-forget (the target is
+/// a NIC in a low-power state — nothing can confirm receipt but the host
+/// coming online, which the caller polls via normal discovery).
+#[flutter_rust_bridge::frb(sync)]
+pub fn wake_saved_host() -> bool {
+    let Ok(Some(host)) = load_saved_host(&saved_host_path()) else {
+        return false;
+    };
+    let Some(mac) = host.mac else { return false };
+    // Off-thread: the sender spaces its packets ~50ms apart, which doesn't
+    // belong on the UI thread this sync call runs on.
+    std::thread::spawn(move || {
+        if let Err(e) = streambeam_core::send_magic_packets(mac, host.wol_broadcast) {
+            log::warn!("wake_saved_host: {e}");
+        }
+    });
+    true
+}
+
+/// Ask the currently connected host to suspend. Routed through the active
+/// session's control stream by the platform stream loop; no-op without one.
+#[flutter_rust_bridge::frb(sync)]
+pub fn request_host_power(hibernate: bool) {
+    crate::playback::request_host_power(hibernate);
+}
+
 /// Stop the active watch session immediately instead of waiting for the
 /// decoder/media receive loop's network timeout to notice that its UI left.
 #[flutter_rust_bridge::frb(sync)]
@@ -628,12 +665,21 @@ async fn play_stream_desktop_known_inner(
     )
     .await
     .map_err(|e| e.to_string())?;
+    // Carry cached Wake-on-LAN facts over when re-saving the same host —
+    // they were learned from a previous session's `WakeInfo` and this
+    // rewrite happens before the new session's copy arrives.
+    let cached = load_saved_host(&saved_host_path())
+        .ok()
+        .flatten()
+        .filter(|h| h.host_pubkey == pubkey);
     let _ = save_saved_host(
         &saved_host_path(),
         &SavedHost {
             host_name,
             host_pubkey: pubkey,
             addrs: vec![addr],
+            mac: cached.as_ref().and_then(|h| h.mac),
+            wol_broadcast: cached.as_ref().and_then(|h| h.wol_broadcast),
         },
     );
     desktop_stream_loop(session, sink).await
@@ -900,6 +946,18 @@ async fn desktop_stream_loop(
         }
         if dart_closed {
             break;
+        }
+
+        // UI-requested host suspend (Sleep button): forward on the control
+        // stream this loop owns. The host acks and goes down — the
+        // connection error that follows is the expected outcome.
+        if let Some(hibernate) = crate::playback::take_power_request() {
+            let action = if hibernate {
+                streambeam_proto::control::PowerAction::Hibernate
+            } else {
+                streambeam_proto::control::PowerAction::Sleep
+            };
+            let _ = streambeam_core::request_power(&mut session, action).await;
         }
 
         // Recover from unrecoverable loss the same way the other clients do

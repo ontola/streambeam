@@ -5,6 +5,7 @@ pub mod obu;
 pub mod reassemble;
 pub mod saved_host;
 pub mod session;
+pub mod wol;
 
 pub use annex_b::{
     AccessUnit, access_unit_is_keyframe, access_unit_to_avcc_sample, access_unit_without_sei,
@@ -18,10 +19,11 @@ pub use obu::{
     obu_type_summary as av1_obu_type_summary,
 };
 pub use reassemble::{FrameReassembler, FrameStats, LossReport};
+pub use wol::send_magic_packets;
 pub use saved_host::{
     SavedHost, clear as clear_saved_host, load as load_saved_host, save as save_saved_host,
 };
 pub use session::{
     ClientSession, connect, connect_as, connect_as_identity, connect_known, fallback_video_caps,
-    request_idr, request_invalidate_ref_frames, send_input,
+    request_idr, request_invalidate_ref_frames, request_power, send_input,
 };

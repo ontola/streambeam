@@ -24,6 +24,7 @@ pub mod macos_screen;
 pub mod mock;
 #[cfg(windows)]
 mod nvenc;
+pub mod power;
 pub mod qr;
 #[cfg(windows)]
 mod scale;

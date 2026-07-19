@@ -307,6 +307,17 @@ pub async fn request_idr(
     Ok(())
 }
 
+/// Ask the host to suspend (sleep/hibernate). The host acks best-effort and
+/// then goes down — expect the connection to die right after; that is
+/// success, not an error.
+pub async fn request_power(
+    session: &mut ClientSession,
+    action: streambeam_proto::control::PowerAction,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    write_msg(&mut session.send, &ClientMsg::RequestPower { action }).await?;
+    Ok(())
+}
+
 /// Reference-Frame-Invalidation (RFI) recovery: tell the host it lost video
 /// `frame_id`s `[first_frame, last_frame]` (inclusive, wrapping) so the next
 /// encoded frame can skip them as references — cheaper than `request_idr`

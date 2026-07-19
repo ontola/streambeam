@@ -113,14 +113,17 @@ ClientMsg { Hello { proto_version, client_name, pair_proof: Option<[u8;32]> },
             SessionRequest { video: VideoCaps { ..., display_id: Option<u32> },
                              audio: AudioCaps, bitrate_kbps },
             RequestIdr, InvalidateRefFrames { first_frame: u16, last_frame: u16 },
-            SetBitrate { kbps }, Ping { t_us }, Bye }
+            SetBitrate { kbps }, Ping { t_us }, Bye,
+            RequestPower { action: PowerAction::{Sleep|Hibernate} } }   // v4
 HostMsg   { PairAck, PairReject { reason },
             DisplayList { displays: Vec<DisplayInfo>, selected_id },
             SessionAccept { session_id, codec, width,
             height, fps, audio: AudioParams, input_mode: HostInputMode },
             CodecConfig { data },
             Rumble { pad, low, high }, HostStats { capture_us, encode_us, send_queue },
-            ClipboardText { text }, Pong { t_us }, Bye }
+            ClipboardText { text }, Pong { t_us }, Bye,
+            PowerAck,                                                    // v4
+            WakeInfo { mac: [u8;6], broadcast: Option<SocketAddr> } }    // v4
 ```
 
 `DisplayInfo` contains the host-platform display id, user-facing name, native
@@ -128,6 +131,16 @@ width/height and `primary` flag. A client uses `display_id = None` for the
 primary display. To change displays it reconnects with the chosen id; this
 keeps capture geometry, encoder configuration and absolute-input mapping on
 one session boundary.
+
+v4 (2026-07-19) adds host power control and Wake-on-LAN facts. `RequestPower`
+is only honored on an authenticated session; the host replies `PowerAck`
+best-effort and then suspends (the connection drops immediately after —
+clients must not wait for more). `WakeInfo` is sent once after
+`SessionAccept` so the client can cache the host's MAC + subnet broadcast in
+`SavedHost` and send WOL magic packets later, while the host is unreachable.
+Security note: the MAC travels only inside the authenticated post-`Hello`
+channel — same trust level as the rest of `HostMsg` — and never in the
+pairing QR payload.
 
 ## Input events (S1)
 

@@ -1123,6 +1123,15 @@ async fn handle_client(
                 )
                 .await?;
                 log!("session started — streaming to {client_name}");
+                // Wake-on-LAN facts (v4): tell this authenticated client how
+                // to wake us later while we're asleep. Advisory — a host
+                // that can't determine them just doesn't send the message.
+                // `local_ip` is the interface actually serving this
+                // client — exactly the adapter whose MAC can wake us.
+                let serve_ips: Vec<std::net::IpAddr> = conn.local_ip().into_iter().collect();
+                if let Some((mac, broadcast)) = crate::power::wake_info(&serve_ips) {
+                    write_msg(&mut send, &HostMsg::WakeInfo { mac, broadcast }).await?;
+                }
             }
             ClientMsg::Ping { t_us } => {
                 write_msg(&mut send, &HostMsg::Pong { t_us }).await?;
@@ -1157,6 +1166,15 @@ async fn handle_client(
                     encoder.lock().await.set_bitrate(kbps);
                 }
                 log!("client requested bitrate {kbps} kbps");
+            }
+            ClientMsg::RequestPower { action } => {
+                log!("power request from {client_name}: {action:?}");
+                // Ack first: the QUIC connection dies the instant the box
+                // suspends, so this is fire-and-forget by design.
+                let _ = write_msg(&mut send, &HostMsg::PowerAck).await;
+                if let Err(e) = crate::power::suspend(action) {
+                    log!("power request failed: {e}");
+                }
             }
             ClientMsg::Bye => {
                 write_msg(&mut send, &HostMsg::Bye).await?;

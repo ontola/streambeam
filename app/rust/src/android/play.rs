@@ -315,10 +315,19 @@ pub async fn run_discovered(
         e.to_string()
     })?;
 
+    // Carry cached Wake-on-LAN facts over when re-saving the same host —
+    // they were learned from a previous session's `WakeInfo` and this
+    // rewrite happens before the new session's copy arrives.
+    let cached = streambeam_core::load_saved_host(&crate::store::saved_host_path())
+        .ok()
+        .flatten()
+        .filter(|h| h.host_pubkey == pubkey);
     let host = SavedHost {
         host_name,
         host_pubkey: pubkey,
         addrs: vec![addr],
+        mac: cached.as_ref().and_then(|h| h.mac),
+        wol_broadcast: cached.as_ref().and_then(|h| h.wol_broadcast),
     };
     let _ = save_saved_host(&crate::store::saved_host_path(), &host);
 
@@ -669,6 +678,17 @@ fn play_session_blocking(
         // recover so the picture stops degrading. Only if we're not still
         // cooling down from the last request, so a host that's persistently
         // a little behind doesn't get spammed.
+        // UI-requested host suspend — same contract as the desktop loop in
+        // `api/mod.rs`: send and expect the connection to die right after.
+        if let Some(hibernate) = crate::playback::take_power_request() {
+            let action = if hibernate {
+                streambeam_proto::control::PowerAction::Hibernate
+            } else {
+                streambeam_proto::control::PowerAction::Sleep
+            };
+            let _ = runtime.block_on(streambeam_core::request_power(&mut session, action));
+        }
+
         if consecutive_skipped >= IDR_RESYNC_THRESHOLD {
             consecutive_skipped = 0;
             let cooled_down = last_idr_request

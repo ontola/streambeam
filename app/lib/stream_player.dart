@@ -858,8 +858,17 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         },
         onStop: _handleStop,
         onKeyboard: _openKeyboard,
+        onSleepHost: _handleSleepHost,
       ),
     );
+  }
+
+  void _handleSleepHost() {
+    // The host acks best-effort and suspends; the connection dying right
+    // after is the expected outcome — the normal stream-teardown path
+    // returns the user to the device list, where the Wake button lives.
+    requestHostPower(hibernate: false);
+    setState(() {});
   }
 
   /// Docked sidebar (mouse platforms): pushes the video aside instead of
@@ -1940,6 +1949,7 @@ class _StreamMenu extends StatelessWidget {
     required this.onSoundEnabledChanged,
     required this.onStop,
     required this.onKeyboard,
+    required this.onSleepHost,
   });
 
   final _LiveDiagnostics diagnostics;
@@ -1977,6 +1987,9 @@ class _StreamMenu extends StatelessWidget {
   final VoidCallback? onToggleUpscale;
   final bool soundEnabled;
   final ValueChanged<bool> onSoundEnabledChanged;
+
+  /// Ask the host machine to go to sleep (ends the session by design).
+  final VoidCallback onSleepHost;
   final VoidCallback onStop;
   final VoidCallback onKeyboard;
 
@@ -2294,6 +2307,18 @@ class _StreamMenu extends StatelessWidget {
                         ),
                         dense: compact,
                         contentPadding: tilePadding,
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.bedtime_outlined),
+                        title: const Text('Put PC to sleep'),
+                        subtitle: Text(
+                          'Ends this session; wake it again from the device list',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        dense: compact,
+                        contentPadding: tilePadding,
+                        onTap: onSleepHost,
                       ),
                       const Divider(height: 1),
                       if (upscaleSupported) ...[

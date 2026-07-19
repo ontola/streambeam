@@ -10,6 +10,13 @@ pub struct SavedHost {
     pub host_name: String,
     pub host_pubkey: [u8; 32],
     pub addrs: Vec<SocketAddr>,
+    /// Wake-on-LAN facts cached from the host's `HostMsg::WakeInfo` (v4) —
+    /// present only after a successful session against a host that reports
+    /// them. `#[serde(default)]` keeps pre-v4 saved_host.json files loading.
+    #[serde(default)]
+    pub mac: Option<[u8; 6]>,
+    #[serde(default)]
+    pub wol_broadcast: Option<SocketAddr>,
 }
 
 impl SavedHost {
@@ -19,6 +26,8 @@ impl SavedHost {
             host_name: info.host_name,
             host_pubkey: info.host_pubkey,
             addrs: info.addrs,
+            mac: None,
+            wol_broadcast: None,
         })
     }
 
