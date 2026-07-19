@@ -9,6 +9,8 @@ use clap::Parser;
 
 mod active_stream;
 pub mod audio;
+#[cfg(all(windows, feature = "audio"))]
+pub mod audio_capture_win;
 #[cfg(windows)]
 mod capture;
 pub mod config;

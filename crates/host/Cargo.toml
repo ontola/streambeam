@@ -52,6 +52,10 @@ windows = { version = "0.61", features = [
     "Win32_System_Power",
     # SDR-white-level query for the HDR capture tone-map (capture.rs).
     "Win32_Devices_Display",
+    # WASAPI loopback system-audio capture (audio_capture_win.rs).
+    "Win32_Media_Audio",
+    # PROPVARIANT plumbing IMMDevice::Activate needs.
+    "Win32_System_Com_StructuredStorage",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

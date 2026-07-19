@@ -1634,6 +1634,13 @@ async fn stream_audio(
         return Ok(());
     }
 
+    // System audio only flows while someone is actually watching — the
+    // guard's refcount keeps a single WASAPI loopback thread alive across
+    // this session's lifetime (macOS gets its audio from the same
+    // ScreenCaptureKit session as video, gated by the capture lease above).
+    #[cfg(all(windows, feature = "audio"))]
+    let _capture = crate::audio_capture_win::LoopbackCapture::start();
+
     let addr = conn.remote_address();
     let mut packet_id: u16 = 0;
     let mut idx = 0usize;

@@ -6,6 +6,8 @@ pub mod android_input;
 #[cfg(target_os = "android")]
 pub mod android_screen;
 pub mod audio;
+#[cfg(all(windows, feature = "audio"))]
+pub mod audio_capture_win;
 #[cfg(windows)]
 pub mod capture;
 pub mod config;
