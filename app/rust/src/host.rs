@@ -77,7 +77,15 @@ pub fn start(
 ) -> Result<(), String> {
     let mut slot = service_slot().lock().map_err(|e| e.to_string())?;
     if slot.is_some() {
-        return Err("host is already running".into());
+        // Idempotent: every caller means "make sure the host is up" (app
+        // startup, resume, the Beam page's fallback button), and several of
+        // them guard on a *cached* snapshot that can be stale — surfacing
+        // "host is already running" as an error banner for what is actually
+        // the desired state confused users (reported 2026-07-19). The
+        // running instance keeps its original name/fps/dims; changing those
+        // still requires stop_host() first.
+        log::info!("start_host: already running — no-op");
+        return Ok(());
     }
 
     let listen: SocketAddr = listen
