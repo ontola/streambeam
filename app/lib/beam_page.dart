@@ -270,6 +270,10 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
 
   Future<void> _ensureHostRunning() async {
     if (_starting || _snap.running) return;
+    // When the secure-desktop service is running, IT owns the host (and the
+    // listen port) from a SYSTEM worker sharing this user's identity — so the
+    // in-app host must stand down or the two collide on 47989.
+    if (Platform.isWindows && secureDesktopStatus() == 'running') return;
     setState(() => _starting = true);
     try {
       startHost(hostName: null, listen: null, fps: 30, maxEncodeDim: 1920);
@@ -290,9 +294,20 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
           : 'Approve the Windows prompt to turn this off…',
     );
     try {
+      // Hand the listen port over cleanly: stop the in-app host before the
+      // service's worker tries to bind it (and vice-versa on disable).
+      if (on) {
+        try {
+          stopHost();
+        } catch (_) {}
+      }
       // Blocks on the UAC dialog; runs off the UI isolate so the app stays
       // responsive while the elevated helper works.
       await Future(() => secureDesktopSetEnabled(enable: on));
+      if (!on) {
+        // Service gone — bring the in-app host back so beaming still works.
+        await _ensureHostRunning();
+      }
       setState(() => _status = null);
     } catch (e) {
       _setStatus(e.toString(), error: true);

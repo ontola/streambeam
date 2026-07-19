@@ -48,6 +48,41 @@ fn default_worker() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("streambeam-host.exe"))
 }
 
+/// Where the console user's data dir is recorded, so the SYSTEM worker can
+/// reuse the *app's* host identity + pairings instead of minting its own
+/// under SYSTEM's profile (which would force a re-pair). `enable` (running
+/// elevated *as the user*) writes it; the service (SYSTEM) reads it.
+fn worker_cfg_path() -> std::path::PathBuf {
+    let base = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
+    std::path::Path::new(&base).join("streambeam").join("worker.cfg")
+}
+
+/// Record `%APPDATA%\streambeam` (the current user's host data dir) for the
+/// worker. Called from `enable`, which runs as the elevated user, so `APPDATA`
+/// is the real user's — not SYSTEM's.
+pub fn record_worker_data_dir_pub() {
+    record_worker_data_dir();
+}
+
+fn record_worker_data_dir() {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let dir = std::path::Path::new(&appdata).join("streambeam");
+        let cfg = worker_cfg_path();
+        if let Some(parent) = cfg.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&cfg, dir.to_string_lossy().as_bytes());
+    }
+}
+
+/// The recorded user data dir, if any — the worker's `STREAMBEAM_DATA_DIR`.
+fn recorded_worker_data_dir() -> Option<String> {
+    std::fs::read_to_string(worker_cfg_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 // --- SCM control (install / uninstall / start / stop) --------------------
 
 pub fn install(worker: Option<String>) -> Res {
@@ -315,8 +350,19 @@ fn spawn_worker(worker: &std::path::Path, session: u32) -> Option<Worker> {
             return None;
         }
 
-        // 4. Launch. `winsta0\default` is the interactive desktop; phase 2
-        //    will switch the worker's own threads onto Winlogon as needed.
+        // 4. Share the app's host identity + pairings: point the worker at
+        //    the user's data dir (recorded at enable time). Set it on *this*
+        //    process so the child inherits it via the NULL environment below
+        //    — SYSTEM can read/write the user's %APPDATA% fine. Without this
+        //    the worker would mint its own identity under SYSTEM's profile
+        //    and the client would have to re-pair.
+        if let Some(dir) = recorded_worker_data_dir() {
+            // Already inside spawn_worker's unsafe block.
+            std::env::set_var("STREAMBEAM_DATA_DIR", &dir);
+        }
+
+        // `winsta0\default` is the interactive desktop; phase 2 switches the
+        // worker's own threads onto Winlogon as needed.
         let mut cmd = wide(&format!("\"{}\"", worker.display()));
         let mut desktop = wide("winsta0\\default");
         let mut si = STARTUPINFOW {

@@ -47,6 +47,9 @@ fn main() {
                 .position(|a| a == "--worker")
                 .and_then(|i| args.get(i + 1))
                 .cloned();
+            // Runs elevated-as-the-user, so it can record the user's data dir
+            // for the SYSTEM worker to share (identity + pairings).
+            service_win::record_worker_data_dir_pub();
             service_win::install(worker).and_then(|()| service_win::start())
         }
         "disable" => service_win::disable(),
