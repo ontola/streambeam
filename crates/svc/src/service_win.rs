@@ -13,7 +13,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Security::{
     DuplicateTokenEx, SecurityIdentification, SetTokenInformation, TOKEN_ALL_ACCESS,
     TOKEN_DUPLICATE, TOKEN_QUERY, TokenPrimary, TokenSessionId,
@@ -360,6 +360,11 @@ fn spawn_worker(worker: &std::path::Path, session: u32) -> Option<Worker> {
             // Already inside spawn_worker's unsafe block.
             std::env::set_var("STREAMBEAM_DATA_DIR", &dir);
         }
+        // Opt the worker into desktop-following (capture + input track the
+        // lock/login/UAC desktop). The in-app host never sets this, so its
+        // injection stays on the single interactive desktop — see
+        // `desktop_win::following_enabled`.
+        std::env::set_var("STREAMBEAM_SECURE_DESKTOP", "1");
 
         // `winsta0\default` is the interactive desktop; phase 2 switches the
         // worker's own threads onto Winlogon as needed.
@@ -403,7 +408,7 @@ fn spawn_worker(worker: &std::path::Path, session: u32) -> Option<Worker> {
 /// for phase 1's 500ms cadence).
 #[allow(dead_code)]
 fn wait_worker(worker: &Worker, ms: u32) -> bool {
-    unsafe { WaitForSingleObject(worker.process, ms) == WAIT_OBJECT_0 }
+    unsafe { WaitForSingleObject(worker.process, ms) == windows::Win32::Foundation::WAIT_OBJECT_0 }
 }
 
 /// Service logging: SYSTEM services have no console, so append to a file next

@@ -12,7 +12,15 @@
 //! stream see and drive the secure desktop an in-session app is walled off
 //! from.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicIsize, Ordering};
+
+/// Desktop-following is active only in the SYSTEM service worker, flagged by
+/// the env var the service sets when it launches the worker. Read once.
+fn following_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("STREAMBEAM_SECURE_DESKTOP").is_ok())
+}
 
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
@@ -56,6 +64,15 @@ impl Follower {
     /// Best-effort: on failure the thread simply stays where it is, and the
     /// caller's existing `ACCESS_LOST`/retry path handles the fallout.
     pub fn follow(&self) -> bool {
+        // Only the SYSTEM service worker follows desktops — in a normal
+        // logged-in app the injector/capture threads are already on the one
+        // interactive desktop, and switching to a fresh HDESK of it breaks
+        // `SendInput` (silent dead input, seen 2026-07-19). The service sets
+        // `STREAMBEAM_SECURE_DESKTOP=1` when it launches the worker; without
+        // it this is a no-op that reports success.
+        if !following_enabled() {
+            return true;
+        }
         unsafe {
             // `OpenInputDesktop` needs no station switch for a SYSTEM process
             // already in the console session; flags 0, non-inheritable.
