@@ -290,8 +290,40 @@ mod macos_tests {
     }
 }
 
+/// Route Windows input through a single dedicated injector thread that stays
+/// attached to the current *input* desktop. `SendInput`/`SetCursorPos` act on
+/// the calling thread's desktop, so injecting from tokio worker threads (which
+/// live on whatever desktop they were spawned on) can never reach the
+/// lock/login/UAC desktop the SYSTEM worker is capturing. The dedicated thread
+/// re-follows the input desktop before each event — cheap, and it means input
+/// tracks a lock/unlock/UAC transition with no extra plumbing. In a normal
+/// user session the follow is a no-op and this behaves exactly as before,
+/// just one hop off the caller's thread.
 #[cfg(windows)]
 fn apply_windows(event: InputEvent) {
+    use std::sync::OnceLock;
+    use std::sync::mpsc::{Sender, channel};
+
+    static INJECTOR: OnceLock<Sender<InputEvent>> = OnceLock::new();
+    let tx = INJECTOR.get_or_init(|| {
+        let (tx, rx) = channel::<InputEvent>();
+        std::thread::Builder::new()
+            .name("streambeam-input".into())
+            .spawn(move || {
+                while let Ok(event) = rx.recv() {
+                    crate::desktop_win::input_desktop().follow();
+                    inject_windows(event);
+                }
+            })
+            .expect("spawn input injector thread");
+        tx
+    });
+    // Drop events only if the injector thread is gone (never in practice).
+    let _ = tx.send(event);
+}
+
+#[cfg(windows)]
+fn inject_windows(event: InputEvent) {
     use streambeam_proto::input::InputEvent;
 
     unsafe {

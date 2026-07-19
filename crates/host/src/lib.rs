@@ -10,6 +10,8 @@ pub mod audio;
 pub mod audio_capture_win;
 #[cfg(windows)]
 pub mod capture;
+#[cfg(windows)]
+pub mod desktop_win;
 pub mod config;
 pub mod data_dir;
 pub mod encode;

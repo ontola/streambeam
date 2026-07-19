@@ -207,6 +207,13 @@ fn run_pipeline(
     pending_invalidate: Arc<Mutex<Option<Vec<u64>>>>,
     codec_config: Arc<Mutex<Option<Vec<u8>>>>,
 ) {
+    // Attach this capture thread to the current input desktop *before*
+    // creating the DXGI duplication — under the SYSTEM service this is what
+    // lets capture see the lock/login/UAC (Winlogon) desktop; in a normal
+    // user session it's a no-op onto the desktop we're already on. Re-run on
+    // every ACCESS_LOST recovery (see `capture_frame`) since a desktop switch
+    // is exactly what raises that error.
+    crate::desktop_win::input_desktop().follow();
     let mut pipe = match Pipeline::new(fps, max_encode_dim, wanted_codec) {
         Ok(p) => p,
         Err(e) => {
@@ -610,6 +617,11 @@ impl Pipeline {
                 // constant factor until the next pipeline rebuild — constant,
                 // not flickering, so acceptable here.
                 let allow_hdr = matches!(self.backend, EncoderBackend::Nvenc { .. });
+                // ACCESS_LOST is exactly what a desktop switch (lock, login,
+                // UAC, or unlock) raises — re-attach this thread to the new
+                // input desktop before recreating the duplication so a SYSTEM
+                // worker follows onto Winlogon (no-op in a user session).
+                crate::desktop_win::input_desktop().follow();
                 match create_duplication(&self.device, allow_hdr) {
                     Ok((dup, _, _, _)) => self.duplication = dup,
                     // Recreation itself can fail outright while the display
