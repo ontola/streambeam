@@ -550,7 +550,15 @@ unsafe fn build_config(
     // enables SPS/PPS repetition on every IDR — required since our
     // client parses SPS/PPS straight out of each keyframe's Annex-B
     // bytes.
-    config.gop_len = fps.max(1) * 3; // periodic keyframe, matching the MF-encoder tuning
+    // Periodic keyframe as a *safety net*, not the recovery mechanism —
+    // loss recovery is ref-invalidation plus client-requested IDRs (both
+    // land within ~RTT), so this only bounds how long an undetected decoder
+    // drift can last. Stretched from 3s: a CBR intra frame at streaming
+    // bitrates is ~0.1 bits/pixel and visibly banded on gradients, so every
+    // periodic keyframe reads as a brief "256-color" contrast flash that
+    // the following P-frames refine away (user-reported 2026-07-19); at 10s
+    // the pulse is rare instead of metronomic.
+    config.gop_len = fps.max(1) * 10;
     config.frame_interval_p = 1; // no B-frames — lowest latency
     // Was forced to Baseline (no CABAC) to match the software encoder's
     // known-good `eAVEncH264VProfile_Base` while debugging decode issues

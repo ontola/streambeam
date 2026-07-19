@@ -145,10 +145,15 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         let atoms: [CFString: Any] = ["av1C" as CFString: av1c as CFData]
         let extensions: [CFString: Any] = [
             kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms:
-                atoms as CFDictionary,
-            // Same full-range story as H.264 below: desktop capture is
-            // full-range and the encoder doesn't tag it.
-            kCMFormatDescriptionExtension_FullRangeVideo: true,
+                atoms as CFDictionary
+            // Deliberately NOT forcing FullRangeVideo here (unlike H.264
+            // below): NVENC's AV1 output is limited-range YUV and *says so*
+            // in-band — ffprobe on a live host bitstream dump (2026-07-19)
+            // reports `color_range=tv` from the sequence header, and since
+            // `repeatSeqHdr` every keyframe re-states it. A full-range
+            // container tag fighting a limited-range bitstream is at best a
+            // constant contrast error and at worst a per-keyframe contrast
+            // flip, depending on which one the decoder honors when.
         ]
         var fd: CMVideoFormatDescription?
         let status = CMVideoFormatDescriptionCreate(

@@ -795,7 +795,15 @@ async fn desktop_stream_loop(
         // with the session's actual fps, floored at Android's original
         // tuned value so a slower stream doesn't get *more* sensitive than
         // what was proven reliable there.
-        let behind_threshold = (u32::from(session.fps) * 5 / 60).max(5);
+        // Raised from `fps*5/60` (10 at 120fps) after the awaiting-keyframe
+        // latch landed: at an honest 120fps delivery cadence, a single brief
+        // app stall (~100ms of Flutter main-thread jank) piles up 12+
+        // completions in one drain — tripping "behind" turned that harmless
+        // hiccup into reference-chain surgery plus an IDR request every
+        // cooldown tick, observed live 2026-07-19 as a 262KB banded intra
+        // flash and an fps sawtooth every 3s. A quarter-second of genuine
+        // backlog is the point where skipping starts beating decoding.
+        let behind_threshold = (u32::from(session.fps) / 4).max(10);
         let behind = completions.len() as u32 > behind_threshold;
         let mut dart_closed = false;
 
