@@ -413,15 +413,19 @@ class MainActivity : FlutterActivity() {
             }
 
             override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                val fingerprint = serviceInfo.attributes["fp"]
-                    ?.toString(Charsets.UTF_8)
-                    ?.let {
-                        try {
-                            Base64.decode(it, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-                        } catch (_: IllegalArgumentException) {
-                            null
+                // The Rust advertiser's TXT key is "pk" (see PROTOCOL.md);
+                // "fp" is kept as a fallback from the earlier doc draft this
+                // code was written against.
+                val fingerprint =
+                    (serviceInfo.attributes["pk"] ?: serviceInfo.attributes["fp"])
+                        ?.toString(Charsets.UTF_8)
+                        ?.let {
+                            try {
+                                Base64.decode(it, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                            } catch (_: IllegalArgumentException) {
+                                null
+                            }
                         }
-                    }
                 val address = serviceInfo.host?.hostAddress
                 if (fingerprint != null && address != null) {
                     nativeHosts[serviceInfo.serviceName] = mapOf(
@@ -429,6 +433,7 @@ class MainActivity : FlutterActivity() {
                         "port" to serviceInfo.port,
                         "addrs" to listOf(address),
                         "pubkey" to fingerprint,
+                        "platform" to (serviceInfo.attributes["os"]?.toString(Charsets.UTF_8) ?: ""),
                     )
                 }
                 resolvingService = false
