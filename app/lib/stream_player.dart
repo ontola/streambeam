@@ -110,11 +110,11 @@ enum StreamMode {
 
     switch (this) {
       case StreamMode.game:
-        return (
-          capLongestSide(deviceWidth, 1920),
-          capLongestSide(deviceHeight, 1920),
-          deviceFps,
-        );
+        // Native/4K resolution *and* full refresh-rate fps: modern hardware
+        // encoders handle 4K well, and the fps half is what game feel needs
+        // — deviceFps already runs to the viewer's refresh rate (120 cap).
+        final (gw, gh) = raiseToRequestCeiling(deviceWidth, deviceHeight);
+        return (gw, gh, deviceFps);
       case StreamMode.quality:
         final (w, h) = raiseToRequestCeiling(deviceWidth, deviceHeight);
         return (w, h, deviceFps.clamp(1, 30));

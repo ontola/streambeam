@@ -84,9 +84,17 @@ final class StreamBeamCapture: NSObject, SCStreamDelegate, SCStreamOutput {
       ?? content.displays.first(where: { $0.displayID == primaryID })
       ?? content.displays.first else { throw CaptureError.noDisplay }
 
-    let scale = min(1.0, Double(maxDimension) / Double(max(display.width, display.height)))
-    width = Int32(max(2, Int(Double(display.width) * scale) & ~1))
-    height = Int32(max(2, Int(Double(display.height) * scale) & ~1))
+    // SCDisplay.width/height are logical *points* — on Retina that's roughly
+    // half the real resolution, and silently capped every stream at ~1500px
+    // regardless of what the client requested (found 2026-07-19 via host.log:
+    // every encode was 1496x966). SCStreamConfiguration wants pixels, so use
+    // the display mode's true pixel dimensions.
+    let displayMode = CGDisplayCopyDisplayMode(display.displayID)
+    let pixelWidth = displayMode?.pixelWidth ?? display.width
+    let pixelHeight = displayMode?.pixelHeight ?? display.height
+    let scale = min(1.0, Double(maxDimension) / Double(max(pixelWidth, pixelHeight)))
+    width = Int32(max(2, Int(Double(pixelWidth) * scale) & ~1))
+    height = Int32(max(2, Int(Double(pixelHeight) * scale) & ~1))
 
     let filter = SCContentFilter(
       display: display, excludingApplications: [], exceptingWindows: [])
