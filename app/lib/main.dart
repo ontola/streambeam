@@ -895,8 +895,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     final attempt = _desktopPlaybackAttempt;
     setState(() {
       _busy = true;
+      // Discovery can't tell us the host platform, so the Android
+      // MediaProjection-consent hint stays conditional — a Windows/Mac host
+      // starts streaming without any prompt on its side.
       _status =
-          'Connecting to ${host.name}… On the Android device, choose what to share and confirm the screen-sharing prompt.';
+          'Connecting to ${host.name}… If it\'s an Android device, choose what to share there and confirm its screen-sharing prompt.';
       _statusIsError = false;
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
@@ -1480,6 +1483,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       );
     }
 
+    final showConnectingOverlay =
+        _busy && !_showVideo && _desktopTextureId == null;
+
     // The header eats a big chunk of the (already scarce, especially in
     // landscape) vertical space if pinned, so it floats away on scroll down
     // and reappears on scroll up instead — see AppShell in beam_page.dart for
@@ -1502,7 +1508,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 children: [
                   // Devices first — the whole point of the screen.
                   _DevicesSection(
-                    busy: _busy,
+                    // The connecting modal already shows a spinner; a second
+                    // one in the (dimmed) list behind it reads as two
+                    // competing loading states.
+                    busy: _busy && !showConnectingOverlay,
                     hosts: _hostEntries(),
                     discovering: _discoveryBusy,
                     onHostTap: _busy
@@ -1514,7 +1523,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     canWakeSaved: savedHostCanWake(),
                     onWakeHost: _busy ? null : (h) => _wakeSavedHost(h),
                   ),
-                  if (_status != null) ...[
+                  // The connecting modal shows _status itself; repeating it
+                  // in a card behind the dimmed barrier just doubles up.
+                  if (_status != null && !showConnectingOverlay) ...[
                     const SizedBox(height: 12),
                     StatusNotice(message: _status!, isError: false),
                   ],
@@ -1584,9 +1595,6 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         ),
       ],
     );
-
-    final showConnectingOverlay =
-        _busy && !_showVideo && _desktopTextureId == null;
 
     return PopScope(
       canPop: !showConnectingOverlay,
