@@ -295,6 +295,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   int _desktopHeight = 0;
   StreamSubscription<DesktopStreamEvent>? _desktopSub;
   int _desktopPlaybackAttempt = 0;
+  // Last desktop connection target, so a stream-mode/custom-settings change
+  // can tear down and re-dial with the new caps (the Android path's
+  // `_reconnectForNewCaps` uses `_beginSession`, which desktop doesn't).
+  DiscoveredHost? _lastDesktopHost;
+  String? _lastDesktopAddr;
+  String? _lastDesktopPayload;
   // MetalFX upscaling (macOS): on by default; the native side reports back
   // whether it's actually available on this machine.
   bool _upscaleEnabled = true;
@@ -864,6 +870,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   /// decoder (macOS) and show its texture.
   Future<void> _startDesktopPlayback(String payload) async {
     await _stopDesktopPlayback();
+    _lastDesktopPayload = payload;
+    _lastDesktopHost = null;
+    _lastDesktopAddr = null;
     final attempt = _desktopPlaybackAttempt;
     setState(() {
       _busy = true;
@@ -893,6 +902,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     String addr,
   ) async {
     await _stopDesktopPlayback();
+    _lastDesktopHost = host;
+    _lastDesktopAddr = addr;
+    _lastDesktopPayload = null;
     final attempt = _desktopPlaybackAttempt;
     setState(() {
       _busy = true;
@@ -1197,6 +1209,20 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (_streamMode == StreamMode.custom) _reconnectForNewCaps();
   }
 
+  /// Desktop watch equivalent of `_reconnectForNewCaps`: stop and re-dial
+  /// the remembered target so the new mode/custom caps reach the host.
+  /// (`_startDesktopPlayback*` recompute `_deviceVideoCaps()` on entry.)
+  Future<void> _reconnectDesktopForNewCaps() async {
+    final host = _lastDesktopHost;
+    final addr = _lastDesktopAddr;
+    final payload = _lastDesktopPayload;
+    if (host != null && addr != null) {
+      await _startDesktopPlaybackKnown(host, addr);
+    } else if (payload != null) {
+      await _startDesktopPlayback(payload);
+    }
+  }
+
   void _reconnectForNewCaps() {
     if (_showVideo) {
       _stopStreaming();
@@ -1461,18 +1487,26 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         onToggleUpscale: _toggleUpscale,
         onStop: () => unawaited(_stopDesktopPlayback()),
         streamMode: _streamMode,
-        // Desktop watch reconnects through a different path than Android's
-        // `_beginSession`/`_stopStreaming` (see `_stopDesktopPlayback` and
-        // its own connect flow) — `_reconnectForNewCaps` assumes the
-        // Android teardown, so only update the displayed state here rather
-        // than wiring it to trigger a reconnect. Applying a new mode/custom
-        // setting on desktop currently needs a manual stop + reconnect.
-        onStreamModeChanged: (mode) => setState(() => _streamMode = mode),
+        // Same semantics as Android's `_changeStreamMode`/`_commitCustom-
+        // Settings`, but through the desktop reconnect path: switching *to*
+        // Custom only reveals the sliders (nothing to apply yet); committing
+        // a slider or picking any other mode re-dials with the new caps.
+        onStreamModeChanged: (mode) {
+          if (mode == _streamMode) return;
+          setState(() => _streamMode = mode);
+          if (mode != StreamMode.custom) {
+            unawaited(_reconnectDesktopForNewCaps());
+          }
+        },
         customSettings: _customSettings,
         onCustomSettingsChanged: (settings) =>
             setState(() => _customSettings = settings),
-        onCustomSettingsCommitted: () {},
-        onDisplayChanged: () {},
+        onCustomSettingsCommitted: () {
+          if (_streamMode == StreamMode.custom) {
+            unawaited(_reconnectDesktopForNewCaps());
+          }
+        },
+        onDisplayChanged: () => unawaited(_reconnectDesktopForNewCaps()),
       );
     }
     if (_showVideo && Platform.isAndroid) {
