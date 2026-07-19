@@ -5,6 +5,7 @@ members = [
     "crates/net",
     "crates/core",
     "crates/host",
+    "crates/svc",
     "crates/devtools",
 ]
 # crates/host is Windows-only; it joins the workspace but its heavy deps are
