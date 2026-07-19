@@ -25,6 +25,7 @@ pub mod mock;
 pub mod nvenc;
 pub mod power;
 pub mod qr;
+pub mod secure_desktop;
 #[cfg(windows)]
 pub mod scale;
 pub mod server;

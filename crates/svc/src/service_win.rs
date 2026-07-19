@@ -120,6 +120,32 @@ pub fn stop() -> Res {
     Ok(())
 }
 
+/// stop + uninstall in one call (the app's toggle-off, run elevated).
+pub fn disable() -> Res {
+    // `uninstall` already best-effort stops before deleting.
+    uninstall()
+}
+
+/// One-word service state for the app's toggle, queried without elevation:
+/// `unsupported` (no service exe context) is not reachable here — this binary
+/// *is* the service — so we report `notinstalled` / `stopped` / `running`.
+/// SCM read access is available to normal users, so no UAC needed.
+pub fn status_word() -> &'static str {
+    let Ok(manager) = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+    else {
+        return "notinstalled";
+    };
+    match manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS) {
+        Ok(service) => match service.query_status() {
+            Ok(status) if status.current_state == ServiceState::Running => "running",
+            Ok(_) => "stopped",
+            Err(_) => "stopped",
+        },
+        // Open failing is overwhelmingly "service doesn't exist".
+        Err(_) => "notinstalled",
+    }
+}
+
 // --- Service runtime (SCM entry) -----------------------------------------
 
 windows_service::define_windows_service!(ffi_service_main, service_main);

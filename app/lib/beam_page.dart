@@ -88,6 +88,10 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
   );
   bool _starting = false;
   String? _status;
+  // Secure-desktop service state ('unsupported' hides the toggle). Polled in
+  // _refresh alongside the host snapshot.
+  String _secureDesktop = 'unsupported';
+  bool _secureDesktopBusy = false;
   bool _statusError = false;
   String? _shownHostError;
   BigInt? _shownApprovalId;
@@ -277,6 +281,33 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _toggleSecureDesktop(bool on) async {
+    if (_secureDesktopBusy) return;
+    setState(() => _secureDesktopBusy = true);
+    setState(
+      () => _status = on
+          ? 'Approve the Windows prompt to let StreamBeam run behind the login screen…'
+          : 'Approve the Windows prompt to turn this off…',
+    );
+    try {
+      // Blocks on the UAC dialog; runs off the UI isolate so the app stays
+      // responsive while the elevated helper works.
+      await Future(() => secureDesktopSetEnabled(enable: on));
+      setState(() => _status = null);
+    } catch (e) {
+      _setStatus(e.toString(), error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _secureDesktopBusy = false;
+          _secureDesktop = Platform.isWindows
+              ? secureDesktopStatus()
+              : 'unsupported';
+        });
+      }
+    }
+  }
+
   void _refresh() {
     if (!mounted || !hostPlatformSupported()) return;
     if (Platform.isAndroid) {
@@ -286,7 +317,11 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
       unawaited(_refreshPermissions());
     }
     final next = hostSnapshot();
-    setState(() => _snap = next);
+    final secure = Platform.isWindows ? secureDesktopStatus() : 'unsupported';
+    setState(() {
+      _snap = next;
+      _secureDesktop = secure;
+    });
     _syncViewerNotification(next.viewers);
     if (next.error != null && next.error!.isNotEmpty) {
       if (_shownHostError != next.error) {
@@ -709,6 +744,23 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
                       }
                     : null,
               ),
+              if (_secureDesktop != 'unsupported') ...[
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.lock_open),
+                  title: const Text('Allow access when locked'),
+                  subtitle: Text(
+                    _secureDesktop == 'running'
+                        ? 'On — streaming survives lock, logout and the login screen'
+                        : 'Keep streaming (and let you sign in remotely) while '
+                              'this PC is locked or at the login screen',
+                  ),
+                  value: _secureDesktop == 'running',
+                  onChanged: _secureDesktopBusy
+                      ? null
+                      : (on) => unawaited(_toggleSecureDesktop(on)),
+                ),
+              ],
             ],
           ),
         ),

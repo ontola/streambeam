@@ -39,6 +39,23 @@ fn main() {
         "uninstall" => service_win::uninstall(),
         "start" => service_win::start(),
         "stop" => service_win::stop(),
+        // One-shot combinations the app's toggle invokes elevated (a single
+        // UAC prompt each), so the user never runs install+start by hand.
+        "enable" => {
+            let worker = args
+                .iter()
+                .position(|a| a == "--worker")
+                .and_then(|i| args.get(i + 1))
+                .cloned();
+            service_win::install(worker).and_then(|()| service_win::start())
+        }
+        "disable" => service_win::disable(),
+        // Non-elevated status query (the app polls this to render the toggle);
+        // prints one word to stdout.
+        "status" => {
+            println!("{}", service_win::status_word());
+            Ok(())
+        }
         "run" => service_win::run_from_scm(),
         other => {
             eprintln!(

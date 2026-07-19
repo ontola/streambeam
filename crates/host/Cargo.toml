@@ -60,6 +60,12 @@ windows = { version = "0.61", features = [
     "Win32_NetworkManagement_IpHelper",
     # Desktop switching for the secure-desktop worker (desktop_win.rs).
     "Win32_System_StationsAndDesktops",
+    # Elevated (runas) service enable/disable for the app toggle (secure_desktop.rs).
+    # ShellExecuteExW's SHELLEXECUTEINFOW carries an hkeyClass, so the W variant
+    # is gated behind Win32_System_Registry in the windows crate.
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

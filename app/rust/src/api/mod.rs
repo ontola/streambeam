@@ -19,6 +19,37 @@ pub fn set_audio_muted(muted: bool) {
     crate::audio_play::set_muted(muted);
 }
 
+/// Secure-desktop service state for the "This Device" toggle:
+/// `"unsupported"` (hide the toggle), `"notinstalled"` / `"stopped"` (off),
+/// `"running"` (on). See `docs/SECURE_DESKTOP.md`.
+#[flutter_rust_bridge::frb(sync)]
+pub fn secure_desktop_status() -> String {
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
+    {
+        return streambeam_host::secure_desktop::status().as_str().to_string();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
+    {
+        "unsupported".to_string()
+    }
+}
+
+/// Flip the secure-desktop service on/off — one elevated `runas` (a single
+/// UAC prompt). Blocks until the elevated helper finishes or the user
+/// cancels; the caller re-reads `secure_desktop_status`.
+#[flutter_rust_bridge::frb(sync)]
+pub fn secure_desktop_set_enabled(enable: bool) -> Result<(), String> {
+    #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
+    {
+        return streambeam_host::secure_desktop::set_enabled(enable);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
+    {
+        let _ = enable;
+        Err("secure desktop is Windows-only".into())
+    }
+}
+
 /// Wake-on-LAN: whether the saved host has cached wake facts
 /// (`HostMsg::WakeInfo` from a previous session).
 #[flutter_rust_bridge::frb(sync)]

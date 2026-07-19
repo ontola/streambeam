@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 117821856;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1308976427;
 
 // Section: executor
 
@@ -1005,6 +1005,65 @@ fn wire__crate__api__saved_host_label_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok(crate::api::saved_host_label())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__secure_desktop_set_enabled_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "secure_desktop_set_enabled",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_enable = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let output_ok = crate::api::secure_desktop_set_enabled(api_enable)?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__secure_desktop_status_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "secure_desktop_status",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::secure_desktop_status())?;
                 Ok(output_ok)
             })())
         },
@@ -2103,7 +2162,7 @@ fn pde_ffi_dispatcher_primary_impl(
         19 => wire__crate__api__play_stream_desktop_known_impl(port, ptr, rust_vec_len, data_len),
         24 => wire__crate__api__reconnect_play_stream_impl(port, ptr, rust_vec_len, data_len),
         26 => wire__crate__api__save_host_from_payload_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2134,26 +2193,28 @@ fn pde_ffi_dispatcher_sync_impl(
         25 => wire__crate__api__request_host_power_impl(ptr, rust_vec_len, data_len),
         27 => wire__crate__api__saved_host_can_wake_impl(ptr, rust_vec_len, data_len),
         28 => wire__crate__api__saved_host_label_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__select_playback_display_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__selected_playback_display_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__send_clipboard_text_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__send_gamepad_plug_impl(ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__send_gamepad_state_impl(ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__send_key_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__send_mouse_abs_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__send_mouse_button_impl(ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__send_touch_frame_impl(ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__set_audio_muted_impl(ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__set_device_name_impl(ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__start_host_impl(ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__stop_host_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__stop_playback_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__take_remote_clipboard_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__wake_saved_host_impl(ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__secure_desktop_set_enabled_impl(ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__secure_desktop_status_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__select_playback_display_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__selected_playback_display_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__send_clipboard_text_impl(ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__send_gamepad_plug_impl(ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__send_gamepad_state_impl(ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__send_key_impl(ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__send_mouse_abs_impl(ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__send_mouse_button_impl(ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__send_mouse_click_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__send_mouse_move_impl(ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__send_mouse_scroll_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__send_touch_frame_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__set_audio_muted_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__set_device_name_impl(ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__start_host_impl(ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__stop_host_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__stop_playback_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__take_remote_clipboard_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__wake_saved_host_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
