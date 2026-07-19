@@ -12,6 +12,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 BigInt playbackFramesRendered() =>
     StreambeamFfi.instance.api.crateApiPlaybackFramesRendered();
 
+/// Player sidebar "Sound" toggle: mute/unmute received stream audio.
+void setAudioMuted({required bool muted}) =>
+    StreambeamFfi.instance.api.crateApiSetAudioMuted(muted: muted);
+
 /// Stop the active watch session immediately instead of waiting for the
 /// decoder/media receive loop's network timeout to notice that its UI left.
 void stopPlayback() => StreambeamFfi.instance.api.crateApiStopPlayback();

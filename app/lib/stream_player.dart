@@ -246,6 +246,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   /// into the menu would lock them out.
   static bool _touchMenuButtonEnabled = true;
 
+  /// Whether received stream audio plays. Static for the same reason as
+  /// [_touchMenuButtonEnabled]: the choice sticks across streams (including
+  /// the automatic reconnects a quality change triggers), mirroring the
+  /// Rust-side global mute flag.
+  static bool _soundEnabled = true;
+
   double _menuDrag = 0;
   bool _menuOpen = false;
 
@@ -325,6 +331,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Re-sync the Rust mute flag with the sticky Dart choice (they can
+    // drift after a hot restart).
+    setAudioMuted(muted: !_soundEnabled);
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
@@ -842,6 +851,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         upscaleSupported: widget.upscaleSupported,
         upscaleActive: widget.upscaleActive,
         onToggleUpscale: widget.onToggleUpscale,
+        soundEnabled: _soundEnabled,
+        onSoundEnabledChanged: (on) {
+          setState(() => _soundEnabled = on);
+          setAudioMuted(muted: !on);
+        },
         onStop: _handleStop,
         onKeyboard: _openKeyboard,
       ),
@@ -1922,6 +1936,8 @@ class _StreamMenu extends StatelessWidget {
     required this.upscaleSupported,
     required this.upscaleActive,
     required this.onToggleUpscale,
+    required this.soundEnabled,
+    required this.onSoundEnabledChanged,
     required this.onStop,
     required this.onKeyboard,
   });
@@ -1959,6 +1975,8 @@ class _StreamMenu extends StatelessWidget {
   final bool upscaleSupported;
   final bool upscaleActive;
   final VoidCallback? onToggleUpscale;
+  final bool soundEnabled;
+  final ValueChanged<bool> onSoundEnabledChanged;
   final VoidCallback onStop;
   final VoidCallback onKeyboard;
 
@@ -2265,6 +2283,18 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                       ],
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        value: soundEnabled,
+                        onChanged: onSoundEnabledChanged,
+                        title: const Text('Sound'),
+                        subtitle: Text(
+                          "Play the host's audio",
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        dense: compact,
+                        contentPadding: tilePadding,
+                      ),
                       const Divider(height: 1),
                       if (upscaleSupported) ...[
                         Padding(
