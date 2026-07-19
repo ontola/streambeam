@@ -18,6 +18,11 @@ pub const SERVICE_TYPE: &str = "_streambeam._udp.local.";
 /// TXT record key for the host Ed25519 public key (base64url, 32 bytes).
 pub const TXT_PUBKEY: &str = "pk";
 
+/// TXT record key for the host platform (`std::env::consts::OS` value:
+/// `macos` / `windows` / `android` / `linux` / `ios`). Clients use it for
+/// platform icons and tailored connect instructions; absent on old hosts.
+pub const TXT_PLATFORM: &str = "os";
+
 pub fn pubkey_txt_record(pubkey: [u8; 32]) -> std::collections::HashMap<String, String> {
     let mut props = std::collections::HashMap::new();
     props.insert(
@@ -27,12 +32,23 @@ pub fn pubkey_txt_record(pubkey: [u8; 32]) -> std::collections::HashMap<String, 
     props
 }
 
+/// Full TXT property set for an advertisement: platform always, pubkey when known.
+fn txt_properties(host_pubkey: Option<[u8; 32]>) -> std::collections::HashMap<String, String> {
+    let mut props = host_pubkey.map(pubkey_txt_record).unwrap_or_default();
+    props.insert(TXT_PLATFORM.into(), std::env::consts::OS.into());
+    props
+}
+
 fn parse_pubkey(info: &ServiceInfo) -> Option<[u8; 32]> {
     let pk = info.get_property_val_str(TXT_PUBKEY)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(pk.as_bytes())
         .ok()?;
     bytes.try_into().ok()
+}
+
+fn parse_platform(info: &ServiceInfo) -> Option<String> {
+    info.get_property_val_str(TXT_PLATFORM).map(str::to_string)
 }
 
 /// Non-loopback IPv4 first, then any non-loopback address, loopback last.
@@ -76,7 +92,7 @@ impl Advertiser {
         if ips.is_empty() {
             return Err(NetError::Discovery("no IP addresses to advertise".into()));
         }
-        let props = host_pubkey.map(pubkey_txt_record);
+        let props = txt_properties(host_pubkey);
         let daemon = ServiceDaemon::new().map_err(|e| NetError::Discovery(e.to_string()))?;
         let info = ServiceInfo::new(
             SERVICE_TYPE,
@@ -130,7 +146,7 @@ pub fn advertise(
         return Err(NetError::Discovery("no IP addresses to advertise".into()));
     }
 
-    let props = host_pubkey.map(pubkey_txt_record);
+    let props = txt_properties(host_pubkey);
     let daemon = ServiceDaemon::new().map_err(|e| NetError::Discovery(e.to_string()))?;
     let info = ServiceInfo::new(
         SERVICE_TYPE,
@@ -156,6 +172,8 @@ pub struct DiscoveredHost {
     pub addrs: Vec<IpAddr>,
     /// Host Ed25519 public key from mDNS TXT (required for LAN connect).
     pub host_pubkey: Option<[u8; 32]>,
+    /// Host platform from mDNS TXT (`os=` key); `None` on old hosts.
+    pub platform: Option<String>,
 }
 
 /// Browse for StreamBeam hosts for up to `timeout`.
@@ -178,6 +196,7 @@ pub fn browse(timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
                 let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
                 sort_addrs_by_preference(&mut addrs);
                 let host_pubkey = parse_pubkey(&info);
+                let platform = parse_platform(&info);
                 seen.insert(
                     fullname.clone(),
                     DiscoveredHost {
@@ -185,6 +204,7 @@ pub fn browse(timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
                         port,
                         addrs,
                         host_pubkey,
+                        platform,
                     },
                 );
             }
@@ -244,6 +264,7 @@ impl Browser {
                     let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
                     sort_addrs_by_preference(&mut addrs);
                     let host_pubkey = parse_pubkey(&info);
+                    let platform = parse_platform(&info);
                     cache.insert(
                         fullname,
                         DiscoveredHost {
@@ -251,6 +272,7 @@ impl Browser {
                             port,
                             addrs,
                             host_pubkey,
+                            platform,
                         },
                     );
                 }

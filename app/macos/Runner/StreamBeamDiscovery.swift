@@ -67,12 +67,16 @@ class StreamBeamDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelega
         }
 
         var pubkey = Data()
+        var platform = ""
         if let txt = service.txtRecordData() {
             let dict = NetService.dictionary(fromTXTRecord: txt)
             if let pkData = dict["pk"], let pkStr = String(data: pkData, encoding: .utf8),
                 let decoded = Self.base64urlDecode(pkStr)
             {
                 pubkey = decoded
+            }
+            if let osData = dict["os"], let osStr = String(data: osData, encoding: .utf8) {
+                platform = osStr
             }
         }
 
@@ -81,6 +85,7 @@ class StreamBeamDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelega
             "port": service.port,
             "addrs": addrs,
             "pubkey": FlutterStandardTypedData(bytes: pubkey),
+            "platform": platform,
         ]
         resolving.remove(service)
     }

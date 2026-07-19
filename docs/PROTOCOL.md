@@ -172,5 +172,13 @@ and rich clipboard formats are not part of v3.
 
 ## Discovery
 
-mDNS `_streambeam._udp.local`, TXT: `v=3`, `name=...`, `fp=<b64 host pubkey>`, `port=...`.
+mDNS `_streambeam._udp.local`; the instance name is the host's friendly name and
+the SRV record carries the port. TXT keys (see `crates/net/src/discovery.rs`):
+
+- `pk=<base64url host Ed25519 pubkey>` — required for tap-to-connect. (Earlier
+  drafts of this doc said `fp`; the implementation has always sent `pk`.)
+- `os=<macos|windows|android|linux|ios>` — host platform
+  (`std::env::consts::OS`), used for client UI icons and tailored connect
+  instructions. Absent on old hosts; clients must tolerate that.
+
 QR is only needed for first pairing; paired hosts reconnect via mDNS + pinned key.

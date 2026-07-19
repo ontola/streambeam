@@ -329,6 +329,9 @@ pub struct DiscoveredHost {
     pub addrs: Vec<String>,
     /// Host Ed25519 public key (32 bytes) from mDNS; empty if host is too old.
     pub host_pubkey: Vec<u8>,
+    /// Host platform from the mDNS TXT `os` key (`macos` / `windows` /
+    /// `android` / `linux` / `ios`); empty if the host predates it.
+    pub platform: String,
 }
 
 // One `ServiceDaemon` for the app's whole lifetime, not a fresh one per poll.
@@ -368,6 +371,7 @@ pub async fn discover_hosts(timeout_ms: u32) -> Result<Vec<DiscoveredHost>, Stri
             port: h.port,
             addrs: h.addrs.iter().map(|a| a.to_string()).collect(),
             host_pubkey: h.host_pubkey.map(|pk| pk.to_vec()).unwrap_or_default(),
+            platform: h.platform.unwrap_or_default(),
         })
         .collect())
 }

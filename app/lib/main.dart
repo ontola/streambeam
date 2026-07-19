@@ -768,6 +768,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         port: map['port'] as int? ?? 0,
         addrs: addrs.map((e) => e as String).toList(),
         hostPubkey: (map['pubkey'] as Uint8List?) ?? Uint8List(0),
+        platform: map['platform'] as String? ?? '',
       );
     }).toList();
   }
@@ -895,11 +896,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     final attempt = _desktopPlaybackAttempt;
     setState(() {
       _busy = true;
-      // Discovery can't tell us the host platform, so the Android
-      // MediaProjection-consent hint stays conditional — a Windows/Mac host
-      // starts streaming without any prompt on its side.
-      _status =
-          'Connecting to ${host.name}… If it\'s an Android device, choose what to share there and confirm its screen-sharing prompt.';
+      // Only Android hosts require a per-session consent on their side; a
+      // desktop host starts streaming without any prompt. Old hosts don't
+      // advertise their platform, so those keep the conditional hint.
+      _status = switch (host.platform) {
+        'android' =>
+          'Connecting to ${host.name}… On the Android device, choose what to share and confirm the screen-sharing prompt.',
+        '' =>
+          'Connecting to ${host.name}… If it\'s an Android device, choose what to share there and confirm its screen-sharing prompt.',
+        _ => 'Connecting to ${host.name}…',
+      };
       _statusIsError = false;
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
@@ -1091,7 +1097,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _pendingWindow = null;
       _playInFlight = false;
       _qrPreviewOpen = false;
-      _status = reconnect ? 'Reconnecting…' : 'Connecting…';
+      // Same platform tailoring as the desktop path: only an Android host
+      // shows a consent prompt the user must go confirm.
+      _status = reconnect
+          ? 'Reconnecting…'
+          : switch (_pendingLanHost?.platform) {
+              'android' =>
+                'Connecting… On ${_pendingLanHost!.name}, choose what to share and confirm the screen-sharing prompt.',
+              null || '' => 'Connecting…',
+              _ => 'Connecting to ${_pendingLanHost!.name}…',
+            };
       _statusIsError = false;
     });
     unawaited(_syncScanner());
@@ -1759,6 +1774,19 @@ class _HostListEntry {
   final bool isSaved;
   final DiscoveredHost? discovered;
 
+  /// Host platform from mDNS (`macos`/`windows`/`android`/`linux`/`ios`);
+  /// empty for old hosts and for saved hosts that aren't currently online.
+  String get platform => discovered?.platform ?? '';
+
+  IconData get platformIcon => switch (platform) {
+    'android' => Icons.smartphone,
+    'ios' => Icons.phone_iphone,
+    'macos' => Icons.laptop_mac,
+    'windows' => Icons.desktop_windows,
+    'linux' => Icons.computer,
+    _ => Icons.computer,
+  };
+
   String get addressLabel {
     if (addrs.isEmpty) return online ? 'On LAN' : 'Not on LAN';
     final ips = addrs.join(', ');
@@ -1834,7 +1862,7 @@ class _DevicesSection extends StatelessWidget {
           ...hosts.map((h) {
             final canTap = onHostTap != null && h.online;
             return DeviceTile(
-              icon: Icons.computer,
+              icon: h.platformIcon,
               title: h.name,
               subtitle: h.addressLabel,
               active: h.online,

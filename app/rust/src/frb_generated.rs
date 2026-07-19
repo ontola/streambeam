@@ -1768,11 +1768,13 @@ impl SseDecode for crate::api::DiscoveredHost {
         let mut var_port = <u16>::sse_decode(deserializer);
         let mut var_addrs = <Vec<String>>::sse_decode(deserializer);
         let mut var_hostPubkey = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_platform = <String>::sse_decode(deserializer);
         return crate::api::DiscoveredHost {
             name: var_name,
             port: var_port,
             addrs: var_addrs,
             host_pubkey: var_hostPubkey,
+            platform: var_platform,
         };
     }
 }
@@ -2193,6 +2195,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::DiscoveredHost {
             self.port.into_into_dart().into_dart(),
             self.addrs.into_into_dart().into_dart(),
             self.host_pubkey.into_into_dart().into_dart(),
+            self.platform.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2401,6 +2404,7 @@ impl SseEncode for crate::api::DiscoveredHost {
         <u16>::sse_encode(self.port, serializer);
         <Vec<String>>::sse_encode(self.addrs, serializer);
         <Vec<u8>>::sse_encode(self.host_pubkey, serializer);
+        <String>::sse_encode(self.platform, serializer);
     }
 }
 
