@@ -35,7 +35,10 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter,
     IDXGIDevice, IDXGIOutput1, IDXGIOutput5, IDXGIOutput6, IDXGIOutputDuplication, IDXGIResource,
@@ -353,7 +356,8 @@ impl Pipeline {
             ctx(MFStartup(MF_VERSION, MFSTARTUP_FULL), "MFStartup")?;
 
             let (device, context) = create_d3d_device()?;
-            let (duplication, capture_width, capture_height) = create_duplication(&device)?;
+            let (mut duplication, capture_width, capture_height, sdr_white_nits) =
+                create_duplication(&device, true)?;
             let staging = create_staging(&device, capture_width, capture_height)?;
             let (width, height) = scaled_dimensions(capture_width, capture_height, max_encode_dim);
             if (width, height) != (capture_width, capture_height) {
@@ -367,11 +371,19 @@ impl Pipeline {
                 let tex = create_encode_texture(&device, width, height)?;
                 let encoder =
                     NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps, codec)?;
-                let scaler = if (capture_width, capture_height) != (width, height) {
-                    Some(GpuScaler::new(&device, &context, width, height, &tex)?)
-                } else {
-                    None
-                };
+                // Always present (not just when downscaling): on an HDR
+                // desktop the captured frame is FP16 scRGB and must go
+                // through the tone-map shader even at 1:1 — a same-size
+                // bilinear blit samples exact texel centers, so the SDR
+                // case loses nothing to it either.
+                let scaler = Some(GpuScaler::new(
+                    &device,
+                    &context,
+                    width,
+                    height,
+                    &tex,
+                    sdr_white_nits,
+                )?);
                 Ok((encoder, tex, scaler))
             };
             // AV1 support is GPU-generation-gated (Ada Lovelace/RTX 40-series
@@ -405,6 +417,13 @@ impl Pipeline {
                     crate::logging::log(&format!(
                         "NVENC unavailable ({e}) — falling back to Media Foundation software encoder (H.264)"
                     ));
+                    // The software path reads captured bytes on the CPU as
+                    // 8-bit BGRA (`bgra_to_nv12`) — recreate the duplication
+                    // SDR-only so an HDR desktop goes back through DWM's own
+                    // conversion instead of handing this path FP16 frames it
+                    // can't parse.
+                    let (dup, _, _, _) = create_duplication(&device, false)?;
+                    duplication = dup;
                     let transform = create_software_encoder(width, height, fps)?;
                     EncoderBackend::Software {
                         transform,
@@ -585,8 +604,14 @@ impl Pipeline {
                         self.consecutive_access_lost
                     ));
                 }
-                match create_duplication(&self.device) {
-                    Ok((dup, _, _)) => self.duplication = dup,
+                // Note: the tone-map's SDR-white constant was baked into the
+                // scaler at pipeline build; if the user moved the "SDR
+                // content brightness" slider since, the stream is off by a
+                // constant factor until the next pipeline rebuild — constant,
+                // not flickering, so acceptable here.
+                let allow_hdr = matches!(self.backend, EncoderBackend::Nvenc { .. });
+                match create_duplication(&self.device, allow_hdr) {
+                    Ok((dup, _, _, _)) => self.duplication = dup,
                     // Recreation itself can fail outright while the display
                     // is off (no output to enumerate) — that's the same
                     // condition, not a new error; keep backing off instead
@@ -929,7 +954,8 @@ unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Str
 
 unsafe fn create_duplication(
     device: &ID3D11Device,
-) -> Result<(IDXGIOutputDuplication, u32, u32), String> {
+    allow_hdr: bool,
+) -> Result<(IDXGIOutputDuplication, u32, u32, f32), String> {
     let dxgi_device: IDXGIDevice = ctx(device.cast(), "device.cast IDXGIDevice")?;
     let adapter: IDXGIAdapter = ctx(dxgi_device.GetAdapter(), "GetAdapter")?;
     let output = ctx(adapter.EnumOutputs(0), "EnumOutputs(0)")?;
@@ -956,13 +982,114 @@ unsafe fn create_duplication(
     // before handing us the frame, the same as it always did for the (until
     // now, accidentally-only-correct-in-SDR) plain `DuplicateOutput` path.
     let output5: IDXGIOutput5 = ctx(output1.cast(), "output1.cast IDXGIOutput5")?;
+
+    // On an HDR desktop, requesting BGRA8 makes *DWM* do the HDR->SDR
+    // conversion per frame — and its tone mapper intermittently composites
+    // single frames at a different white level (measured live 2026-07-19:
+    // identical static content flipping YAVG 93.4 -> 44.1 -> 93.4 on
+    // adjacent frames), the brightness-flashing artifact seen on every
+    // client and codec since the project started. Capture the native FP16
+    // scRGB image instead and tone-map with fixed parameters in our own
+    // shader (`GpuScaler`'s `ps_tonemap`), like Sunshine. Only the NVENC
+    // path has that shader stage (`allow_hdr`); the software-encoder
+    // fallback keeps BGRA8/DWM conversion, flicker and all.
+    let hdr = allow_hdr
+        && output1
+            .cast::<IDXGIOutput6>()
+            .and_then(|o6| o6.GetDesc1())
+            .map(|d| d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+            .unwrap_or(false);
+    let format = if hdr {
+        DXGI_FORMAT_R16G16B16A16_FLOAT
+    } else {
+        DXGI_FORMAT_B8G8R8A8_UNORM
+    };
+    let sdr_white_nits = if hdr {
+        let nits = query_sdr_white_nits(&output.GetDesc().map(|d| d.DeviceName).unwrap_or_default())
+            .unwrap_or(DEFAULT_SDR_WHITE_NITS);
+        crate::logging::log(&format!(
+            "HDR desktop: capturing FP16 scRGB, tone-mapping in-shader at SDR white {nits:.0} nits"
+        ));
+        nits
+    } else {
+        DEFAULT_SDR_WHITE_NITS
+    };
     let duplication = ctx(
-        output5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]),
+        output5.DuplicateOutput1(device, 0, &[format]),
         "DuplicateOutput1",
     )?;
     let desc = duplication.GetDesc();
 
-    Ok((duplication, desc.ModeDesc.Width, desc.ModeDesc.Height))
+    Ok((
+        duplication,
+        desc.ModeDesc.Width,
+        desc.ModeDesc.Height,
+        sdr_white_nits,
+    ))
+}
+
+/// Windows' default when the "SDR content brightness" slider can't be read
+/// — the slider's own default position maps SDR white to 200 nits.
+const DEFAULT_SDR_WHITE_NITS: f32 = 200.0;
+
+/// The user's "SDR content brightness" setting for the output with this GDI
+/// device name (e.g. `\\.\DISPLAY1`), in nits — the white level Windows
+/// itself renders SDR content at on an HDR desktop, which our HDR->SDR
+/// tone-map must match for the stream not to look darker/brighter than the
+/// local screen. `DISPLAYCONFIG_SDR_WHITE_LEVEL.SDRWhiteLevel` is in units
+/// of 1/1000, where 1000 = 80 nits.
+unsafe fn query_sdr_white_nits(device_name: &[u16; 32]) -> Option<f32> {
+    use windows::Win32::Devices::Display::{
+        DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+        DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SDR_WHITE_LEVEL,
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+        QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+    };
+
+    let mut num_paths = 0u32;
+    let mut num_modes = 0u32;
+    if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut num_paths, &mut num_modes)
+        != windows::Win32::Foundation::WIN32_ERROR(0)
+    {
+        return None;
+    }
+    let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+    let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+    if QueryDisplayConfig(
+        QDC_ONLY_ACTIVE_PATHS,
+        &mut num_paths,
+        paths.as_mut_ptr(),
+        &mut num_modes,
+        modes.as_mut_ptr(),
+        None,
+    ) != windows::Win32::Foundation::WIN32_ERROR(0)
+    {
+        return None;
+    }
+    for path in &paths[..num_paths as usize] {
+        // Match on the *source* GDI name (that's what DXGI_OUTPUT_DESC
+        // carries); the SDR white level itself hangs off the *target*.
+        let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+        source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if DisplayConfigGetDeviceInfo(&mut source.header) != 0 {
+            continue;
+        }
+        if source.viewGdiDeviceName != *device_name {
+            continue;
+        }
+        let mut white = DISPLAYCONFIG_SDR_WHITE_LEVEL::default();
+        white.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+        white.header.size = std::mem::size_of::<DISPLAYCONFIG_SDR_WHITE_LEVEL>() as u32;
+        white.header.adapterId = path.targetInfo.adapterId;
+        white.header.id = path.targetInfo.id;
+        if DisplayConfigGetDeviceInfo(&mut white.header) == 0 && white.SDRWhiteLevel > 0 {
+            return Some(white.SDRWhiteLevel as f32 * 80.0 / 1000.0);
+        }
+    }
+    None
 }
 
 unsafe fn create_staging(

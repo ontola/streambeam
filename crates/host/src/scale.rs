@@ -31,6 +31,9 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::core::{Interface, PCSTR, s};
 
+// `{SDR_WHITE_NITS}` is substituted at runtime (the shader is compiled at
+// runtime anyway) — a constant buffer would be more machinery for a value
+// that changes at most when the duplication is recreated.
 const SHADER_SRC: &str = r#"
 struct VsOut {
     float4 pos : SV_POSITION;
@@ -51,18 +54,36 @@ SamplerState samp : register(s0);
 float4 ps_main(VsOut i) : SV_TARGET {
     return src.Sample(samp, i.uv);
 }
+
+// HDR (scRGB FP16) capture -> SDR BGRA, with *fixed* parameters — replacing
+// DWM's own HDR->SDR conversion, whose tone-mapping intermittently composited
+// single frames at a different white level (measured live 2026-07-19:
+// identical static content flipping YAVG 93.4 -> 44.1 -> 93.4 on adjacent
+// frames — the years-long "brightness flashing on every client and codec").
+// scRGB is linear with 1.0 = 80 nits; dividing by the user's configured SDR
+// white level reproduces the brightness Windows itself maps SDR content to.
+// Highlights above SDR white hard-clip — same as an SDR monitor would show.
+float4 ps_tonemap(VsOut i) : SV_TARGET {
+    float3 lin = saturate(src.Sample(samp, i.uv).rgb * (80.0 / {SDR_WHITE_NITS}));
+    // Linear -> sRGB encode (the BGRA8 path receives DWM's already-encoded
+    // sRGB bytes; this path must produce the same encoding itself).
+    float3 lo = lin * 12.92;
+    float3 hi = 1.055 * pow(lin, 1.0 / 2.4) - 0.055;
+    float3 srgb = lerp(hi, lo, step(lin, 0.0031308));
+    return float4(srgb, 1.0);
+}
 "#;
 
 fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
     r.map_err(|e| format!("{what}: {e}"))
 }
 
-unsafe fn compile_shader(entry: PCSTR, target: PCSTR) -> Result<ID3DBlob, String> {
+unsafe fn compile_shader(src: &str, entry: PCSTR, target: PCSTR) -> Result<ID3DBlob, String> {
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;
     let result = D3DCompile(
-        SHADER_SRC.as_ptr() as *const c_void,
-        SHADER_SRC.len(),
+        src.as_ptr() as *const c_void,
+        src.len(),
         None,
         None,
         None,
@@ -91,21 +112,33 @@ pub struct GpuScaler {
     context: ID3D11DeviceContext,
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
+    /// HDR->SDR tone-map variant, chosen per frame when the captured texture
+    /// is FP16 scRGB (HDR desktop) instead of BGRA8 — see `SHADER_SRC`.
+    ps_tonemap: ID3D11PixelShader,
     sampler: ID3D11SamplerState,
     render_target: ID3D11RenderTargetView,
     viewport: D3D11_VIEWPORT,
 }
 
 impl GpuScaler {
+    /// `sdr_white_nits` calibrates the HDR->SDR pass to the user's "SDR
+    /// content brightness" setting (`DISPLAYCONFIG_SDR_WHITE_LEVEL`); on an
+    /// SDR-only setup the tone-map shader is compiled but never selected.
     pub unsafe fn new(
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         dst_width: u32,
         dst_height: u32,
         encode_texture: &ID3D11Texture2D,
+        sdr_white_nits: f32,
     ) -> Result<Self, String> {
-        let vs_blob = compile_shader(s!("vs_main"), s!("vs_5_0"))?;
-        let ps_blob = compile_shader(s!("ps_main"), s!("ps_5_0"))?;
+        let src = SHADER_SRC.replace(
+            "{SDR_WHITE_NITS}",
+            &format!("{:.1}", sdr_white_nits.clamp(80.0, 1000.0)),
+        );
+        let vs_blob = compile_shader(&src, s!("vs_main"), s!("vs_5_0"))?;
+        let ps_blob = compile_shader(&src, s!("ps_main"), s!("ps_5_0"))?;
+        let ps_tonemap_blob = compile_shader(&src, s!("ps_tonemap"), s!("ps_5_0"))?;
 
         let mut vs: Option<ID3D11VertexShader> = None;
         ctx(
@@ -134,6 +167,20 @@ impl GpuScaler {
             "CreatePixelShader",
         )?;
         let ps = ps.ok_or("no pixel shader")?;
+
+        let mut ps_tonemap: Option<ID3D11PixelShader> = None;
+        ctx(
+            device.CreatePixelShader(
+                std::slice::from_raw_parts(
+                    ps_tonemap_blob.GetBufferPointer() as *const u8,
+                    ps_tonemap_blob.GetBufferSize(),
+                ),
+                None,
+                Some(&mut ps_tonemap),
+            ),
+            "CreatePixelShader tonemap",
+        )?;
+        let ps_tonemap = ps_tonemap.ok_or("no tonemap pixel shader")?;
 
         let sampler_desc = D3D11_SAMPLER_DESC {
             Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -171,6 +218,7 @@ impl GpuScaler {
             context: context.clone(),
             vs,
             ps,
+            ps_tonemap,
             sampler,
             render_target,
             viewport,
@@ -178,8 +226,22 @@ impl GpuScaler {
     }
 
     /// Scale `source` (native capture resolution) into this scaler's fixed
-    /// output texture, entirely on the GPU.
+    /// output texture, entirely on the GPU. Chooses the pixel shader by the
+    /// source's actual format each frame: FP16 (HDR desktop) goes through
+    /// the fixed tone-map, BGRA8 (SDR desktop, or Windows flipping modes
+    /// mid-session) is a plain blit — so an HDR<->SDR desktop transition
+    /// only needs the duplication recreated, not this scaler.
     pub unsafe fn scale(&self, source: &ID3D11Texture2D) -> Result<(), String> {
+        let mut src_desc = Default::default();
+        source.GetDesc(&mut src_desc);
+        let ps = if src_desc.Format
+            == windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT
+        {
+            &self.ps_tonemap
+        } else {
+            &self.ps
+        };
+
         let mut srv: Option<ID3D11ShaderResourceView> = None;
         // A fresh SRV every frame: `source` is a newly acquired Desktop
         // Duplication resource each tick, not a texture we own long-term.
@@ -201,7 +263,7 @@ impl GpuScaler {
             .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         self.context.IASetInputLayout(None);
         self.context.VSSetShader(&self.vs, None);
-        self.context.PSSetShader(&self.ps, None);
+        self.context.PSSetShader(ps, None);
         self.context.PSSetShaderResources(0, Some(&[Some(srv)]));
         self.context
             .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));

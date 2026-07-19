@@ -50,6 +50,8 @@ windows = { version = "0.61", features = [
     "Win32_Media_MediaFoundation",
     "Win32_Media_KernelStreaming",
     "Win32_System_Power",
+    # SDR-white-level query for the HDR capture tone-map (capture.rs).
+    "Win32_Devices_Display",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
