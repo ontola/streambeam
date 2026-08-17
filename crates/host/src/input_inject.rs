@@ -6,7 +6,78 @@
 
 use streambeam_proto::input::InputEvent;
 
+/// Sparse input tracing, so "the key never arrived", "Windows refused it" and
+/// "the game ignored it" stop looking identical from the outside.
+///
+/// The host logged only `input stream opened` / `input stream ended`, which
+/// means a keyboard that does nothing had *no* diagnostic surface at all — the
+/// same blind spot that made the black-screen class so expensive. First few of
+/// everything, then every Nth, so a live session stays readable.
+pub mod diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static RECEIVED: AtomicU64 = AtomicU64::new(0);
+    /// Only the Windows injector can be refused; macOS/Android take other paths.
+    #[cfg(windows)]
+    static REFUSED: AtomicU64 = AtomicU64::new(0);
+
+    fn sparse(n: u64, every: u64) -> bool {
+        n <= 5 || n % every == 0
+    }
+
+    pub fn note_received(what: &str) {
+        let n = RECEIVED.fetch_add(1, Ordering::Relaxed) + 1;
+        if sparse(n, 500) {
+            crate::logging::log(&format!("input: received {what} (#{n} this run)"));
+        }
+    }
+
+    /// `SendInput` returns how many events it actually inserted; the call sites
+    /// used to `let _ =` that. Zero means Windows refused the injection —
+    /// usually UIPI, when the foreground window runs at a higher integrity
+    /// level than the host.
+    #[cfg(windows)]
+    pub fn note_injected(what: &str, inserted: u32, err: u32) {
+        if inserted >= 1 {
+            return;
+        }
+        let n = REFUSED.fetch_add(1, Ordering::Relaxed) + 1;
+        if sparse(n, 200) {
+            crate::logging::log(&format!(
+                "input: SendInput refused {what} — GetLastError {err} \
+                 (#{n} refused; error 5 = access denied, i.e. the foreground \
+                 window outranks this process)"
+            ));
+        }
+    }
+}
+
+/// Short label for the trace. Deliberately excludes clipboard *contents* —
+/// host.log must not become a keylogger of pasted text.
+fn describe(event: &InputEvent) -> String {
+    match event {
+        InputEvent::Key { vk, down } => {
+            format!("key vk={vk} {}", if *down { "down" } else { "up" })
+        }
+        InputEvent::MouseButton { button, down } => {
+            format!("mouse button {button} {}", if *down { "down" } else { "up" })
+        }
+        InputEvent::MouseMove { .. } => "mouse move".to_string(),
+        InputEvent::MouseAbs { .. } => "mouse abs".to_string(),
+        InputEvent::Scroll { .. } => "scroll".to_string(),
+        InputEvent::TouchFrame { contacts, .. } => {
+            format!("touch frame ({} contacts)", contacts.len())
+        }
+        InputEvent::ClipboardText { text } => format!("clipboard text ({} bytes)", text.len()),
+        InputEvent::GamepadState { pad, .. } => format!("gamepad {pad} state"),
+        InputEvent::GamepadPlug { pad, connected } => {
+            format!("gamepad {pad} {}", if *connected { "plugged" } else { "unplugged" })
+        }
+    }
+}
+
 pub fn apply(event: InputEvent) {
+    diag::note_received(&describe(&event));
     #[cfg(windows)]
     {
         apply_windows(event);
@@ -404,7 +475,12 @@ unsafe fn mouse_move(dx: i16, dy: i16) {
             },
         },
     };
-    let _ = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+    let inserted = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+    diag::note_injected(
+        "mouse move",
+        inserted,
+        windows_sys::Win32::Foundation::GetLastError(),
+    );
 }
 
 #[cfg(windows)]
@@ -449,23 +525,74 @@ unsafe fn scroll_wheel(dx: i16, dy: i16) {
     }
 }
 
+/// Keys Windows marks with the extended-key bit. Without it the injected
+/// scancode collides with the numpad equivalent (arrows vs numpad digits being
+/// the classic case), so games read the wrong key.
+#[cfg(windows)]
+fn is_extended_key(vk: u16) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        VK_APPS, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN,
+        VK_NEXT, VK_NUMLOCK, VK_PRIOR, VK_RCONTROL, VK_RIGHT, VK_RMENU, VK_RWIN, VK_SNAPSHOT,
+        VK_UP,
+    };
+    matches!(
+        vk,
+        VK_RMENU
+            | VK_RCONTROL
+            | VK_INSERT
+            | VK_DELETE
+            | VK_HOME
+            | VK_END
+            | VK_PRIOR
+            | VK_NEXT
+            | VK_LEFT
+            | VK_UP
+            | VK_RIGHT
+            | VK_DOWN
+            | VK_NUMLOCK
+            | VK_SNAPSHOT
+            | VK_DIVIDE
+            | VK_LWIN
+            | VK_RWIN
+            | VK_APPS
+    )
+}
+
 #[cfg(windows)]
 unsafe fn key(vk: u16, down: bool) {
+    use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+        MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput,
     };
+
+    // Fill the scancode rather than leaving it 0. Anything reading the keyboard
+    // through DirectInput or Raw Input — which is most games — looks at the
+    // scancode, not the virtual key, and a zero scancode reads as "no key".
+    // Desktop apps were unaffected, which is why this went unnoticed: typing
+    // into Notepad over the stream works fine either way.
+    let scan = MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC) as u16;
+    let mut flags = if down { 0 } else { KEYEVENTF_KEYUP };
+    if is_extended_key(vk) {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
 
     let input = INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
                 wVk: vk,
-                wScan: 0,
-                dwFlags: if down { 0 } else { KEYEVENTF_KEYUP },
+                wScan: scan,
+                dwFlags: flags,
                 time: 0,
                 dwExtraInfo: 0,
             },
         },
     };
-    let _ = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+    let inserted = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+    diag::note_injected(
+        &format!("key vk={vk} scan={scan} {}", if down { "down" } else { "up" }),
+        inserted,
+        GetLastError(),
+    );
 }
