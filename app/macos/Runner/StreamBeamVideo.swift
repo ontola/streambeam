@@ -526,15 +526,16 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         }
         latest = frame
         lock.unlock()
-        // HDR frames go to the EDR layer instead of the Flutter texture:
-        // Flutter's compositor is SDR and would flatten the PQ signal at the
-        // very last step, undoing the whole passthrough pipeline. The texture
-        // is still updated above so `copyPixelBuffer` (and the decode tests)
-        // keep working either way.
+        // HDR frames additionally go to the EDR layer, because Flutter's
+        // compositor is SDR and would flatten the PQ signal at the very last
+        // step. The texture is fed *unconditionally* — routing frames only to
+        // the EDR layer meant that if that layer wasn't there yet, or failed
+        // to draw, the frames went nowhere at all and the picture was black
+        // (observed live 2026-08-17, and exactly the failure mode this project
+        // keeps relearning: an either/or that silently drops the frame).
+        registry.textureFrameAvailable(textureId)
         if isHDR10, let hdrView = StreamBeamHdrViewFactory.current {
             hdrView.present(frame)
-        } else {
-            registry.textureFrameAvailable(textureId)
         }
     }
 

@@ -143,9 +143,22 @@ class StreamBeamHdrView: NSView {
     lock.lock()
     let buffer = pending
     lock.unlock()
-    guard let buffer, let pipeline, let queue, let textureCache,
-      let drawable = metalLayer.nextDrawable()
-    else { return }
+    // Say why nothing is drawn rather than returning silently: "frames arrive
+    // and the screen is black" with no explanation is the single most expensive
+    // failure shape in this project.
+    guard let buffer else { return }
+    guard let pipeline, let queue, let textureCache else {
+      noteDrawFailure("view not initialised: \(setupFailure ?? "unknown")")
+      return
+    }
+    guard metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else {
+      noteDrawFailure("layer has no drawable size yet")
+      return
+    }
+    guard let drawable = metalLayer.nextDrawable() else {
+      noteDrawFailure("nextDrawable returned nil")
+      return
+    }
 
     let width = CVPixelBufferGetWidth(buffer)
     let height = CVPixelBufferGetHeight(buffer)
@@ -182,6 +195,15 @@ class StreamBeamHdrView: NSView {
     }
   }
 
+  private var drawFailures = 0
+
+  private func noteDrawFailure(_ reason: String) {
+    drawFailures += 1
+    if drawFailures <= 3 || drawFailures % 240 == 0 {
+      NSLog("%@", "StreamBeam HDR view: not drawing — \(reason) (#\(drawFailures))")
+    }
+  }
+
   private func makeTexture(
     _ buffer: CVPixelBuffer, cache: CVMetalTextureCache, plane: Int,
     format: MTLPixelFormat, width: Int, height: Int
@@ -202,6 +224,7 @@ class StreamBeamHdrViewFactory: NSObject, FlutterPlatformViewFactory {
   func create(withViewIdentifier viewId: Int64, arguments args: Any?) -> NSView {
     let view = StreamBeamHdrView(frame: .zero)
     StreamBeamHdrViewFactory.current = view
+    NSLog("%@", "StreamBeam: HDR view created — \(view.setupFailure ?? "ok")")
     return view
   }
 

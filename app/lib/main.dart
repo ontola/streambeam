@@ -903,9 +903,20 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   bool? _desktopHdrCapable;
 
+  /// HDR10 passthrough is opt-in until the EDR display path is proven on real
+  /// streams. It shipped advertising itself and produced a black picture:
+  /// frames decoded, the EDR layer didn't draw, and the video widget had
+  /// already switched away from the texture. Default off means a broken HDR
+  /// path can't cost anyone their working SDR stream.
+  static const _hdrPassthroughEnabled = bool.fromEnvironment(
+    'STREAMBEAM_HDR',
+    defaultValue: false,
+  );
+
   /// Whether to advertise HDR10 in `VideoCaps`. Requires hardware AV1 decode
   /// *and* an EDR-capable display — see the native side for why both.
   Future<bool> _canDisplayHdr() async {
+    if (!_hdrPassthroughEnabled) return false;
     final cached = _desktopHdrCapable;
     if (cached != null) return cached;
     bool can;
