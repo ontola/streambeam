@@ -361,6 +361,10 @@ struct Pipeline {
     /// tidiest form.
     access_lost_window: Option<std::time::Instant>,
     access_lost_in_window: u32,
+    /// SDR white level the scaler's tone-map was compiled with, to compare
+    /// against what the display reports later — see `note_sdr_white`.
+    scaler_sdr_white: f32,
+    warned_sdr_white: bool,
     /// Rolling per-report-window totals (reset every 90 calls alongside the
     /// counters above) for pinpointing where per-frame time actually goes.
     stat_capture_us: u64,
@@ -500,6 +504,8 @@ impl Pipeline {
                 wgc_last_start: None,
                 access_lost_window: None,
                 access_lost_in_window: 0,
+                scaler_sdr_white: sdr_white_nits,
+                warned_sdr_white: false,
                 stat_produced: 0,
                 stat_capture_us: 0,
                 stat_encode_us: 0,
@@ -657,11 +663,6 @@ impl Pipeline {
                         self.consecutive_access_lost
                     ));
                 }
-                // Note: the tone-map's SDR-white constant was baked into the
-                // scaler at pipeline build; if the user moved the "SDR
-                // content brightness" slider since, the stream is off by a
-                // constant factor until the next pipeline rebuild — constant,
-                // not flickering, so acceptable here.
                 let allow_hdr = matches!(self.backend, EncoderBackend::Nvenc { .. });
                 // ACCESS_LOST is exactly what a desktop switch (lock, login,
                 // UAC, or unlock) raises — re-attach this thread to the new
@@ -669,7 +670,10 @@ impl Pipeline {
                 // worker follows onto Winlogon (no-op in a user session).
                 crate::desktop_win::input_desktop().follow();
                 match create_duplication(&self.device, allow_hdr) {
-                    Ok((dup, _, _, _)) => self.duplication = dup,
+                    Ok((dup, _, _, nits)) => {
+                        self.duplication = dup;
+                        self.note_sdr_white(nits);
+                    }
                     // Recreation itself can fail outright while the display
                     // is off (no output to enumerate) — that's the same
                     // condition, not a new error; keep backing off instead
@@ -808,6 +812,26 @@ impl Pipeline {
     /// fallback is now active; failure leaves duplication in place (still
     /// retrying), because a broken fallback must not be worse than no
     /// fallback.
+    /// The tone-map's SDR-white divisor is compiled into the scaler at pipeline
+    /// build and never changes. That was documented as harmless ("only if the
+    /// user moves the SDR content brightness slider"), but a display flipping
+    /// SDR↔HDR mid-session changes it too — and that flip is exactly what a
+    /// game does. Built while the desktop was SDR, the scaler holds the 200-nit
+    /// default; the HDR desktop it then has to tone-map reports 228. Say so,
+    /// once, rather than silently tone-mapping with the wrong constant.
+    fn note_sdr_white(&mut self, nits: f32) {
+        if self.warned_sdr_white || (nits - self.scaler_sdr_white).abs() < 1.0 {
+            return;
+        }
+        self.warned_sdr_white = true;
+        crate::logging::log(&format!(
+            "HDR tone-map is using a stale SDR white level: scaler was built at \
+             {:.0} nits, the display now reports {:.0}. Colours will be off by \
+             that ratio until the pipeline is rebuilt (reconnect the client).",
+            self.scaler_sdr_white, nits
+        ));
+    }
+
     /// Record one access-loss and report whether they're arriving fast enough
     /// to count as churn. Rolling window, reset once it expires — a slow trickle
     /// (one every few minutes, e.g. a monitor waking) never accumulates.
@@ -1199,7 +1223,23 @@ unsafe fn create_duplication(
     // shader (`GpuScaler`'s `ps_tonemap`), like Sunshine. Only the NVENC
     // path has that shader stage (`allow_hdr`); the software-encoder
     // fallback keeps BGRA8/DWM conversion, flicker and all.
-    let hdr = allow_hdr && output_is_hdr(&output1);
+    // `STREAMBEAM_HDR_CAPTURE=dwm` forces the BGRA8 path on an HDR desktop, so
+    // Windows does the HDR->SDR conversion instead of our shader. It exists to
+    // A/B the two against identical content: as of 2026-08-17 our tone-map
+    // visibly washes out an HDR desktop (blacks lifted, saturated colours
+    // pulled toward grey) where DWM's looks right, and comparing them on the
+    // same screen is the only way to tell a wrong constant from a wrong
+    // transfer function. DWM's own conversion has the white-level flicker
+    // documented below, so this is a diagnostic, not a default.
+    let force_dwm = std::env::var("STREAMBEAM_HDR_CAPTURE")
+        .map(|v| v.eq_ignore_ascii_case("dwm"))
+        .unwrap_or(false);
+    let hdr = allow_hdr && !force_dwm && output_is_hdr(&output1);
+    if force_dwm && output_is_hdr(&output1) {
+        crate::logging::log(
+            "STREAMBEAM_HDR_CAPTURE=dwm: capturing BGRA8 and letting Windows tone-map",
+        );
+    }
     let format = if hdr {
         DXGI_FORMAT_R16G16B16A16_FLOAT
     } else {
