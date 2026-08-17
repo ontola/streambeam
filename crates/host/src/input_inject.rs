@@ -16,7 +16,27 @@ use streambeam_proto::input::InputEvent;
 pub mod diag {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    static RECEIVED: AtomicU64 = AtomicU64::new(0);
+    /// One counter per event kind. A single shared counter looked fine and was
+    /// useless: mouse-move events arrive hundreds of times a second, so they
+    /// consumed the "first five" and every "every-500th" slot, and a keypress —
+    /// the rare event you actually want to see — would only ever be logged if
+    /// it happened to land exactly on a multiple of 500. The first run of this
+    /// tracing showed zero key lines and could not distinguish "no keys were
+    /// sent" from "keys were sent and never sampled".
+    #[derive(Clone, Copy)]
+    pub enum Kind {
+        Key,
+        MouseMove,
+        MouseAbs,
+        MouseButton,
+        Scroll,
+        Touch,
+        Clipboard,
+        Gamepad,
+    }
+
+    const KINDS: usize = 8;
+    static RECEIVED: [AtomicU64; KINDS] = [const { AtomicU64::new(0) }; KINDS];
     /// Only the Windows injector can be refused; macOS/Android take other paths.
     #[cfg(windows)]
     static REFUSED: AtomicU64 = AtomicU64::new(0);
@@ -25,10 +45,20 @@ pub mod diag {
         n <= 5 || n % every == 0
     }
 
-    pub fn note_received(what: &str) {
-        let n = RECEIVED.fetch_add(1, Ordering::Relaxed) + 1;
-        if sparse(n, 500) {
-            crate::logging::log(&format!("input: received {what} (#{n} this run)"));
+    /// How often to log each kind once past the first few — high-rate motion
+    /// is sampled coarsely, discrete events (keys, buttons) finely, so a
+    /// keypress is always visible without motion flooding the log.
+    fn every(kind: Kind) -> u64 {
+        match kind {
+            Kind::MouseMove | Kind::MouseAbs | Kind::Touch | Kind::Gamepad => 500,
+            Kind::Key | Kind::MouseButton | Kind::Scroll | Kind::Clipboard => 20,
+        }
+    }
+
+    pub fn note_received(kind: Kind, what: &str) {
+        let n = RECEIVED[kind as usize].fetch_add(1, Ordering::Relaxed) + 1;
+        if sparse(n, every(kind)) {
+            crate::logging::log(&format!("input: received {what} (#{n} of this kind)"));
         }
     }
 
@@ -54,30 +84,42 @@ pub mod diag {
 
 /// Short label for the trace. Deliberately excludes clipboard *contents* —
 /// host.log must not become a keylogger of pasted text.
-fn describe(event: &InputEvent) -> String {
+fn describe(event: &InputEvent) -> (diag::Kind, String) {
+    use diag::Kind;
     match event {
-        InputEvent::Key { vk, down } => {
-            format!("key vk={vk} {}", if *down { "down" } else { "up" })
-        }
-        InputEvent::MouseButton { button, down } => {
-            format!("mouse button {button} {}", if *down { "down" } else { "up" })
-        }
-        InputEvent::MouseMove { .. } => "mouse move".to_string(),
-        InputEvent::MouseAbs { .. } => "mouse abs".to_string(),
-        InputEvent::Scroll { .. } => "scroll".to_string(),
-        InputEvent::TouchFrame { contacts, .. } => {
-            format!("touch frame ({} contacts)", contacts.len())
-        }
-        InputEvent::ClipboardText { text } => format!("clipboard text ({} bytes)", text.len()),
-        InputEvent::GamepadState { pad, .. } => format!("gamepad {pad} state"),
-        InputEvent::GamepadPlug { pad, connected } => {
-            format!("gamepad {pad} {}", if *connected { "plugged" } else { "unplugged" })
-        }
+        InputEvent::Key { vk, down } => (
+            Kind::Key,
+            format!("key vk={vk} {}", if *down { "down" } else { "up" }),
+        ),
+        InputEvent::MouseButton { button, down } => (
+            Kind::MouseButton,
+            format!("mouse button {button} {}", if *down { "down" } else { "up" }),
+        ),
+        InputEvent::MouseMove { .. } => (Kind::MouseMove, "mouse move".to_string()),
+        InputEvent::MouseAbs { .. } => (Kind::MouseAbs, "mouse abs".to_string()),
+        InputEvent::Scroll { .. } => (Kind::Scroll, "scroll".to_string()),
+        InputEvent::TouchFrame { contacts, .. } => (
+            Kind::Touch,
+            format!("touch frame ({} contacts)", contacts.len()),
+        ),
+        InputEvent::ClipboardText { text } => (
+            Kind::Clipboard,
+            format!("clipboard text ({} bytes)", text.len()),
+        ),
+        InputEvent::GamepadState { pad, .. } => (Kind::Gamepad, format!("gamepad {pad} state")),
+        InputEvent::GamepadPlug { pad, connected } => (
+            Kind::Gamepad,
+            format!(
+                "gamepad {pad} {}",
+                if *connected { "plugged" } else { "unplugged" }
+            ),
+        ),
     }
 }
 
 pub fn apply(event: InputEvent) {
-    diag::note_received(&describe(&event));
+    let (kind, what) = describe(&event);
+    diag::note_received(kind, &what);
     #[cfg(windows)]
     {
         apply_windows(event);

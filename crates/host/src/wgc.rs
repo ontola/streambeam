@@ -168,15 +168,20 @@ mod imp {
         /// than the texture itself.
         pub unsafe fn try_next_frame(&mut self) -> Result<Option<Frame>, String> {
             let frame = match self.pool.TryGetNextFrame() {
-                Ok(frame) => frame,
-                // A closed pool/session surfaces here; report it so the caller
-                // can rebuild rather than spinning on a dead pool.
+                Ok(frame) if !frame.as_raw().is_null() => frame,
+                // An empty pool is the common case, not an error: WinRT returns
+                // S_OK with a null frame, and windows-rs surfaces that as
+                // `Err` whose HRESULT is 0 ("The operation completed
+                // successfully"). Treating it as a failure made the fallback
+                // start, poll once, declare WGC broken, revert to a
+                // duplication that was still blind, and start again — 708
+                // round trips in one session before this was caught.
+                Ok(_) => return Ok(None),
+                Err(e) if e.code().is_ok() => return Ok(None),
+                // A genuinely closed pool/session surfaces here; report it so
+                // the caller can rebuild rather than spinning on a dead pool.
                 Err(e) => return Err(format!("TryGetNextFrame: {e}")),
             };
-            // WinRT returns a null object (not an error) when the pool is empty.
-            if frame.as_raw().is_null() {
-                return Ok(None);
-            }
 
             let content = frame
                 .ContentSize()

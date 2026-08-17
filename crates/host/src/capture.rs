@@ -346,6 +346,11 @@ struct Pipeline {
     /// exclusive presentation — see `wgc.rs`). `None` while duplication works,
     /// which is the normal case and the cheaper path.
     wgc: Option<crate::wgc::WgcCapture>,
+    /// When the fallback was last started, so a WGC that fails immediately
+    /// can't be restarted in a tight loop. Learned the hard way: a
+    /// misclassified "pool empty" made it start-and-revert 708 times in one
+    /// session, each cycle logging two lines and rebuilding a frame pool.
+    wgc_last_start: Option<std::time::Instant>,
     /// Rolling per-report-window totals (reset every 90 calls alongside the
     /// counters above) for pinpointing where per-frame time actually goes.
     stat_capture_us: u64,
@@ -475,6 +480,7 @@ impl Pipeline {
                 stat_access_lost: 0,
                 consecutive_access_lost: 0,
                 wgc: None,
+                wgc_last_start: None,
                 stat_produced: 0,
                 stat_capture_us: 0,
                 stat_encode_us: 0,
@@ -786,6 +792,14 @@ impl Pipeline {
         if self.wgc.is_some() {
             return true;
         }
+        /// Minimum gap between fallback attempts.
+        const RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
+        if let Some(last) = self.wgc_last_start
+            && last.elapsed() < RETRY_GAP
+        {
+            return false;
+        }
+        self.wgc_last_start = Some(std::time::Instant::now());
         match crate::wgc::WgcCapture::new(&self.device, hdr) {
             Ok(wgc) => {
                 crate::logging::log(
