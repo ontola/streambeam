@@ -163,6 +163,57 @@ class StreamBeamVideoDecodeTests: XCTestCase {
     XCTAssertEqual(video.health["decodedFrames"] as? Int, 0)
   }
 
+  /// HDR10 passthrough (docs/HDR.md stage 3): the decoder must produce 10-bit
+  /// frames and keep the PQ/BT.2020 tagging.
+  ///
+  /// Fixture is a real 3840x2160 10-bit PQ keyframe from Mancave's NVENC,
+  /// captured with `devclient --av1 --hdr`. Its `av1C` reports
+  /// `high_bitdepth=1`, which only became true once the sequence-header parser
+  /// replaced the hardcoded 8-bit constants — an 8-bit `av1C` in front of a
+  /// 10-bit stream is exactly the kind of mislabelling that costs a day.
+  func testDecodesHDR10ToTenBitPixels() throws {
+    guard StreamBeamVideo.canDecodeAV1() else {
+      throw XCTSkip("no hardware AV1 decode on this machine")
+    }
+    let registry = StubTextureRegistry()
+    let video = StreamBeamVideo(registry: registry)
+    defer { video.dispose() }
+
+    XCTAssertTrue(
+      video.configure(
+        codecConfig: try fixture("av1_2160p_hdr10.av1c"), codec: "av01",
+        width: 3840, height: 2160, hdr10: true),
+      video.lastSetupFailure ?? "HDR10 decoder setup failed")
+    video.decode(frame: try fixture("av1_2160p_hdr10.keyframe"))
+
+    var buffer: CVPixelBuffer?
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, buffer == nil {
+      buffer = video.copyPixelBuffer()?.takeRetainedValue()
+      if buffer == nil { usleep(20_000) }
+    }
+    let pixels = try XCTUnwrap(
+      buffer, "HDR10 frame never decoded — \(video.lastSetupFailure ?? "no reason recorded")")
+
+    XCTAssertEqual(CVPixelBufferGetWidth(pixels), 3840)
+    XCTAssertEqual(CVPixelBufferGetHeight(pixels), 2160)
+    // 'x420' — 10-bit biplanar 4:2:0. Getting 32BGRA here would mean
+    // VideoToolbox quietly tone-mapped for us, losing the HDR the host went to
+    // the trouble of sending.
+    XCTAssertEqual(
+      CVPixelBufferGetPixelFormatType(pixels),
+      kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+      "expected 10-bit biplanar output, got \(CVPixelBufferGetPixelFormatType(pixels))")
+
+    // The transfer function has to survive to the buffer, or the display path
+    // treats absolute-luminance PQ code values as ordinary gamma.
+    let transfer = CVBufferGetAttachment(
+      pixels, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue()
+    XCTAssertEqual(
+      transfer as! CFString?, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+      "decoded frame lost its PQ tag")
+  }
+
   /// A frame arriving is not enough: it must not be a uniformly blank image.
   /// A decoder that emits empty buffers, or a colour-space/format mismatch that
   /// yields flat black, looks identical to success from a frame counter.

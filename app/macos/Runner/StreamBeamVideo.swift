@@ -121,6 +121,9 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     /// True when the negotiated stream is AV1 (frames are raw OBU temporal
     /// units, not Annex-B).
     private var isAV1 = false
+    /// True when the stream is HDR10 (10-bit PQ / BT.2020). Decided from the
+    /// bitstream, not from negotiation — see `configure`.
+    private var isHDR10 = false
 
     /// Hardware AV1 decode exists on Apple silicon M3+ — the capability the
     /// client advertises to the host during session negotiation.
@@ -131,8 +134,15 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     /// Configure the decoder. `codec` is the negotiated wire id: `"h264"`
     /// (codecConfig = Annex-B SPS/PPS) or `"av01"` (codecConfig = `av1C`
     /// record built by the Rust side). Returns success.
-    func configure(codecConfig: Data, codec: String, width: Int32, height: Int32) -> Bool {
+    /// `hdr10` switches the decoder to a 10-bit output format and tags the
+    /// frames PQ/BT.2020 (docs/HDR.md stage 3). The Rust side decides it by
+    /// parsing the AV1 sequence header, so it describes what the stream *is*
+    /// rather than what was negotiated.
+    func configure(
+        codecConfig: Data, codec: String, width: Int32, height: Int32, hdr10: Bool = false
+    ) -> Bool {
         withStats { $0.setupFailure = nil }
+        isHDR10 = hdr10
         if codec == "av01" {
             isAV1 = true
             return configureAV1(av1c: codecConfig, width: width, height: height)
@@ -147,7 +157,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         }
         guard !av1c.isEmpty else { return setupFailed("av01: empty av1C record") }
         let atoms: [CFString: Any] = ["av1C" as CFString: av1c as CFData]
-        let extensions: [CFString: Any] = [
+        var extensions: [CFString: Any] = [
             kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms:
                 atoms as CFDictionary
             // Deliberately NOT forcing FullRangeVideo here (unlike H.264
@@ -159,6 +169,19 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             // constant contrast error and at worst a per-keyframe contrast
             // flip, depending on which one the decoder honors when.
         ]
+        if isHDR10 {
+            // Tag the frames PQ / BT.2020 so everything downstream — the
+            // display layer especially — knows these code values are absolute
+            // luminance, not gamma. Untagged 10-bit gets treated as SDR and
+            // renders washed out, which is precisely the failure this feature
+            // was built to fix, arrived at from the other direction.
+            extensions[kCMFormatDescriptionExtension_ColorPrimaries] =
+                kCMFormatDescriptionColorPrimaries_ITU_R_2020
+            extensions[kCMFormatDescriptionExtension_TransferFunction] =
+                kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ
+            extensions[kCMFormatDescriptionExtension_YCbCrMatrix] =
+                kCMFormatDescriptionYCbCrMatrix_ITU_R_2020
+        }
         var fd: CMVideoFormatDescription?
         let status = CMVideoFormatDescriptionCreate(
             allocator: kCFAllocatorDefault,
@@ -250,8 +273,16 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     }
 
     private func makeSession(formatDescription: CMVideoFormatDescription) -> Bool {
+        // 8-bit BGRA has nowhere to put HDR: it would force VideoToolbox to
+        // tone-map on our behalf, which is the thing passthrough exists to
+        // avoid. 10-bit biplanar 4:2:0 keeps the PQ signal intact all the way
+        // to the display layer.
+        let pixelFormat =
+            isHDR10
+            ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            : kCVPixelFormatType_32BGRA
         let attrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat,
             kCVPixelBufferMetalCompatibilityKey: true,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
         ]
@@ -474,7 +505,11 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         }
         var frame = imageBuffer
         lock.lock()
-        let upscale = wantUpscale
+        // The upscaler's Metal textures are bgra8Unorm; a 10-bit biplanar
+        // buffer can't go through it, and quietly producing a wrong picture
+        // would be worse than not upscaling. HDR + MetalFX needs its own
+        // pipeline (docs/HDR.md risks).
+        let upscale = wantUpscale && !isHDR10
         lock.unlock()
         if upscale, #available(macOS 13.0, *),
             let up = upscalerStorage as? MetalFXUpscaler,
