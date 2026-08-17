@@ -341,11 +341,22 @@ struct Pipeline {
     /// threshold, back off and say so once instead of retrying every ~33ms
     /// forever and filling host.log with near-identical lines.
     consecutive_access_lost: u32,
+    /// Windows.Graphics.Capture fallback, started only once Desktop
+    /// Duplication has proven it can't see the screen (a game holding
+    /// exclusive presentation — see `wgc.rs`). `None` while duplication works,
+    /// which is the normal case and the cheaper path.
+    wgc: Option<crate::wgc::WgcCapture>,
     /// Rolling per-report-window totals (reset every 90 calls alongside the
     /// counters above) for pinpointing where per-frame time actually goes.
     stat_capture_us: u64,
     stat_encode_us: u64,
 }
+
+/// Consecutive `ACCESS_LOST` recreate attempts before giving up on Desktop
+/// Duplication and switching to WGC. Deliberately the same point at which the
+/// old code started backing off to a 2s retry: by then recreation has failed
+/// three times, which no transient display-mode change survives.
+const WGC_FALLBACK_AFTER_ACCESS_LOST: u32 = 4;
 
 fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
     r.map_err(|e| format!("{what}: {e}"))
@@ -463,6 +474,7 @@ impl Pipeline {
                 stat_timeout: 0,
                 stat_access_lost: 0,
                 consecutive_access_lost: 0,
+                wgc: None,
                 stat_produced: 0,
                 stat_capture_us: 0,
                 stat_encode_us: 0,
@@ -537,6 +549,9 @@ impl Pipeline {
     /// backend needs it: `encode_texture` (GPU-to-GPU, or CPU-resized only if
     /// downscaling) for NVENC, `nv12` for the software encoder.
     unsafe fn capture_frame(&mut self) -> Result<(), String> {
+        if self.wgc.is_some() {
+            return self.capture_frame_wgc();
+        }
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
         // Wait at most one frame interval for a *changed* desktop frame —
@@ -635,6 +650,17 @@ impl Pipeline {
                     // of propagating it as a hard stream error.
                     Err(_) => {}
                 }
+                // Recreation has failed enough times to rule out a transient
+                // loss. WGC composites through a different path and keeps
+                // working when a game holds the display, so try it before
+                // settling into the 2s retry that used to be the whole
+                // recovery strategy (and that showed the viewer a frozen
+                // picture until their media timeout fired).
+                if self.consecutive_access_lost >= WGC_FALLBACK_AFTER_ACCESS_LOST
+                    && self.start_wgc_fallback(desktop_is_hdr(&self.device, allow_hdr))
+                {
+                    return Ok(());
+                }
                 if self.consecutive_access_lost > 3 {
                     std::thread::sleep(std::time::Duration::from_millis(2000));
                 }
@@ -646,51 +672,122 @@ impl Pipeline {
         let result = (|| -> Result<(), String> {
             let resource = resource.ok_or("duplication returned no resource")?;
             let texture: ID3D11Texture2D = ctx(resource.cast(), "resource.cast texture")?;
-
-            match &self.backend {
-                EncoderBackend::Nvenc {
-                    encode_texture,
-                    scaler,
-                    ..
-                } => match scaler {
-                    Some(scaler) => scaler.scale(&texture)?,
-                    None => self.context.CopyResource(encode_texture, &texture),
-                },
-                EncoderBackend::Software { .. } => {
-                    self.context.CopyResource(&self.staging, &texture);
-                }
-            }
-
-            if let EncoderBackend::Software { nv12, .. } = &mut self.backend {
-                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                ctx(
-                    self.context
-                        .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)),
-                    "Map staging",
-                )?;
-                let stride = mapped.RowPitch as usize;
-                let src = std::slice::from_raw_parts(
-                    mapped.pData as *const u8,
-                    stride * self.capture_height as usize,
-                );
-                bgra_to_nv12(
-                    src,
-                    stride,
-                    self.capture_width,
-                    self.capture_height,
-                    self.width,
-                    self.height,
-                    nv12,
-                );
-                self.context.Unmap(&self.staging, 0);
-            }
-
-            self.have_last = true;
-            Ok(())
+            self.consume_texture(&texture)
         })();
 
         let _ = self.duplication.ReleaseFrame();
         result
+    }
+
+    /// Land one captured texture wherever the active backend needs it. Shared
+    /// by both capture sources — duplication and WGC hand back the same thing
+    /// (a texture on our device, BGRA8 or FP16 scRGB), so everything
+    /// downstream of here is identical.
+    unsafe fn consume_texture(&mut self, texture: &ID3D11Texture2D) -> Result<(), String> {
+        match &self.backend {
+            EncoderBackend::Nvenc {
+                encode_texture,
+                scaler,
+                ..
+            } => match scaler {
+                Some(scaler) => scaler.scale(texture)?,
+                None => self.context.CopyResource(encode_texture, texture),
+            },
+            EncoderBackend::Software { .. } => {
+                self.context.CopyResource(&self.staging, texture);
+            }
+        }
+
+        if let EncoderBackend::Software { nv12, .. } = &mut self.backend {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx(
+                self.context
+                    .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)),
+                "Map staging",
+            )?;
+            let stride = mapped.RowPitch as usize;
+            let src = std::slice::from_raw_parts(
+                mapped.pData as *const u8,
+                stride * self.capture_height as usize,
+            );
+            bgra_to_nv12(
+                src,
+                stride,
+                self.capture_width,
+                self.capture_height,
+                self.width,
+                self.height,
+                nv12,
+            );
+            self.context.Unmap(&self.staging, 0);
+        }
+
+        self.have_last = true;
+        Ok(())
+    }
+
+    /// Capture via the WGC fallback. Mirrors the duplication path's contract:
+    /// `Ok(())` with nothing new means "re-encode the previous frame".
+    unsafe fn capture_frame_wgc(&mut self) -> Result<(), String> {
+        let (texture, resized) = {
+            let wgc = match self.wgc.as_mut() {
+                Some(wgc) => wgc,
+                None => return Ok(()),
+            };
+            match wgc.try_next_frame() {
+                Ok(Some(frame)) => (frame.texture().clone(), frame.resized),
+                Ok(None) => {
+                    // No new frame this tick — same as duplication's timeout.
+                    self.stat_timeout += 1;
+                    return Ok(());
+                }
+                Err(e) => {
+                    // The pool or session died (monitor unplugged, mode
+                    // change). Drop back to duplication rather than spinning:
+                    // whatever broke WGC may well have restored duplication.
+                    crate::logging::log(&format!(
+                        "WGC capture failed ({e}) — reverting to Desktop Duplication"
+                    ));
+                    self.wgc = None;
+                    self.consecutive_access_lost = 0;
+                    return Ok(());
+                }
+            }
+        };
+
+        self.stat_acquired += 1;
+        if resized {
+            crate::logging::log(
+                "WGC: content size changed; rebuilding pool on the next mode query",
+            );
+        }
+        self.consume_texture(&texture)
+    }
+
+    /// Try to replace a blind duplication with WGC. Returns whether the
+    /// fallback is now active; failure leaves duplication in place (still
+    /// retrying), because a broken fallback must not be worse than no
+    /// fallback.
+    unsafe fn start_wgc_fallback(&mut self, hdr: bool) -> bool {
+        if self.wgc.is_some() {
+            return true;
+        }
+        match crate::wgc::WgcCapture::new(&self.device, hdr) {
+            Ok(wgc) => {
+                crate::logging::log(
+                    "Desktop Duplication is blind (a full-screen app most likely holds \
+                     exclusive presentation) — switching capture to Windows.Graphics.Capture",
+                );
+                self.wgc = Some(wgc);
+                true
+            }
+            Err(e) => {
+                crate::logging::log(&format!(
+                    "WGC fallback unavailable ({e}) — staying on Desktop Duplication"
+                ));
+                false
+            }
+        }
     }
 
     /// Queue a new target bitrate — applied on the next `encode()` call via
@@ -969,6 +1066,33 @@ unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Str
     ))
 }
 
+/// Whether the output is presenting HDR10 (PQ / BT.2020), i.e. whether the
+/// FP16 scRGB capture + in-shader tone-map path applies.
+unsafe fn output_is_hdr(output1: &IDXGIOutput1) -> bool {
+    output1
+        .cast::<IDXGIOutput6>()
+        .and_then(|o6| o6.GetDesc1())
+        .map(|d| d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+        .unwrap_or(false)
+}
+
+/// Same question as [`output_is_hdr`], asked from a device rather than an
+/// output — the WGC fallback has to pick its pixel format without going
+/// through `create_duplication`, and picking the wrong one would feed the
+/// tone-map shader a format it doesn't expect.
+unsafe fn desktop_is_hdr(device: &ID3D11Device, allow_hdr: bool) -> bool {
+    if !allow_hdr {
+        return false;
+    }
+    (|| -> Option<bool> {
+        let dxgi_device: IDXGIDevice = device.cast().ok()?;
+        let adapter: IDXGIAdapter = dxgi_device.GetAdapter().ok()?;
+        let output1: IDXGIOutput1 = adapter.EnumOutputs(0).ok()?.cast().ok()?;
+        Some(output_is_hdr(&output1))
+    })()
+    .unwrap_or(false)
+}
+
 unsafe fn create_duplication(
     device: &ID3D11Device,
     allow_hdr: bool,
@@ -1010,12 +1134,7 @@ unsafe fn create_duplication(
     // shader (`GpuScaler`'s `ps_tonemap`), like Sunshine. Only the NVENC
     // path has that shader stage (`allow_hdr`); the software-encoder
     // fallback keeps BGRA8/DWM conversion, flicker and all.
-    let hdr = allow_hdr
-        && output1
-            .cast::<IDXGIOutput6>()
-            .and_then(|o6| o6.GetDesc1())
-            .map(|d| d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
-            .unwrap_or(false);
+    let hdr = allow_hdr && output_is_hdr(&output1);
     let format = if hdr {
         DXGI_FORMAT_R16G16B16A16_FLOAT
     } else {

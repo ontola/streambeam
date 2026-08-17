@@ -66,6 +66,13 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Registry",
+    # Windows.Graphics.Capture fallback for when Desktop Duplication can't see
+    # the screen — a game holding exclusive presentation (wgc.rs).
+    "Graphics_Capture",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_WinRT_Direct3D11",
+    "Foundation",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
