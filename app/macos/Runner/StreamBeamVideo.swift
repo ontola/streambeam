@@ -526,7 +526,16 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         }
         latest = frame
         lock.unlock()
-        registry.textureFrameAvailable(textureId)
+        // HDR frames go to the EDR layer instead of the Flutter texture:
+        // Flutter's compositor is SDR and would flatten the PQ signal at the
+        // very last step, undoing the whole passthrough pipeline. The texture
+        // is still updated above so `copyPixelBuffer` (and the decode tests)
+        // keep working either way.
+        if isHDR10, let hdrView = StreamBeamHdrViewFactory.current {
+            hdrView.present(frame)
+        } else {
+            registry.textureFrameAvailable(textureId)
+        }
     }
 
     func dispose() {

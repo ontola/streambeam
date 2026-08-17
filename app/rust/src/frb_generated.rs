@@ -640,6 +640,7 @@ fn wire__crate__api__play_stream_desktop_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_payload = <String>::sse_decode(&mut deserializer);
             let api_allow_av1 = <bool>::sse_decode(&mut deserializer);
+            let api_allow_hdr = <bool>::sse_decode(&mut deserializer);
             let api_max_width = <u16>::sse_decode(&mut deserializer);
             let api_max_height = <u16>::sse_decode(&mut deserializer);
             let api_max_fps = <u8>::sse_decode(&mut deserializer);
@@ -654,6 +655,7 @@ fn wire__crate__api__play_stream_desktop_impl(
                         let output_ok = crate::api::play_stream_desktop(
                             api_payload,
                             api_allow_av1,
+                            api_allow_hdr,
                             api_max_width,
                             api_max_height,
                             api_max_fps,
@@ -694,6 +696,7 @@ fn wire__crate__api__play_stream_desktop_known_impl(
             let api_host_pubkey = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_addr = <String>::sse_decode(&mut deserializer);
             let api_allow_av1 = <bool>::sse_decode(&mut deserializer);
+            let api_allow_hdr = <bool>::sse_decode(&mut deserializer);
             let api_max_width = <u16>::sse_decode(&mut deserializer);
             let api_max_height = <u16>::sse_decode(&mut deserializer);
             let api_max_fps = <u8>::sse_decode(&mut deserializer);
@@ -710,6 +713,7 @@ fn wire__crate__api__play_stream_desktop_known_impl(
                             api_host_pubkey,
                             api_addr,
                             api_allow_av1,
+                            api_allow_hdr,
                             api_max_width,
                             api_max_height,
                             api_max_fps,
@@ -1807,6 +1811,7 @@ impl SseDecode for crate::api::DesktopStreamEvent {
         let mut var_fps = <u8>::sse_decode(deserializer);
         let mut var_data = <Vec<u8>>::sse_decode(deserializer);
         let mut var_keyframe = <bool>::sse_decode(deserializer);
+        let mut var_hdr = <bool>::sse_decode(deserializer);
         return crate::api::DesktopStreamEvent {
             is_config: var_isConfig,
             codec: var_codec,
@@ -1816,6 +1821,7 @@ impl SseDecode for crate::api::DesktopStreamEvent {
             fps: var_fps,
             data: var_data,
             keyframe: var_keyframe,
+            hdr: var_hdr,
         };
     }
 }
@@ -2233,6 +2239,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::DesktopStreamEvent {
             self.fps.into_into_dart().into_dart(),
             self.data.into_into_dart().into_dart(),
             self.keyframe.into_into_dart().into_dart(),
+            self.hdr.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2455,6 +2462,7 @@ impl SseEncode for crate::api::DesktopStreamEvent {
         <u8>::sse_encode(self.fps, serializer);
         <Vec<u8>>::sse_encode(self.data, serializer);
         <bool>::sse_encode(self.keyframe, serializer);
+        <bool>::sse_encode(self.hdr, serializer);
     }
 }
 

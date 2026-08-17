@@ -291,6 +291,9 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     let registrar = controller.registrar(forPlugin: "StreamBeamHdrProbe")
     registrar.register(
       HdrProbeViewFactory(), withId: "streambeam/hdr_probe")
+    // The real HDR video surface (docs/HDR.md stage 4).
+    registrar.register(
+      StreamBeamHdrViewFactory(), withId: "streambeam/video_hdr")
     let channel = FlutterMethodChannel(
       name: "streambeam/hdr_probe",
       binaryMessenger: registrar.messenger)
@@ -324,6 +327,15 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       switch call.method {
       case "canDecodeAV1":
         result(StreamBeamVideo.canDecodeAV1())
+      case "canDisplayHDR":
+        // Both halves of the HDR promise, answered honestly: hardware AV1
+        // decode (10-bit PQ comes over AV1 here) and a display that can
+        // actually show more than SDR white. Advertising HDR without the
+        // second gets a PQ stream flattened by an SDR compositor — worse than
+        // the tone-mapped SDR it replaced, which is why this is checked rather
+        // than assumed.
+        let headroom = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+        result(StreamBeamVideo.canDecodeAV1() && headroom > 1.0)
       case "configure":
         let config = (args?["codecConfig"] as? FlutterStandardTypedData)?.data ?? Data()
         let codec = (args?["codec"] as? String) ?? "h264"
@@ -356,6 +368,16 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       case "setUpscale":
         let enabled = (args?["enabled"] as? Bool) ?? true
         result(self.video?.setUpscaling(enabled) ?? false)
+      case "hdrStatus":
+        // Whether HDR frames are actually reaching the EDR layer, and what
+        // headroom the display granted — the objective half of "is HDR
+        // working", independent of anyone's eyes.
+        let view = StreamBeamHdrViewFactory.current
+        result([
+          "present": view != nil,
+          "frames": view?.framesPresented ?? 0,
+          "setupFailure": view?.setupFailure ?? "",
+        ])
       case "health":
         // Decode counters for the watchdog — nil when there's no decoder, which
         // is itself the answer.

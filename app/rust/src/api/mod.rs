@@ -588,6 +588,13 @@ pub struct DesktopStreamEvent {
     pub fps: u8,
     pub data: Vec<u8>,
     pub keyframe: bool,
+    /// Config events only: the stream is HDR10 (10-bit PQ / BT.2020).
+    ///
+    /// Derived from the AV1 sequence header rather than from the negotiated
+    /// caps, so it describes what actually arrived. The platform decoder needs
+    /// it to pick a 10-bit output format, and the UI needs it to route frames
+    /// to an EDR layer instead of the SDR texture (docs/HDR.md).
+    pub hdr: bool,
 }
 
 /// Desktop watch: connect, reassemble the media plane (reusing `crates/core`),
@@ -602,6 +609,7 @@ pub struct DesktopStreamEvent {
 pub async fn play_stream_desktop(
     payload: String,
     allow_av1: bool,
+    allow_hdr: bool,
     max_width: u16,
     max_height: u16,
     max_fps: u8,
@@ -609,7 +617,7 @@ pub async fn play_stream_desktop(
 ) -> Result<(), String> {
     if let Err(e) = play_stream_desktop_inner(
         payload,
-        desktop_video_caps(allow_av1, max_width, max_height, max_fps),
+        desktop_video_caps(allow_av1, allow_hdr, max_width, max_height, max_fps),
         &sink,
     )
     .await
@@ -626,6 +634,7 @@ pub async fn play_stream_desktop(
 /// contract as the Android path's `video_caps`.
 fn desktop_video_caps(
     allow_av1: bool,
+    allow_hdr: bool,
     max_width: u16,
     max_height: u16,
     max_fps: u8,
@@ -635,11 +644,10 @@ fn desktop_video_caps(
         h264: true,
         hevc: false,
         av1: allow_av1,
-        // Stage 3 flips this on once the platform decoder produces 10-bit and
-        // the frames reach an EDR layer. Advertising it before then would get
-        // a PQ stream rendered by an 8-bit SDR path — a worse picture than the
-        // tone-mapped SDR it replaced.
-        hdr: false,
+        // Only true when the platform reported *both* hardware AV1 decode and
+        // an EDR-capable display: a PQ stream rendered by an SDR path is a
+        // worse picture than the tone-mapped SDR it replaced.
+        hdr: allow_hdr,
         max_width: if max_width > 0 {
             max_width
         } else {
@@ -685,6 +693,7 @@ pub async fn play_stream_desktop_known(
     host_pubkey: Vec<u8>,
     addr: String,
     allow_av1: bool,
+    allow_hdr: bool,
     max_width: u16,
     max_height: u16,
     max_fps: u8,
@@ -694,7 +703,7 @@ pub async fn play_stream_desktop_known(
         host_name,
         host_pubkey,
         addr,
-        desktop_video_caps(allow_av1, max_width, max_height, max_fps),
+        desktop_video_caps(allow_av1, allow_hdr, max_width, max_height, max_fps),
         &sink,
     )
     .await
@@ -810,14 +819,21 @@ async fn desktop_stream_loop(
     // H.264 config passes through as Annex-B SPS/PPS; for AV1 the platform
     // decoder wants an `av1C` record, built here from the sequence header in
     // the host's config (same extraction the Android decoder does).
+    let mut is_hdr10 = false;
     let codec_config = if is_av1 {
         let seq = streambeam_core::av1_extract_sequence_header(&codec_config)
             .ok_or("Host AV1 config is missing a sequence header.")?;
+        is_hdr10 = streambeam_core::parse_av1_sequence_header(&seq)
+            .map(|info| info.is_hdr10())
+            .unwrap_or(false);
         streambeam_core::av1c_from_sequence_header(&seq)
             .ok_or("Could not parse the host's AV1 sequence header.")?
     } else {
         codec_config
     };
+    if is_hdr10 {
+        eprintln!("desktop stream: HDR10 (10-bit PQ / BT.2020)");
+    }
     sink.add(DesktopStreamEvent {
         is_config: true,
         codec: session.codec.clone(),
@@ -827,6 +843,7 @@ async fn desktop_stream_loop(
         fps: session.fps,
         data: Vec::new(),
         keyframe: false,
+        hdr: is_hdr10,
     })
     .map_err(|e| e.to_string())?;
 
@@ -996,6 +1013,8 @@ async fn desktop_stream_loop(
                                 fps: session.fps,
                                 data: Vec::new(),
                                 keyframe: false,
+                                // H.264 in-band reconfigure; HDR is AV1-only.
+                                hdr: false,
                             })
                             .is_err()
                         {
@@ -1014,6 +1033,8 @@ async fn desktop_stream_loop(
                     fps: 0,
                     data,
                     keyframe,
+                    // Only config events carry stream-level facts.
+                    hdr: false,
                 })
                 .is_err()
             {

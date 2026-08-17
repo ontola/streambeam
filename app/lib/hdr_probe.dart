@@ -66,8 +66,11 @@ class _HdrProbeScreenState extends State<HdrProbeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Left of the notch is SDR. Right of it should look brighter '
-                  'than white — if it is a flat block, EDR is not reaching the '
+                  'Four patches: 1×, 2×, 4×, 8× SDR white, over a fixed SDR '
+                  'white strip along the bottom. If EDR is live they step '
+                  'visibly brighter left to right and the upper patches glow '
+                  'against the strip. If all four look like the same white, '
+                  'the values are being clipped and EDR is not reaching the '
                   'screen.',
                   style: theme.textTheme.bodySmall,
                 ),

@@ -321,6 +321,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   // the native Runner turns them into a Flutter texture.
   static const _desktopVideoChannel = MethodChannel('streambeam/video_desktop');
   int? _desktopTextureId;
+  /// The stream is HDR10, so frames render on the native EDR layer instead of
+  /// the Flutter texture — Flutter's compositor is SDR and would flatten the
+  /// PQ signal (docs/HDR.md).
+  bool _desktopHdr = false;
   double _desktopAspect = 16 / 9;
   int _desktopWidth = 0;
   int _desktopHeight = 0;
@@ -897,6 +901,25 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     return can;
   }
 
+  bool? _desktopHdrCapable;
+
+  /// Whether to advertise HDR10 in `VideoCaps`. Requires hardware AV1 decode
+  /// *and* an EDR-capable display — see the native side for why both.
+  Future<bool> _canDisplayHdr() async {
+    final cached = _desktopHdrCapable;
+    if (cached != null) return cached;
+    bool can;
+    try {
+      can =
+          await _desktopVideoChannel.invokeMethod<bool>('canDisplayHDR') ??
+          false;
+    } catch (_) {
+      can = false; // platform without the method: keep SDR.
+    }
+    _desktopHdrCapable = can;
+    return can;
+  }
+
   /// Desktop watch: drive the Rust frame stream into the native VideoToolbox
   /// decoder (macOS) and show its texture.
   Future<void> _startDesktopPlayback(String payload) async {
@@ -913,11 +936,13 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
     final allowAv1 = await _desktopCanAv1();
+    final allowHdr = await _canDisplayHdr();
     if (!mounted || attempt != _desktopPlaybackAttempt) return;
     _attachDesktopStream(
       playStreamDesktop(
         payload: payload,
         allowAv1: allowAv1,
+        allowHdr: allowHdr,
         maxWidth: maxWidth,
         maxHeight: maxHeight,
         maxFps: maxFps,
@@ -953,6 +978,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
     final allowAv1 = await _desktopCanAv1();
+    final allowHdr = await _canDisplayHdr();
     if (!mounted || attempt != _desktopPlaybackAttempt) return;
     _attachDesktopStream(
       playStreamDesktopKnown(
@@ -960,6 +986,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         hostPubkey: host.hostPubkey,
         addr: addr,
         allowAv1: allowAv1,
+        allowHdr: allowHdr,
         maxWidth: maxWidth,
         maxHeight: maxHeight,
         maxFps: maxFps,
@@ -983,6 +1010,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   'codec': ev.codec,
                   'width': ev.width,
                   'height': ev.height,
+                  'hdr10': ev.hdr,
                 });
             int? id;
             // Prefer what the decoder read from the bitstream (reconfig
@@ -1004,6 +1032,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
             }
             if (id != null && mounted && attempt == _desktopPlaybackAttempt) {
               setState(() {
+                _desktopHdr = ev.hdr;
                 _desktopTextureId = id;
                 _desktopAspect = h > 0 ? w / h : 16 / 9;
                 _desktopWidth = w;
@@ -1078,6 +1107,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         _desktopTextureId = null;
+        _desktopHdr = false;
         _showVideo = false;
         _busy = false;
         _upscaleActive = false;
@@ -1518,7 +1548,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         aspectRatio: _desktopAspect,
         streamWidth: _desktopWidth,
         streamHeight: _desktopHeight,
-        video: Texture(textureId: _desktopTextureId!),
+        video: _desktopHdr
+            ? const AppKitView(
+                viewType: 'streambeam/video_hdr',
+                layoutDirection: TextDirection.ltr,
+              )
+            : Texture(textureId: _desktopTextureId!),
         hostAcceptsTouch: playbackHostAcceptsTouch(),
         touchControls: false,
         upscaleSupported: _upscaleSupported ?? false,

@@ -73,10 +73,20 @@ class HdrProbeView: NSView {
         return o;
       }
       fragment float4 f_main(VsOut i [[stage_in]], constant float &peak [[buffer(0)]]) {
-        float v = i.uv.x * peak;
-        // Marker at SDR white: a dark notch, so the eye has a reference for
-        // where 1.0 is without needing a colour picker.
-        if (abs(i.uv.x - 1.0 / peak) < 0.002) { return float4(0, 0, 0, 1); }
+        // Four flat patches — 1x, 2x, 4x, 8x SDR white — separated by black
+        // gutters. A ramp was useless here: with SDR white at 1/8 of the
+        // width, almost the whole view sat above it and read as one white
+        // block. Discrete patches make the question answerable by eye: if EDR
+        // is live they step visibly brighter left to right; if the values are
+        // being clipped they are four identical whites.
+        float band = i.uv.x * 4.0;
+        int idx = int(floor(band));
+        if (fract(band) < 0.02) { return float4(0, 0, 0, 1); }
+        float levels[4] = {1.0, 2.0, 4.0, 8.0};
+        float v = levels[clamp(idx, 0, 3)];
+        // Bottom fifth stays at SDR white across the whole width, as a fixed
+        // reference strip to compare each patch against.
+        if (i.uv.y > 0.8) { v = 1.0; }
         return float4(v, v, v, 1);
       }
       """

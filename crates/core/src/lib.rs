@@ -17,7 +17,8 @@ pub use obu::{
     access_unit_is_keyframe as av1_access_unit_is_keyframe,
     access_unit_without_redundant_headers as av1_access_unit_without_redundant_headers,
     av1c_from_sequence_header, extract_sequence_header as av1_extract_sequence_header,
-    obu_type_summary as av1_obu_type_summary,
+    obu_type_summary as av1_obu_type_summary, parse_sequence_header as parse_av1_sequence_header,
+    Av1SeqInfo,
 };
 pub use frame_gate::{Decision, FrameGate};
 pub use reassemble::{FrameReassembler, FrameStats, LossReport};

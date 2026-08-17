@@ -28,6 +28,7 @@
 		33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F42044A3C60003C045 /* MainMenu.xib */; };
 		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
 		5BEA100010000000000A0001 /* StreamBeamVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000A0002 /* StreamBeamVideo.swift */; };
+		5BEA100010000000000F1001 /* StreamBeamHdrView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000F1002 /* StreamBeamHdrView.swift */; };
 		5BEA100010000000000F0001 /* HdrProbeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000F0002 /* HdrProbeView.swift */; };
 		5BEA100010000000000B0001 /* StreamBeamDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000B0002 /* StreamBeamDiscovery.swift */; };
 		5BEA100010000000000C0001 /* StreamBeamCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BEA100010000000000C0002 /* StreamBeamCapture.swift */; };
@@ -79,6 +80,7 @@
 		33CC10F72044A3C60003C045 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Runner/Info.plist; sourceTree = "<group>"; };
 		33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
 		5BEA100010000000000A0002 /* StreamBeamVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamVideo.swift; sourceTree = "<group>"; };
+		5BEA100010000000000F1002 /* StreamBeamHdrView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamHdrView.swift; sourceTree = "<group>"; };
 		5BEA100010000000000F0002 /* HdrProbeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HdrProbeView.swift; sourceTree = "<group>"; };
 		5BEA100010000000000B0002 /* StreamBeamDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamDiscovery.swift; sourceTree = "<group>"; };
 		5BEA100010000000000C0002 /* StreamBeamCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBeamCapture.swift; sourceTree = "<group>"; };
@@ -204,6 +206,7 @@
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				5BEA100010000000000A0002 /* StreamBeamVideo.swift */,
+				5BEA100010000000000F1002 /* StreamBeamHdrView.swift */,
 				5BEA100010000000000F0002 /* HdrProbeView.swift */,
 				5BEA100010000000000B0002 /* StreamBeamDiscovery.swift */,
 				5BEA100010000000000C0002 /* StreamBeamCapture.swift */,
@@ -461,6 +464,7 @@
 			files = (
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				5BEA100010000000000A0001 /* StreamBeamVideo.swift in Sources */,
+				5BEA100010000000000F1001 /* StreamBeamHdrView.swift in Sources */,
 				5BEA100010000000000F0001 /* HdrProbeView.swift in Sources */,
 				5BEA100010000000000B0001 /* StreamBeamDiscovery.swift in Sources */,
 				5BEA100010000000000C0001 /* StreamBeamCapture.swift in Sources */,
