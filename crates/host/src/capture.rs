@@ -1155,6 +1155,24 @@ unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Str
     ))
 }
 
+/// `STREAMBEAM_HDR_CAPTURE=dwm` forces the BGRA8 path on an HDR desktop, so
+/// Windows does the HDR→SDR conversion instead of our shader. It exists to A/B
+/// the two against identical content: as of 2026-08-17 our tone-map visibly
+/// washes out an HDR desktop (blacks lifted, saturated colours pulled toward
+/// grey) where DWM's looks right, and comparing them on the same screen is the
+/// only way to tell a wrong constant from a wrong transfer function. DWM's own
+/// conversion has the white-level flicker this shader was written to fix, so
+/// it's a diagnostic, not a default.
+///
+/// Checked by *both* capture sources — a toggle that only bound the duplication
+/// path would silently revert to our shader the moment WGC took over, which is
+/// exactly when a game is on screen and you're looking at the colours.
+fn dwm_tone_map_forced() -> bool {
+    std::env::var("STREAMBEAM_HDR_CAPTURE")
+        .map(|v| v.eq_ignore_ascii_case("dwm"))
+        .unwrap_or(false)
+}
+
 /// Whether the output is presenting HDR10 (PQ / BT.2020), i.e. whether the
 /// FP16 scRGB capture + in-shader tone-map path applies.
 unsafe fn output_is_hdr(output1: &IDXGIOutput1) -> bool {
@@ -1170,7 +1188,7 @@ unsafe fn output_is_hdr(output1: &IDXGIOutput1) -> bool {
 /// through `create_duplication`, and picking the wrong one would feed the
 /// tone-map shader a format it doesn't expect.
 unsafe fn desktop_is_hdr(device: &ID3D11Device, allow_hdr: bool) -> bool {
-    if !allow_hdr {
+    if !allow_hdr || dwm_tone_map_forced() {
         return false;
     }
     (|| -> Option<bool> {
@@ -1223,19 +1241,8 @@ unsafe fn create_duplication(
     // shader (`GpuScaler`'s `ps_tonemap`), like Sunshine. Only the NVENC
     // path has that shader stage (`allow_hdr`); the software-encoder
     // fallback keeps BGRA8/DWM conversion, flicker and all.
-    // `STREAMBEAM_HDR_CAPTURE=dwm` forces the BGRA8 path on an HDR desktop, so
-    // Windows does the HDR->SDR conversion instead of our shader. It exists to
-    // A/B the two against identical content: as of 2026-08-17 our tone-map
-    // visibly washes out an HDR desktop (blacks lifted, saturated colours
-    // pulled toward grey) where DWM's looks right, and comparing them on the
-    // same screen is the only way to tell a wrong constant from a wrong
-    // transfer function. DWM's own conversion has the white-level flicker
-    // documented below, so this is a diagnostic, not a default.
-    let force_dwm = std::env::var("STREAMBEAM_HDR_CAPTURE")
-        .map(|v| v.eq_ignore_ascii_case("dwm"))
-        .unwrap_or(false);
-    let hdr = allow_hdr && !force_dwm && output_is_hdr(&output1);
-    if force_dwm && output_is_hdr(&output1) {
+    let hdr = allow_hdr && !dwm_tone_map_forced() && output_is_hdr(&output1);
+    if dwm_tone_map_forced() && output_is_hdr(&output1) {
         crate::logging::log(
             "STREAMBEAM_HDR_CAPTURE=dwm: capturing BGRA8 and letting Windows tone-map",
         );

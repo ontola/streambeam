@@ -14,6 +14,8 @@ Read these before changing anything substantial:
 - [docs/PROTOCOL.md](docs/PROTOCOL.md) — wire format. Must stay in lockstep with `crates/proto`.
 - [docs/WAN.md](docs/WAN.md) — internet/NAT roadmap (iroh candidate). Not v1 scope.
 - [docs/WOL.md](docs/WOL.md) — wake/sleep/hibernate host from phone (Wake-on-LAN + power RPC). Plan, not yet implemented.
+- [docs/HDR.md](docs/HDR.md) — HDR10 passthrough plan (10-bit PQ/BT.2020 end to end). Why
+  tone-mapping can't fix the washed-out HDR picture, and the staged path that can.
 - [docs/DEBUGGING_CLIENT.md](docs/DEBUGGING_CLIENT.md) — **read this before debugging a
   black/frozen picture.** Diagnosis flow, where the logs actually go, driving the
   app headlessly via Flutter Driver, fixture capture, and which test layer catches what.
