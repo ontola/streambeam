@@ -17,6 +17,25 @@ pub struct FrameStats {
 /// datagram" section — headroom over 2 to tolerate normal reordering/jitter.
 const STALE_THRESHOLD: i16 = 4;
 
+// A bucket that is `STALE_THRESHOLD` frames behind is only abandoned if it also
+// took no new shard since the previous staleness check — see `abandon_stale`.
+//
+// Frame-id distance alone is not a staleness test: it assumes a frame's shards
+// all arrive within a few frame intervals, which is false for a large keyframe
+// at a high frame rate. A 4K keyframe is ~400 paced shards, while the host keeps
+// emitting tiny single-shard duplicate frames to honour a 120fps target — so
+// four newer frames routinely complete while the keyframe is still legitimately
+// filling, and distance alone threw it away mid-flight. The client then had no
+// reference frame, latched `awaiting_keyframe`, skipped every P-frame and asked
+// for another IDR, which met the same fate: bytes flowing, nothing rendered — a
+// black screen at 4K while 1080p (~50-shard keyframes) worked. Diagnosed
+// 2026-08-17 against a real 4K host.
+//
+// "Received a shard since the last check" separates the two cases without a
+// clock and without delaying recovery: a frame whose shards were genuinely lost
+// goes quiet immediately, so it is still abandoned on the same completion it
+// always was, keeping the loss report (and the IDR it asks for) prompt.
+
 /// How many most-recently-completed frame ids we remember, purely to reject a
 /// late duplicate shard of an already-delivered frame without re-emitting it.
 /// Must stay well under `u16::MAX / 2` so wrap-aware distance math (used to
@@ -96,6 +115,10 @@ struct FrameBucket {
     r: u16,
     frame_len: u32,
     shards: Vec<MediaShard>,
+    /// Whether this bucket took a shard since the last staleness check — how a
+    /// bucket that is still filling is told apart from one whose shards stopped
+    /// arriving (see `abandon_stale`).
+    took_shard_since_check: bool,
 }
 
 impl FrameReassembler {
@@ -192,10 +215,15 @@ impl FrameReassembler {
     fn abandon_stale(&mut self, latest: u16) {
         let stale: Vec<u16> = self
             .buckets
-            .keys()
-            .copied()
-            .filter(|id| wrap_distance(latest, *id) >= STALE_THRESHOLD)
+            .iter()
+            .filter(|(id, bucket)| {
+                wrap_distance(latest, **id) >= STALE_THRESHOLD && !bucket.took_shard_since_check
+            })
+            .map(|(id, _)| *id)
             .collect();
+        for bucket in self.buckets.values_mut() {
+            bucket.took_shard_since_check = false;
+        }
         for id in stale {
             self.buckets.remove(&id);
             self.stats.frames_abandoned += 1;
@@ -284,6 +312,11 @@ impl FrameReassembler {
             r: shard.header.r,
             frame_len: shard.header.frame_len,
             shards: Vec::new(),
+            // Starts unset: a frame that receives one shard and then nothing is
+            // genuinely lost and must still be abandoned on the next check, as
+            // before. A large frame flips this the moment its second shard
+            // lands, which is what protects it while it is still filling.
+            took_shard_since_check: false,
         });
 
         if bucket.k != shard.header.k
@@ -302,7 +335,12 @@ impl FrameReassembler {
         {
             return Ok(None);
         }
+        // Only shards *after* the first count as "still filling" — see the
+        // flag's initialiser for why a one-shard-then-silence frame must stay
+        // abandonable on the very next check.
+        let was_filling = !bucket.shards.is_empty();
         bucket.shards.push(shard);
+        bucket.took_shard_since_check |= was_filling;
 
         let need = usize::from(bucket.k);
         if bucket.shards.len() < need {
@@ -494,6 +532,81 @@ mod tests {
 
         assert!(asm.buckets.len() <= MAX_INFLIGHT_FRAMES);
         assert!(asm.stats().frames_abandoned > 0);
+    }
+
+    /// A big keyframe still taking shards must survive newer frames completing
+    /// past it. This is the 4K black screen of 2026-08-17: a ~400-shard
+    /// keyframe was abandoned mid-fill because four tiny duplicate frames
+    /// (120fps target) completed while it was still arriving, so the client
+    /// never got a reference frame and rendered nothing at all.
+    #[test]
+    fn actively_filling_bucket_survives_newer_completions() {
+        let mut asm = FrameReassembler::default();
+        let mtu = 1300;
+
+        // A large keyframe: many shards, delivered a few at a time.
+        let keyframe = vec![7u8; 200_000];
+        let key_shards = encode_video_frame(0, &keyframe, true, 0, mtu).unwrap();
+        assert!(key_shards.len() > STALE_THRESHOLD as usize * 4);
+        for shard in key_shards.iter().take(3) {
+            assert!(push(&mut asm, shard).is_none());
+        }
+
+        // Newer single-shard frames complete instantly, running `latest` well
+        // past the keyframe's id (the duplicate-frame cadence at high fps).
+        for id in 1..=(STALE_THRESHOLD as u16 + 3) {
+            let small = vec![id as u8; 200];
+            let shards = encode_video_frame(id, &small, false, 0, mtu).unwrap();
+            assert!(push(&mut asm, &shards[0]).is_some(), "frame {id} should complete");
+            // Keep the keyframe visibly active between completions.
+            let idx = 3 + id as usize;
+            if idx < key_shards.len() {
+                assert!(push(&mut asm, &key_shards[idx]).is_none());
+            }
+        }
+
+        assert!(
+            asm.buckets.contains_key(&0),
+            "keyframe bucket was abandoned while still receiving shards"
+        );
+
+        // Delivering the rest still completes it.
+        let mut completed = None;
+        for shard in key_shards.iter().skip(1) {
+            if let Some((id, frame)) = push(&mut asm, shard) {
+                completed = Some((id, frame));
+                break;
+            }
+        }
+        let (id, frame) = completed.expect("keyframe must complete once its shards arrive");
+        assert_eq!(id, 0);
+        assert_eq!(frame, keyframe);
+    }
+
+    /// The activity rule must not keep genuinely lost frames forever: a bucket
+    /// whose shards stopped arriving is still abandoned on the same completion
+    /// as before, so the loss report asking for a fresh keyframe stays prompt.
+    #[test]
+    fn quiet_bucket_behind_latest_is_still_abandoned() {
+        let mut asm = FrameReassembler::default();
+        let mtu = 1300;
+
+        let lost = vec![1u8; 4000]; // needs several shards; only one ever arrives
+        let lost_shards = encode_video_frame(0, &lost, false, 0, mtu).unwrap();
+        assert!(push(&mut asm, &lost_shards[0]).is_none());
+
+        for id in 1..=(STALE_THRESHOLD as u16) {
+            let small = vec![id as u8; 200];
+            let shards = encode_video_frame(id, &small, false, 0, mtu).unwrap();
+            push(&mut asm, &shards[0]);
+        }
+
+        assert!(
+            !asm.buckets.contains_key(&0),
+            "a frame that stopped receiving shards must still be abandoned"
+        );
+        assert!(asm.stats().frames_abandoned > 0);
+        assert!(asm.take_loss_report().is_some(), "loss must still be reported");
     }
 
     /// RFI (b): losing frames before anything has ever completed leaves no

@@ -831,6 +831,9 @@ async fn desktop_stream_loop(
     // the persistent purple-smear corruption on the macOS viewer, on a
     // bitstream a reference decoder replayed bit-clean.
     let mut awaiting_keyframe = false;
+    let mut last_stats_log = std::time::Instant::now();
+    let mut frames_fed: u64 = 0;
+    let mut frames_skipped: u64 = 0;
     loop {
         let first =
             match tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram()).await
@@ -892,6 +895,28 @@ async fn desktop_stream_loop(
         // backlog is the point where skipping starts beating decoding.
         let behind_threshold = (u32::from(session.fps) / 4).max(10);
         let behind = completions.len() as u32 > behind_threshold;
+        // Periodic liveness stats. A client that receives bytes but renders
+        // nothing (4K black screen, 2026-08-17) is indistinguishable from a
+        // healthy one without these: `frames_abandoned` climbing while
+        // `frames_complete` stays flat means shards are arriving but buckets
+        // are being dropped before they fill (see `STALE_THRESHOLD`).
+        if last_stats_log.elapsed() >= Duration::from_secs(2) {
+            last_stats_log = std::time::Instant::now();
+            let s = asm.stats();
+            // `eprintln!`, not `log::info!`: nothing installs a `log` sink on
+            // desktop, so every Rust-side client log line was invisible — which
+            // is a large part of why the 4K black screen took so long to pin
+            // down. stderr is captured for both the app bundle and `flutter run`.
+            eprintln!(
+                "desktop stream: {} complete / {} abandoned / {} shards, fed {} skipped {}, awaiting_keyframe={}",
+                s.frames_complete,
+                s.frames_abandoned,
+                s.shards_received,
+                frames_fed,
+                frames_skipped,
+                awaiting_keyframe
+            );
+        }
         // Skip-mode for THIS batch: entered by a backlog or a still-armed
         // `awaiting_keyframe`, and — critically — *exited by the first
         // keyframe in the batch*, feeding everything after it. The previous
@@ -920,8 +945,10 @@ async fn desktop_stream_loop(
                 awaiting_keyframe = false;
             } else if resync {
                 awaiting_keyframe = true;
+                frames_skipped += 1;
                 continue;
             }
+            frames_fed += 1;
             // "Rendered" here means handed to the platform decoder — the
             // closest observable point on desktop, where decode happens in
             // the native layer past this crate.
