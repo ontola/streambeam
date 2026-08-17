@@ -591,22 +591,27 @@ impl Pipeline {
                 if self.consecutive_access_lost <= 3 {
                     crate::logging::log(&format!("duplication access lost, recreating: {e}"));
                 } else if self.consecutive_access_lost == 4 {
-                    // Recreating hasn't helped 3 times in a row — this isn't
-                    // a transient loss anymore. The two conditions that look
-                    // exactly like this and that recreating can't fix: the
-                    // display is powered off (idle timeout) or the session
-                    // is locked. Say so once, then back off instead of
-                    // spamming host.log every ~33ms indefinitely.
+                    // Recreating hasn't helped 3 times in a row — this isn't a
+                    // transient loss anymore. Naming only the locked/display-off
+                    // pair here actively misled a debugging session (2026-08-17:
+                    // launching a game produced exactly this, on an unlocked box
+                    // with the display on), so list what really causes it. Then
+                    // back off instead of spamming host.log every ~33ms.
                     crate::logging::log(&format!(
-                        "duplication access lost, {} consecutive failures — Desktop \
-                         Duplication doesn't work while the display is off or the \
-                         session is locked; will keep retrying quietly every 2s \
-                         until it recovers ({e})",
+                        "duplication access lost, {} consecutive failures — causes, \
+                         most→least likely: a full-screen app took exclusive \
+                         presentation (game in exclusive fullscreen / independent \
+                         flip), the display changed mode or SDR↔HDR, the session is \
+                         locked, or the display is powered off. Only the last two are \
+                         about the session; a game can do this with the box wide \
+                         awake. Will keep retrying quietly every 2s until it \
+                         recovers ({e})",
                         self.consecutive_access_lost
                     ));
                 } else if self.consecutive_access_lost % 60 == 0 {
                     crate::logging::log(&format!(
                         "duplication access lost, still failing after {} attempts — \
+                         a full-screen app may hold exclusive presentation; also \
                          check the display is on and the session unlocked",
                         self.consecutive_access_lost
                     ));

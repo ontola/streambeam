@@ -122,6 +122,12 @@ final streamBeamMessengerKey = GlobalKey<ScaffoldMessengerState>();
 void showErrorToast(String message) {
   final text = message.trim();
   if (text.isEmpty) return;
+  // Log before attempting any UI. The toast is best-effort presentation and it
+  // has already destroyed evidence once: when a stream error arrives while the
+  // player screen is being torn down, `showSnackBar` asserts
+  // ('_scaffolds.isNotEmpty') and the assertion replaces the only copy of the
+  // real error, leaving "the stream ended" with no reason anywhere.
+  debugPrint('StreamBeam error: $text');
   final messenger = streamBeamMessengerKey.currentState;
   if (messenger == null) {
     WidgetsBinding.instance.addPostFrameCallback((_) => showErrorToast(text));
@@ -131,29 +137,50 @@ void showErrorToast(String message) {
   final colors = context == null
       ? ColorScheme.fromSeed(seedColor: Colors.indigo)
       : Theme.of(context).colorScheme;
-  messenger
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 8),
-        backgroundColor: colors.errorContainer,
-        showCloseIcon: true,
-        closeIconColor: colors.onErrorContainer,
-        content: Row(
-          children: [
-            Icon(Icons.error_outline, color: colors.onErrorContainer),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                text,
-                style: TextStyle(color: colors.onErrorContainer),
+  try {
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 8),
+          backgroundColor: colors.errorContainer,
+          showCloseIcon: true,
+          closeIconColor: colors.onErrorContainer,
+          content: Row(
+            children: [
+              Icon(Icons.error_outline, color: colors.onErrorContainer),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  text,
+                  style: TextStyle(color: colors.onErrorContainer),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
+      );
+  } catch (_) {
+    // No Scaffold is mounted to present into (mid-teardown). Retry once the
+    // next frame has built one; the message is already logged either way.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final retryMessenger = streamBeamMessengerKey.currentState;
+      if (retryMessenger == null) return;
+      try {
+        retryMessenger.showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 8),
+            showCloseIcon: true,
+            content: Text(text),
+          ),
+        );
+      } catch (_) {
+        // Still nowhere to show it — the log line above is the record.
+      }
+    });
+  }
 }
 
 Future<void> _initTray() async {
