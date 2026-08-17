@@ -1858,10 +1858,22 @@ class _HostListEntry {
     _ => Icons.computer,
   };
 
+  /// The one address worth showing. Hosts advertise several (IPv4 plus a
+  /// couple of IPv6 temporaries), and listing them all turned the tile into
+  /// three lines of noise that also read as if the port belonged to the last
+  /// IPv6 — the port is appended once, after the whole joined list.
+  /// IPv4 is preferred because it's the one a human can recognise.
+  String get preferredAddr {
+    if (addrs.isEmpty) return '';
+    return addrs.firstWhere((a) => !a.contains(':'), orElse: () => addrs.first);
+  }
+
   String get addressLabel {
-    if (addrs.isEmpty) return online ? 'On LAN' : 'Not on LAN';
-    final ips = addrs.join(', ');
-    return online ? '$ips:$port' : 'Last seen at $ips:$port';
+    final addr = preferredAddr;
+    if (addr.isEmpty) return online ? 'On LAN' : 'Not on LAN';
+    // Bracket IPv6 so `addr:port` isn't ambiguous with the address's own colons.
+    final endpoint = addr.contains(':') ? '[$addr]:$port' : '$addr:$port';
+    return online ? endpoint : 'Last seen at $endpoint';
   }
 }
 
