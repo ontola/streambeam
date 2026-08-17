@@ -136,6 +136,31 @@ impl Codec {
 const NVENC_DEVICE_TYPE_DIRECTX: u32 = 0x0;
 const NVENC_INPUT_RESOURCE_TYPE_DIRECTX: u32 = 0x0;
 const NVENC_BUFFER_FORMAT_ARGB: u32 = 0x01000000; // matches DXGI_FORMAT_B8G8R8A8_UNORM's byte order
+/// 10-bit packed A2B10G10R10 — matches `DXGI_FORMAT_R10G10B10A2_UNORM`'s
+/// channel order (R in the low bits), the HDR10 passthrough render target.
+/// Value from nvEncodeAPI.h 13.1 (`NV_ENC_BUFFER_FORMAT_ABGR10`).
+const NVENC_BUFFER_FORMAT_ABGR10: u32 = 0x20000000;
+
+/// `NV_ENC_BIT_DEPTH_10`.
+const NVENC_BIT_DEPTH_10: u32 = 10;
+/// H.273 / ISO-IEC 23091-4 code points for HDR10, as NVENC's VUI enums.
+const NVENC_VUI_COLOR_PRIMARIES_BT2020: u32 = 9;
+const NVENC_VUI_TRANSFER_SMPTE2084: u32 = 16;
+const NVENC_VUI_MATRIX_BT2020_NCL: u32 = 9;
+
+/// `u32` indices into `NV_ENC_CONFIG_AV1`, verified by compiling
+/// nv-codec-headers 13.1 (the version these bindings target) and printing
+/// `offsetof` — the same cross-checking discipline the `idrPeriod` and
+/// `repeatSeqHdr` offsets below were established with, and `idrPeriod` coming
+/// out at index 5 confirms the method agrees with what was proven in the field.
+mod av1_cfg {
+    pub const COLOR_PRIMARIES: usize = 17;
+    pub const TRANSFER_CHARACTERISTICS: usize = 18;
+    pub const MATRIX_COEFFICIENTS: usize = 19;
+    pub const COLOR_RANGE: usize = 20;
+    pub const OUTPUT_BIT_DEPTH: usize = 28;
+    pub const INPUT_BIT_DEPTH: usize = 29;
+}
 const NVENC_BUFFER_USAGE_IMAGE: u32 = 0x0;
 const NVENC_TUNING_INFO_ULTRA_LOW_LATENCY: u32 = 3;
 const NVENC_PARAMS_RC_MODE_CBR: u32 = 0x02;
@@ -511,6 +536,9 @@ pub struct NvencEncoder {
     fps: u32,
     frame_index: i64,
     codec: Codec,
+    /// HDR10 passthrough: input and output are 10-bit PQ/BT.2020. Fixed for
+    /// the encoder's lifetime — it determines the registered resource's format.
+    hdr10: bool,
 }
 
 // The encoder handle + function table are just data + a DLL's exported
@@ -529,6 +557,7 @@ unsafe fn build_config(
     codec: Codec,
     fps: u32,
     bitrate_bps: u32,
+    hdr10: bool,
 ) -> Result<Config, String> {
     let mut preset_uninit: MaybeUninit<PresetConfig> = MaybeUninit::zeroed();
     (*preset_uninit.as_mut_ptr()).version = NV_ENC_PRESET_CONFIG_VER;
@@ -638,7 +667,38 @@ unsafe fn build_config(
         Codec::H264 => 2,
     };
     config.encode_codec_config[idr_period_word] = config.gop_len;
+    if hdr10 {
+        configure_hdr10(&mut config, codec)?;
+    }
     Ok(config)
+}
+
+/// Tell NVENC to encode 10-bit and to *say so* in the bitstream.
+///
+/// The bit depth and the colour description have to travel together: a decoder
+/// handed 10-bit samples with no transfer function will render PQ code values
+/// as if they were plain gamma, which looks like the washed-out picture this
+/// whole feature exists to fix — just in the other direction. Offsets are the
+/// compiler-verified ones in `av1_cfg`.
+///
+/// AV1 only: H.264 High profile is 8-bit, and the 10-bit alternative
+/// (High10) isn't what NVENC's HEVC/AV1 HDR path uses. A caller asking for
+/// HDR10 with H.264 is a bug, not a fallback, so it errors rather than
+/// silently sending SDR that claims to be HDR.
+unsafe fn configure_hdr10(config: &mut Config, codec: Codec) -> Result<(), String> {
+    if codec != Codec::Av1 {
+        return Err(format!("HDR10 passthrough needs AV1, not {codec:?}"));
+    }
+    config.encode_codec_config[av1_cfg::INPUT_BIT_DEPTH] = NVENC_BIT_DEPTH_10;
+    config.encode_codec_config[av1_cfg::OUTPUT_BIT_DEPTH] = NVENC_BIT_DEPTH_10;
+    config.encode_codec_config[av1_cfg::COLOR_PRIMARIES] = NVENC_VUI_COLOR_PRIMARIES_BT2020;
+    config.encode_codec_config[av1_cfg::TRANSFER_CHARACTERISTICS] = NVENC_VUI_TRANSFER_SMPTE2084;
+    config.encode_codec_config[av1_cfg::MATRIX_COEFFICIENTS] = NVENC_VUI_MATRIX_BT2020_NCL;
+    // Studio swing, the HDR10 convention. The SDR AV1 path deliberately
+    // doesn't force full range either (NVENC's AV1 output is limited range and
+    // states so in-band), so this keeps the two consistent.
+    config.encode_codec_config[av1_cfg::COLOR_RANGE] = 0;
+    Ok(())
 }
 
 impl NvencEncoder {
@@ -655,7 +715,16 @@ impl NvencEncoder {
         fps: u32,
         bitrate_bps: u32,
         codec: Codec,
+        // HDR10 passthrough: 10-bit PQ/BT.2020 in and out, fed from a
+        // `DXGI_FORMAT_R10G10B10A2_UNORM` texture. AV1 only — see
+        // `configure_hdr10`.
+        hdr10: bool,
     ) -> Result<Self, String> {
+        let buffer_format = if hdr10 {
+            NVENC_BUFFER_FORMAT_ABGR10
+        } else {
+            NVENC_BUFFER_FORMAT_ARGB
+        };
         let lib = libloading::Library::new(NVENC_DLL)
             .map_err(|e| format!("LoadLibrary {NVENC_DLL}: {e}"))?;
         let create_instance: CreateInstanceFn = *lib
@@ -687,7 +756,7 @@ impl NvencEncoder {
         )?;
         let encoder = NonNull::new(encoder_ptr).ok_or("NvEncOpenEncodeSessionEx: null encoder")?;
 
-        let mut config = build_config(&functions, encoder, codec, fps, bitrate_bps)?;
+        let mut config = build_config(&functions, encoder, codec, fps, bitrate_bps, hdr10)?;
 
         let mut init_params: InitializeParams = std::mem::zeroed();
         init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
@@ -705,7 +774,7 @@ impl NvencEncoder {
         init_params.max_encode_width = width;
         init_params.max_encode_height = height;
         init_params.tuning_info = NVENC_TUNING_INFO_ULTRA_LOW_LATENCY;
-        init_params.buffer_format = NVENC_BUFFER_FORMAT_ARGB;
+        init_params.buffer_format = buffer_format;
         check(
             "NvEncInitializeEncoder",
             (functions.initialize_encoder)(encoder.as_ptr(), &mut init_params),
@@ -727,7 +796,7 @@ impl NvencEncoder {
         register_params.width = width;
         register_params.height = height;
         register_params.resource_to_register = Interface::as_raw(texture);
-        register_params.buffer_format = NVENC_BUFFER_FORMAT_ARGB;
+        register_params.buffer_format = buffer_format;
         register_params.buffer_usage = NVENC_BUFFER_USAGE_IMAGE;
         check(
             "NvEncRegisterResource",
@@ -752,11 +821,21 @@ impl NvencEncoder {
             fps,
             frame_index: 0,
             codec,
+            hdr10,
         })
     }
 
     pub fn codec(&self) -> Codec {
         self.codec
+    }
+
+    /// Whether this session encodes HDR10. A recreate must preserve it — the
+    /// registered texture is 10-bit and the stream already told the client it
+    /// is PQ/BT.2020, so silently dropping to 8-bit SDR mid-session would be
+    /// the same "signalled one thing, sent another" failure the colour work
+    /// exists to avoid.
+    pub fn is_hdr10(&self) -> bool {
+        self.hdr10
     }
 
     /// Live bitrate/IDR reconfigure of this *existing* NVENC session — no
@@ -786,7 +865,8 @@ impl NvencEncoder {
     /// P-frame's size) and is one more opportunity for whatever's still
     /// unverified about this reconfigure path to go wrong.
     pub unsafe fn reconfigure(&mut self, bitrate_bps: u32, force_idr: bool) -> Result<(), String> {
-        let mut config = build_config(&self.functions, self.encoder, self.codec, self.fps, bitrate_bps)?;
+        let mut config =
+            build_config(&self.functions, self.encoder, self.codec, self.fps, bitrate_bps, self.hdr10)?;
 
         let mut init_params: InitializeParams = std::mem::zeroed();
         init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
@@ -804,7 +884,11 @@ impl NvencEncoder {
         init_params.max_encode_width = self.width;
         init_params.max_encode_height = self.height;
         init_params.tuning_info = NVENC_TUNING_INFO_ULTRA_LOW_LATENCY;
-        init_params.buffer_format = NVENC_BUFFER_FORMAT_ARGB;
+        init_params.buffer_format = if self.hdr10 {
+            NVENC_BUFFER_FORMAT_ABGR10
+        } else {
+            NVENC_BUFFER_FORMAT_ARGB
+        };
 
         let mut reconfigure_params: ReconfigureParams = std::mem::zeroed();
         reconfigure_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
@@ -839,7 +923,11 @@ impl NvencEncoder {
         pic_params.input_buffer = map_params.mapped_resource;
         pic_params.output_bitstream = self.bitstream_buffer;
         pic_params.completion_event = self.completion_event.0;
-        pic_params.buffer_format = NVENC_BUFFER_FORMAT_ARGB;
+        pic_params.buffer_format = if self.hdr10 {
+            NVENC_BUFFER_FORMAT_ABGR10
+        } else {
+            NVENC_BUFFER_FORMAT_ARGB
+        };
         pic_params.picture_struct = NVENC_PIC_STRUCT_FRAME;
         pic_params.picture_type = NVENC_PIC_TYPE_AUTOSELECT;
         pic_params.input_time_stamp = self.frame_index as u64;

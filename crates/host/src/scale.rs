@@ -72,6 +72,36 @@ float4 ps_tonemap(VsOut i) : SV_TARGET {
     float3 srgb = lerp(hi, lo, step(lin, 0.0031308));
     return float4(srgb, 1.0);
 }
+
+// HDR10 passthrough (docs/HDR.md): scRGB FP16 -> BT.2020 primaries -> PQ,
+// written to a 10-bit render target for NVENC's ABGR10 input. No tone-map and
+// no clipping at SDR white — the highlights the tone-map above throws away are
+// exactly what makes HDR content look like HDR.
+//
+// scRGB is linear with 1.0 = 80 nits and BT.709 primaries; PQ (SMPTE ST.2084)
+// is defined against an absolute 10000-nit range, hence the 80/10000 scale.
+// The matrix is the standard BT.709 -> BT.2020 conversion (ITU-R BT.2087),
+// applied in linear light, which is the only place it's valid.
+float4 ps_hdr10(VsOut i : TEXCOORD0) : SV_TARGET {
+    float3 lin709 = src.Sample(samp, i.uv).rgb;
+    float3x3 bt709_to_bt2020 = float3x3(
+        0.6274039, 0.3292830, 0.0433131,
+        0.0690973, 0.9195404, 0.0113623,
+        0.0163914, 0.0880132, 0.8955953);
+    float3 lin2020 = mul(bt709_to_bt2020, lin709);
+    // Negative scRGB values encode colours outside BT.709; after the matrix
+    // they should be in gamut, but clamp so PQ never sees a negative.
+    float3 nits = max(lin2020 * (80.0 / 10000.0), 0.0);
+    // ST.2084 forward (linear -> PQ code value).
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    float3 y = pow(nits, m1);
+    float3 pq = pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
+    return float4(pq, 1.0);
+}
 "#;
 
 fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
@@ -115,6 +145,13 @@ pub struct GpuScaler {
     /// HDR->SDR tone-map variant, chosen per frame when the captured texture
     /// is FP16 scRGB (HDR desktop) instead of BGRA8 — see `SHADER_SRC`.
     ps_tonemap: ID3D11PixelShader,
+    /// HDR10 passthrough variant (BT.2020 + PQ, 10-bit target). Selected
+    /// instead of the tone-map when the pipeline was built for passthrough.
+    ps_hdr10: ID3D11PixelShader,
+    /// Whether this scaler renders HDR10 rather than tone-mapped SDR. Fixed at
+    /// build time because it determines the render target's format, which
+    /// can't change under the encoder.
+    hdr10: bool,
     sampler: ID3D11SamplerState,
     render_target: ID3D11RenderTargetView,
     viewport: D3D11_VIEWPORT,
@@ -131,6 +168,7 @@ impl GpuScaler {
         dst_height: u32,
         encode_texture: &ID3D11Texture2D,
         sdr_white_nits: f32,
+        hdr10: bool,
     ) -> Result<Self, String> {
         let src = SHADER_SRC.replace(
             "{SDR_WHITE_NITS}",
@@ -139,6 +177,7 @@ impl GpuScaler {
         let vs_blob = compile_shader(&src, s!("vs_main"), s!("vs_5_0"))?;
         let ps_blob = compile_shader(&src, s!("ps_main"), s!("ps_5_0"))?;
         let ps_tonemap_blob = compile_shader(&src, s!("ps_tonemap"), s!("ps_5_0"))?;
+        let ps_hdr10_blob = compile_shader(&src, s!("ps_hdr10"), s!("ps_5_0"))?;
 
         let mut vs: Option<ID3D11VertexShader> = None;
         ctx(
@@ -182,6 +221,20 @@ impl GpuScaler {
         )?;
         let ps_tonemap = ps_tonemap.ok_or("no tonemap pixel shader")?;
 
+        let mut ps_hdr10: Option<ID3D11PixelShader> = None;
+        ctx(
+            device.CreatePixelShader(
+                std::slice::from_raw_parts(
+                    ps_hdr10_blob.GetBufferPointer() as *const u8,
+                    ps_hdr10_blob.GetBufferSize(),
+                ),
+                None,
+                Some(&mut ps_hdr10),
+            ),
+            "CreatePixelShader hdr10",
+        )?;
+        let ps_hdr10 = ps_hdr10.ok_or("no hdr10 pixel shader")?;
+
         let sampler_desc = D3D11_SAMPLER_DESC {
             Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
             AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -219,6 +272,8 @@ impl GpuScaler {
             vs,
             ps,
             ps_tonemap,
+            ps_hdr10,
+            hdr10,
             sampler,
             render_target,
             viewport,
@@ -234,12 +289,20 @@ impl GpuScaler {
     pub unsafe fn scale(&self, source: &ID3D11Texture2D) -> Result<(), String> {
         let mut src_desc = Default::default();
         source.GetDesc(&mut src_desc);
-        let ps = if src_desc.Format
-            == windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT
-        {
-            &self.ps_tonemap
-        } else {
-            &self.ps
+        let source_is_hdr = src_desc.Format
+            == windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT;
+        let ps = match (self.hdr10, source_is_hdr) {
+            // Passthrough, HDR source: BT.2020 + PQ into the 10-bit target.
+            (true, true) => &self.ps_hdr10,
+            // Passthrough was negotiated but Windows has flipped the desktop
+            // back to SDR. The source is 8-bit sRGB with nothing to preserve,
+            // so a plain blit is right — but it lands in a PQ-signalled 10-bit
+            // stream, which the client will interpret as PQ. Rebuilding the
+            // pipeline on that transition is the real fix (docs/HDR.md stage 2);
+            // until then this at least keeps a picture on screen.
+            (true, false) => &self.ps,
+            (false, true) => &self.ps_tonemap,
+            (false, false) => &self.ps,
         };
 
         let mut srv: Option<ID3D11ShaderResourceView> = None;

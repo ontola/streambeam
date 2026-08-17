@@ -37,7 +37,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_FORMAT_B8G8R8A8_UNORM,
-    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter,
@@ -411,10 +411,24 @@ impl Pipeline {
             }
 
             let bitrate_bps = default_bitrate_bps(width, height, fps);
+            // Whether capture is actually handing us FP16 scRGB. Passthrough
+            // needs the real HDR signal — with `STREAMBEAM_HDR_CAPTURE=dwm`
+            // this is false, because DWM has already flattened it to SDR and
+            // there is nothing left to pass through.
+            let hdr_capture = desktop_is_hdr(&device, true);
             let try_nvenc = |codec: Codec| -> Result<(NvencEncoder, ID3D11Texture2D, Option<GpuScaler>), String> {
-                let tex = create_encode_texture(&device, width, height)?;
+                // HDR10 passthrough (docs/HDR.md): only when asked for, only on
+                // an HDR desktop, and only for AV1. Anything else keeps the
+                // tone-mapped SDR path, which stays the default.
+                let hdr10 = hdr10_requested() && hdr_capture && codec == Codec::Av1;
+                let tex = create_encode_texture(&device, width, height, hdr10)?;
                 let encoder =
-                    NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps, codec)?;
+                    NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps, codec, hdr10)?;
+                if hdr10 {
+                    crate::logging::log(
+                        "HDR10 passthrough: encoding 10-bit PQ / BT.2020, no tone-map",
+                    );
+                }
                 // Always present (not just when downscaling): on an HDR
                 // desktop the captured frame is FP16 scRGB and must go
                 // through the tone-map shader even at 1:1 — a same-size
@@ -427,6 +441,7 @@ impl Pipeline {
                     height,
                     &tex,
                     sdr_white_nits,
+                    hdr10,
                 )?);
                 Ok((encoder, tex, scaler))
             };
@@ -970,6 +985,7 @@ impl Pipeline {
                             self.fps,
                             self.bitrate_bps,
                             encoder.codec(),
+                            encoder.is_hdr10(),
                         ) {
                             Ok(fresh) => {
                                 *encoder = fresh;
@@ -1167,6 +1183,18 @@ unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Str
 /// Checked by *both* capture sources — a toggle that only bound the duplication
 /// path would silently revert to our shader the moment WGC took over, which is
 /// exactly when a game is on screen and you're looking at the colours.
+/// `STREAMBEAM_HDR=passthrough` opts into HDR10 (docs/HDR.md stage 1).
+///
+/// An env var rather than a client capability *for now*: stage 2 replaces this
+/// with real negotiation, and until the client can decode 10-bit PQ this would
+/// hand an 8-bit decoder a stream it will render as garbage. Default off means
+/// nobody gets that by accident.
+fn hdr10_requested() -> bool {
+    std::env::var("STREAMBEAM_HDR")
+        .map(|v| v.eq_ignore_ascii_case("passthrough"))
+        .unwrap_or(false)
+}
+
 fn dwm_tone_map_forced() -> bool {
     std::env::var("STREAMBEAM_HDR_CAPTURE")
         .map(|v| v.eq_ignore_ascii_case("dwm"))
@@ -1372,17 +1400,24 @@ unsafe fn create_staging(
 /// `D3D11_BIND_RENDER_TARGET`, required for `NvEncRegisterResource` to accept
 /// it as a DirectX input resource) — the captured frame is `CopyResource`'d
 /// into this every tick; NVENC reads it directly, no CPU round trip.
+/// `hdr10` selects the 10-bit render target NVENC's `ABGR10` input needs; the
+/// SDR path stays 8-bit BGRA.
 unsafe fn create_encode_texture(
     device: &ID3D11Device,
     width: u32,
     height: u32,
+    hdr10: bool,
 ) -> Result<ID3D11Texture2D, String> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
         MipLevels: 1,
         ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Format: if hdr10 {
+            DXGI_FORMAT_R10G10B10A2_UNORM
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        },
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
