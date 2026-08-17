@@ -68,6 +68,8 @@ NoPictureReason? noPictureReason({
   }
   if (!hasVideo) {
     return (
+      // Unused while `waiting`: the player draws a spinner in the icon's place
+      // rather than an hourglass beside one. Kept so the record stays uniform.
       icon: Icons.hourglass_top,
       title: 'Waiting for video…',
       detail: 'Connected to your PC. The first video frame has not arrived yet.',

@@ -1199,10 +1199,29 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(
-                                      noPicture.icon,
-                                      color: Colors.white70,
-                                      size: 48,
+                                    // While waiting, the spinner *is* the icon
+                                    // — an hourglass next to a spinner says
+                                    // the same thing twice.
+                                    SizedBox(
+                                      width: 48,
+                                      height: 48,
+                                      child: noPicture.waiting
+                                          ? const Center(
+                                              child: SizedBox(
+                                                width: 36,
+                                                height: 36,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 3,
+                                                      color: Colors.white70,
+                                                    ),
+                                              ),
+                                            )
+                                          : Icon(
+                                              noPicture.icon,
+                                              color: Colors.white70,
+                                              size: 48,
+                                            ),
                                     ),
                                     const SizedBox(height: 16),
                                     Text(
@@ -1218,17 +1237,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                       style: theme.textTheme.bodyMedium
                                           ?.copyWith(color: Colors.white60),
                                     ),
-                                    if (noPicture.waiting) ...[
-                                      const SizedBox(height: 20),
-                                      const SizedBox(
-                                        width: 28,
-                                        height: 28,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white54,
-                                        ),
-                                      ),
-                                    ],
                                     // Always offered, including while waiting:
                                     // a spinner with no way out leaves an
                                     // impatient user force-quitting the app.
