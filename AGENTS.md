@@ -14,6 +14,9 @@ Read these before changing anything substantial:
 - [docs/PROTOCOL.md](docs/PROTOCOL.md) — wire format. Must stay in lockstep with `crates/proto`.
 - [docs/WAN.md](docs/WAN.md) — internet/NAT roadmap (iroh candidate). Not v1 scope.
 - [docs/WOL.md](docs/WOL.md) — wake/sleep/hibernate host from phone (Wake-on-LAN + power RPC). Plan, not yet implemented.
+- [docs/DEBUGGING_CLIENT.md](docs/DEBUGGING_CLIENT.md) — **read this before debugging a
+  black/frozen picture.** Diagnosis flow, where the logs actually go, driving the
+  app headlessly via Flutter Driver, fixture capture, and which test layer catches what.
 - [site/README.md](site/README.md) — streambeam.eu deploy + Android App Links checklist.
 
 ## Documentation discipline
