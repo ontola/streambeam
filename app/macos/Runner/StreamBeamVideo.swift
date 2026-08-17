@@ -271,12 +271,17 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             return false
         }
         let dims = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        let objId = UInt(bitPattern: ObjectIdentifier(self).hashValue)
         NSLog(
-            "StreamBeam: decoder ready — %dx%d %@ (hw av1=%@)",
-            dims.width, dims.height, isAV1 ? "av01" : "h264",
-            Self.canDecodeAV1() ? "yes" : "no")
+            "%@",
+            "StreamBeam: decoder ready — \(dims.width)x\(dims.height) "
+                + "\(isAV1 ? "av01" : "h264") (hw av1=\(Self.canDecodeAV1())) "
+                + "[obj \(objId) tex \(textureId)]")
+        session = sess
         decodeFailures = 0
         decodedFrames = 0
+        decodeCalls = 0
+        dropped = 0
         return true
     }
 
@@ -284,6 +289,21 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     /// 120th) so a persistent failure is obvious without flooding the log.
     private var decodeFailures = 0
     private var decodedFrames = 0
+    private var decodeCalls = 0
+    private var dropped = 0
+
+    /// A frame that never reached VideoToolbox at all.
+    fileprivate func noteDropped(_ reason: String) {
+        dropped += 1
+        if dropped <= 3 || dropped % 240 == 0 {
+            let objId = UInt(bitPattern: ObjectIdentifier(self).hashValue)
+            NSLog(
+                "%@",
+                "StreamBeam: frame dropped before decode (\(reason)), "
+                    + "\(dropped) dropped / \(decodeCalls) calls "
+                    + "[obj \(objId) tex \(textureId) disposed=\(disposed)]")
+        }
+    }
 
     fileprivate func noteDecodeFailure(_ status: OSStatus) {
         decodeFailures += 1
@@ -297,8 +317,21 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     /// Decode one access unit — an Annex-B AU for H.264, a raw OBU temporal
     /// unit for AV1 (which needs no repackaging).
     func decode(frame: Data) {
-        guard let session = session, let fd = formatDesc else { return }
-        guard let sample = isAV1 ? frame : Self.annexBToAVCC(frame) else { return }
+        // Every early return below used to be silent, so "the decoder is never
+        // called" and "the decoder rejects every frame" looked identical from
+        // outside — see `noteDecodeFailure`.
+        decodeCalls += 1
+        if decodeCalls == 1 {
+            NSLog("StreamBeam: decode() first call — %d bytes, av1=%@", frame.count, isAV1 ? "yes" : "no")
+        }
+        guard let session = session, let fd = formatDesc else {
+            noteDropped("no session/formatDesc")
+            return
+        }
+        guard let sample = isAV1 ? frame : Self.annexBToAVCC(frame) else {
+            noteDropped("annexBToAVCC returned nil")
+            return
+        }
 
         var blockBuffer: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
@@ -311,7 +344,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             dataLength: sample.count,
             flags: 0,
             blockBufferOut: &blockBuffer)
-        guard status == kCMBlockBufferNoErr, let blockBuffer = blockBuffer else { return }
+        guard status == kCMBlockBufferNoErr, let blockBuffer = blockBuffer else {
+            noteDropped("CMBlockBufferCreateWithMemoryBlock status \(status)")
+            return
+        }
 
         status = sample.withUnsafeBytes { raw in
             CMBlockBufferReplaceDataBytes(
@@ -320,7 +356,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
                 offsetIntoDestination: 0,
                 dataLength: sample.count)
         }
-        guard status == kCMBlockBufferNoErr else { return }
+        guard status == kCMBlockBufferNoErr else {
+            noteDropped("CMBlockBufferReplaceDataBytes status \(status)")
+            return
+        }
 
         var sampleBuffer: CMSampleBuffer?
         var sampleSize = sample.count
@@ -334,7 +373,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             sampleSizeEntryCount: 1,
             sampleSizeArray: &sampleSize,
             sampleBufferOut: &sampleBuffer)
-        guard status == noErr, let sampleBuffer = sampleBuffer else { return }
+        guard status == noErr, let sampleBuffer = sampleBuffer else {
+            noteDropped("CMSampleBufferCreateReady status \(status)")
+            return
+        }
 
         let decodeStatus = VTDecompressionSessionDecodeFrame(
             session,
@@ -381,6 +423,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     }
 
     func dispose() {
+        NSLog("%@", "StreamBeam: dispose() [obj \(UInt(bitPattern: ObjectIdentifier(self).hashValue)) tex \(textureId)]")
         lock.lock()
         disposed = true
         latest = nil

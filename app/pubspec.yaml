@@ -48,6 +48,11 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
+  # Drives the app from tooling (see test_driver/app.dart) — dev only, never
+  # linked into a release build.
+  flutter_driver:
+    sdk: flutter
+
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your
