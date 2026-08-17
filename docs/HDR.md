@@ -1,7 +1,16 @@
 # HDR passthrough (plan)
 
-Status: **planned, not implemented**. Written 2026-08-17 after establishing that
+Status (2026-08-17): **stages 1–3 done and verified; stage 4 outstanding**, so
+nothing reaches a user's screen yet. Written after establishing that
 tone-mapping HDR to SDR cannot look right, no matter whose tone-map does it.
+
+| Stage | State |
+|---|---|
+| 4. EDR display *(prototyped first, as the gating risk)* | **EDR proven reachable** — a native `CAMetalLayer` platform view got 16× headroom granted alongside Flutter's SDR UI. Routing *decoded video* onto that layer is the remaining work. |
+| 1. Host encodes HDR10 | **done** — verified by parsing the sequence header off the wire: `bit_depth=10, primaries=9, transfer=16, matrix=9` at 4K |
+| 2. Negotiation | **done** — `VideoCaps::hdr`, proto v5; host sends passthrough only when the client allows it, the desktop is HDR, and the codec is AV1 |
+| 3. macOS 10-bit decode | **done** — VideoToolbox outputs `x420` with the PQ tag intact, tested against a real 4K 10-bit keyframe |
+| Remaining | plumb the bitstream-derived HDR flag through FRB to `configure(hdr10:)`, and render decoded frames on the EDR layer instead of a Flutter `Texture` |
 
 ## Why
 
@@ -88,5 +97,13 @@ if HDR can't reach the screen, stages 1–3 buy nothing.
 - **Codec support.** AV1 10-bit needs Ada+ on the host and M3+ on the client;
   HEVC Main10 is the wider-compatibility choice but the host's HEVC path is
   unexplored. Falling back to tone-mapped SDR must stay automatic.
-- **`av1c_from_sequence_header` pins 8-bit** (`high_bitdepth=0`) in
-  `crates/core/src/obu.rs` — it must parse the real value instead.
+- ~~`av1c_from_sequence_header` pins 8-bit~~ — **fixed**: `parse_sequence_header`
+  reads bit depth, subsampling and the colour description, and `av1C` uses them.
+  It refuses (falls back to the old constants) when `timing_info_present`, which
+  needs `uvlc` and decoder-model state to skip exactly.
+- **MetalFX upscaling is disabled for HDR** rather than adapted: its textures
+  are `bgra8Unorm`. A 10-bit path needs its own pipeline.
+- **A mid-session SDR↔HDR desktop flip** currently keeps the negotiated
+  passthrough pipeline: the shader falls back to a plain blit, so SDR content
+  lands in a PQ-signalled stream. Rebuilding the pipeline on that transition is
+  the real fix.
