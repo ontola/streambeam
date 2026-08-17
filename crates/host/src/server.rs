@@ -983,13 +983,28 @@ async fn handle_client(
                     // sends `SessionRequest` once, right after connecting,
                     // and changes caps by fully reconnecting (see
                     // `_reconnectForNewCaps` in the Flutter app).
+                    //
+                    // Drop the previous encoder *before* building the new one:
+                    // DXGI allows a single `IDXGIOutputDuplication` per output
+                    // per process, so building first made `DuplicateOutput1`
+                    // fail with E_INVALIDARG ("The parameter is incorrect")
+                    // while the outgoing encoder still held its duplication.
+                    // The Windows branch treats any capture error as "fall back
+                    // to the bundled test clip", so the *first* session after a
+                    // caps change silently streamed the 640x360 demo clip
+                    // instead of the desktop, and only a second reconnect got
+                    // real capture (diagnosed on Mancave 2026-08-17). The
+                    // previous `stream_video` task has already exited by here —
+                    // `start_streaming` above waits for it — so this drops the
+                    // last Arc and releases the duplication.
+                    let had_previous = cell.take().is_some();
                     let encoder = build_encoder(build_fps, build_dim, wanted_codec)?;
                     let (width, height) = encoder.dimensions();
                     let codec_config = encoder.codec_config();
                     let build_codec = encoder.codec();
                     log!(
                         "encoder {} — {width}x{height} @ {build_fps}fps, {} (requested by {client_name}: {}x{} @ {}fps, av1={}), {} opus packets",
-                        if cell.is_some() { "rebuilt" } else { "ready" },
+                        if had_previous { "rebuilt" } else { "ready" },
                         build_codec.wire_name(),
                         video.max_width,
                         video.max_height,
