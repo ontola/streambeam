@@ -242,8 +242,15 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         ]
         var callback = VTDecompressionOutputCallbackRecord(
             decompressionOutputCallback: { refCon, _, status, _, imageBuffer, _, _ in
-                guard status == noErr, let imageBuffer = imageBuffer, let refCon = refCon else { return }
+                guard let refCon = refCon else { return }
                 let me = Unmanaged<StreamBeamVideo>.fromOpaque(refCon).takeUnretainedValue()
+                guard status == noErr, let imageBuffer = imageBuffer else {
+                    // Silently dropping these is why a decoder that fails on
+                    // every frame looks identical to one that works: the app
+                    // reports "Streaming…" over a black texture forever.
+                    me.noteDecodeFailure(status)
+                    return
+                }
                 me.onDecoded(imageBuffer)
             },
             decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque())
@@ -256,9 +263,35 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             imageBufferAttributes: attrs as CFDictionary,
             outputCallback: &callback,
             decompressionSessionOut: &sess)
-        guard s == noErr, let sess = sess else { return false }
-        session = sess
+        guard s == noErr, let sess = sess else {
+            let dims = CMVideoFormatDescriptionGetDimensions(formatDescription)
+            NSLog(
+                "StreamBeam: VTDecompressionSessionCreate failed (status %d) for %dx%d %@",
+                s, dims.width, dims.height, isAV1 ? "av01" : "h264")
+            return false
+        }
+        let dims = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        NSLog(
+            "StreamBeam: decoder ready — %dx%d %@ (hw av1=%@)",
+            dims.width, dims.height, isAV1 ? "av01" : "h264",
+            Self.canDecodeAV1() ? "yes" : "no")
+        decodeFailures = 0
+        decodedFrames = 0
         return true
+    }
+
+    /// Decode-error bookkeeping — logged sparsely (first few, then every
+    /// 120th) so a persistent failure is obvious without flooding the log.
+    private var decodeFailures = 0
+    private var decodedFrames = 0
+
+    fileprivate func noteDecodeFailure(_ status: OSStatus) {
+        decodeFailures += 1
+        if decodeFailures <= 3 || decodeFailures % 120 == 0 {
+            NSLog(
+                "StreamBeam: decode failed (status %d), %d failures / %d decoded",
+                status, decodeFailures, decodedFrames)
+        }
     }
 
     /// Decode one access unit — an Annex-B AU for H.264, a raw OBU temporal
@@ -303,17 +336,28 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             sampleBufferOut: &sampleBuffer)
         guard status == noErr, let sampleBuffer = sampleBuffer else { return }
 
-        VTDecompressionSessionDecodeFrame(
+        let decodeStatus = VTDecompressionSessionDecodeFrame(
             session,
             sampleBuffer: sampleBuffer,
             flags: [._EnableAsynchronousDecompression],
             frameRefcon: nil,
             infoFlagsOut: nil)
+        if decodeStatus != noErr {
+            // Submission itself failed (bad parameter, session gone) — distinct
+            // from the async per-frame failures the output callback reports.
+            noteDecodeFailure(decodeStatus)
+        }
     }
 
     private func onDecoded(_ imageBuffer: CVImageBuffer) {
         // Runs on VideoToolbox's decode callback thread, so the (short) GPU
         // wait inside the upscaler never blocks the UI or decode submission.
+        decodedFrames += 1
+        if decodedFrames == 1 {
+            NSLog(
+                "StreamBeam: first frame decoded — %dx%d",
+                CVPixelBufferGetWidth(imageBuffer), CVPixelBufferGetHeight(imageBuffer))
+        }
         var frame = imageBuffer
         lock.lock()
         let upscale = wantUpscale
