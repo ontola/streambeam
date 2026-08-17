@@ -61,6 +61,13 @@ struct Opt {
     #[arg(long)]
     dump: Option<PathBuf>,
 
+    /// Write the negotiated `codec_config` (Annex-B SPS/PPS for H.264, the
+    /// `av1C` record for AV1) here, and the first keyframe to
+    /// `<path>.keyframe`. Produces the fixture pair a platform-decoder test
+    /// needs — see app/macos/RunnerTests.
+    #[arg(long)]
+    dump_fixture: Option<PathBuf>,
+
     /// Advertise AV1 decode support in `VideoCaps` — for manually verifying
     /// the host actually switches to (and successfully initializes) its AV1
     /// NVENC path, independent of any client that can actually decode AV1.
@@ -143,6 +150,17 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
         None => None,
     };
 
+    if let Some(path) = &opt.dump_fixture {
+        match &session.codec_config {
+            Some(cfg) => {
+                std::fs::write(path, cfg)?;
+                println!("fixture: wrote {} byte codec_config to {}", cfg.len(), path.display());
+            }
+            None => println!("fixture: host sent no codec_config"),
+        }
+    }
+    let mut fixture_keyframe_written = false;
+
     let mut asm = FrameReassembler::default();
     let mut loss = loss::LossInjector::new(opt.drop, opt.reorder);
     let target = opt.frames;
@@ -192,6 +210,19 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
                 if let Some(f) = dump_file.as_mut() {
                     use std::io::Write;
                     f.write_all(&frame)?;
+                }
+
+                if let (Some(path), false) = (&opt.dump_fixture, fixture_keyframe_written) {
+                    if MediaHeader::decode(&datagram)?.is_keyframe() {
+                        let kf = path.with_extension("keyframe");
+                        std::fs::write(&kf, &frame)?;
+                        println!(
+                            "fixture: wrote {} byte keyframe to {}",
+                            frame.len(),
+                            kf.display()
+                        );
+                        fixture_keyframe_written = true;
+                    }
                 }
 
                 if let Some(catalog) = reference.as_ref() {
