@@ -68,6 +68,18 @@ struct Opt {
     /// the H.264 bundled clip, not whatever the host encodes as AV1).
     #[arg(long)]
     av1: bool,
+
+    /// Override the advertised `VideoCaps` resolution/fps instead of the
+    /// 1920x1080@60 fallback — the only way to make a real host build a 4K
+    /// encoder from the CLI, since it sizes the encode from client caps.
+    #[arg(long)]
+    width: Option<u16>,
+
+    #[arg(long)]
+    height: Option<u16>,
+
+    #[arg(long)]
+    fps: Option<u8>,
 }
 
 #[tokio::main]
@@ -305,6 +317,15 @@ fn client_identity_path(dir: &Path) -> PathBuf {
 fn requested_video_caps(opt: &Opt) -> streambeam_proto::control::VideoCaps {
     let mut caps = fallback_video_caps();
     caps.av1 = opt.av1;
+    if let Some(w) = opt.width {
+        caps.max_width = w;
+    }
+    if let Some(h) = opt.height {
+        caps.max_height = h;
+    }
+    if let Some(fps) = opt.fps {
+        caps.max_fps = fps;
+    }
     caps
 }
 
