@@ -8,6 +8,27 @@ use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
 
 use crate::store::{client_identity_path, saved_host_path};
 
+/// Per-platform AV1 access-unit shaping before handing a frame to the native
+/// decoder.
+///
+/// NVENC repeats frame headers inside a temporal unit, which Android's
+/// MediaCodec chokes on — hence the stripping. **VideoToolbox is the opposite**:
+/// given the stripped form it rejects every single frame with `-12909`
+/// (`kVTVideoDecoderBadDataErr`), so macOS must get the bitstream exactly as the
+/// host sent it. Measured both ways on a live 4K AV1 stream 2026-08-17: stripped
+/// → 0 frames decoded, unmodified → decodes at 3840x2160 with no errors.
+/// Windows keeps the old behaviour, which is what its Media Foundation decoder
+/// was verified against.
+#[cfg(target_os = "macos")]
+fn av1_for_platform_decoder(frame: Vec<u8>) -> Vec<u8> {
+    frame
+}
+
+#[cfg(not(target_os = "macos"))]
+fn av1_for_platform_decoder(frame: Vec<u8>) -> Vec<u8> {
+    streambeam_core::av1_access_unit_without_redundant_headers(&frame)
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn playback_frames_rendered() -> u64 {
     crate::playback::frames_rendered()
@@ -973,7 +994,7 @@ async fn desktop_stream_loop(
             // Same per-frame cleanup as the Android AV1 path — some decoders
             // choke on the redundant frame headers NVENC emits.
             let data = if is_av1 {
-                streambeam_core::av1_access_unit_without_redundant_headers(&frame)
+                av1_for_platform_decoder(frame)
             } else {
                 frame
             };
