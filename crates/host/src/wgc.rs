@@ -195,6 +195,8 @@ mod imp {
                 texture,
                 _frame: frame,
                 resized,
+                content_width: content.Width,
+                content_height: content.Height,
             }))
         }
 
@@ -230,6 +232,8 @@ mod imp {
         /// The frame's content size no longer matches the pool — the caller
         /// should `resize` before relying on subsequent frames.
         pub resized: bool,
+        pub content_width: i32,
+        pub content_height: i32,
     }
 
     impl Frame {

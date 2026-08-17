@@ -34,6 +34,8 @@ mod scale;
 pub mod server;
 #[cfg(windows)]
 mod viiper_server;
+#[cfg(windows)]
+mod wgc;
 
 pub use config::{build_host_config, default_host_name};
 pub use encode::{EncodeError, EncodedFrame, VideoEncoder};

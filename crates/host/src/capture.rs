@@ -729,13 +729,17 @@ impl Pipeline {
     /// Capture via the WGC fallback. Mirrors the duplication path's contract:
     /// `Ok(())` with nothing new means "re-encode the previous frame".
     unsafe fn capture_frame_wgc(&mut self) -> Result<(), String> {
-        let (texture, resized) = {
+        let (texture, resized, content) = {
             let wgc = match self.wgc.as_mut() {
                 Some(wgc) => wgc,
                 None => return Ok(()),
             };
             match wgc.try_next_frame() {
-                Ok(Some(frame)) => (frame.texture().clone(), frame.resized),
+                Ok(Some(frame)) => (
+                    frame.texture().clone(),
+                    frame.resized,
+                    (frame.content_width, frame.content_height),
+                ),
                 Ok(None) => {
                     // No new frame this tick — same as duplication's timeout.
                     self.stat_timeout += 1;
@@ -756,12 +760,22 @@ impl Pipeline {
         };
 
         self.stat_acquired += 1;
+        let result = self.consume_texture(&texture);
+        // Rebuild *after* consuming: this frame is still the old pool size, so
+        // it's the last usable one at that geometry. Same limitation the
+        // duplication path has on a mode change — the encoder keeps its
+        // original dimensions and the scaler resamples; without a scaler
+        // (capture size == encode size) a changed desktop resolution needs a
+        // full pipeline rebuild, which `server.rs` does on the next session.
         if resized {
-            crate::logging::log(
-                "WGC: content size changed; rebuilding pool on the next mode query",
-            );
+            if let Some(wgc) = self.wgc.as_mut() {
+                let (w, h) = content;
+                if let Err(e) = unsafe { wgc.resize(w, h) } {
+                    crate::logging::log(&format!("WGC: pool rebuild failed ({e})"));
+                }
+            }
         }
-        self.consume_texture(&texture)
+        result
     }
 
     /// Try to replace a blind duplication with WGC. Returns whether the
