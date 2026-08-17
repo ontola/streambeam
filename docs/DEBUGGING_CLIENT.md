@@ -200,6 +200,15 @@ Windows-native cargo lives under `C:\Users\joepm\.cargo` (Windows user is
 `joepm`); build with `CARGO_TARGET_DIR=C:\Users\joepm\streambeam-target` and a
 UNC `--manifest-path`. Three things cannot be done over SSH without elevation at
 the machine: unlocking the session (`tscon`), killing the SYSTEM-spawned host,
-and adding the firewall rule. And **Desktop Duplication cannot capture a locked
+and adding the firewall rule. On the second one, *both* routes are denied — the
+worker (`Stop-Process`: "Access is denied") and the service that respawns it
+(`Stop-Service StreamBeamHost`: "Cannot open StreamBeamHost service on computer
+'.'"). Do it at the machine in an elevated shell, or use the host app's
+secure-desktop toggle, which shells out to `streambeam-svc disable`.
+
+Note the service and a hand-started dev host both advertise over mDNS from the
+same data dir, so they share one `host_identity.pkcs8` — one identity on two
+ports, which shows up as two identically-named tiles in the client's device
+list. Not a discovery bug; kill one host and it resolves. And **Desktop Duplication cannot capture a locked
 session** — a locked host degrades to ~0.5fps of stale frames, which reads as a
 black screen; the host log says so explicitly.
