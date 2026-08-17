@@ -341,8 +341,14 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
         let codec = (args?["codec"] as? String) ?? "h264"
         let width = Int32((args?["width"] as? Int) ?? 0)
         let height = Int32((args?["height"] as? Int) ?? 0)
+        // Dart sends this; not reading it meant the decoder ran in SDR while
+        // the UI had already switched to the EDR view, so frames were decoded
+        // and then routed nowhere — a black picture from a one-line omission.
+        let hdr10 = (args?["hdr10"] as? Bool) ?? false
         let v = StreamBeamVideo(registry: registrar.textures)
-        if v.configure(codecConfig: config, codec: codec, width: width, height: height) {
+        if v.configure(
+          codecConfig: config, codec: codec, width: width, height: height, hdr10: hdr10)
+        {
           self.video?.dispose()
           self.video = v
           // Idempotent: a mid-session reconfigure keeps the engine running.
