@@ -113,6 +113,56 @@ class StreamBeamVideoDecodeTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(CVPixelBufferGetHeight(pixels), 2160)
   }
 
+  /// The runtime watchdog (`DecodeWatchdog` in Dart) decides whether to tell the
+  /// user "no picture" purely from these counters, so they have to mean what
+  /// they say — a wrong `health` either hides a black screen or invents one.
+  func testHealthReportsASuccessfulDecode() throws {
+    guard StreamBeamVideo.canDecodeAV1() else {
+      throw XCTSkip("no hardware AV1 decode on this machine")
+    }
+    let (video, _) = try decodeFixture(upscaling: false)
+    defer { video.dispose() }
+
+    let health = video.health
+    XCTAssertEqual(health["decodeCalls"] as? Int, 1)
+    XCTAssertEqual(health["decodedFrames"] as? Int, 1)
+    XCTAssertEqual(health["decodeFailures"] as? Int, 0)
+    XCTAssertEqual(health["dropped"] as? Int, 0)
+    XCTAssertEqual(health["lastSetupFailure"] as? String, "")
+  }
+
+  /// Frames the decoder rejects must show up as failures with a status code —
+  /// the shape of the `-12909` bug, and what makes the watchdog's message
+  /// actionable rather than just "no picture".
+  func testHealthReportsRejectedFrames() throws {
+    guard StreamBeamVideo.canDecodeAV1() else {
+      throw XCTSkip("no hardware AV1 decode on this machine")
+    }
+    let video = StreamBeamVideo(registry: StubTextureRegistry())
+    defer { video.dispose() }
+    XCTAssertTrue(
+      video.configure(
+        codecConfig: try fixture("av1_2160p.av1c"), codec: "av01", width: 3840, height: 2160),
+      video.lastSetupFailure ?? "decoder setup failed")
+
+    // A truncated keyframe: structurally an AV1 temporal unit, but the frame
+    // data runs out mid-stream.
+    let truncated = try fixture("av1_2160p.keyframe").prefix(4096)
+    video.decode(frame: Data(truncated))
+
+    var failures = 0
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, failures == 0 {
+      failures = (video.health["decodeFailures"] as? Int) ?? 0
+      if failures == 0 { usleep(20_000) }
+    }
+    XCTAssertGreaterThan(failures, 0, "a truncated frame was silently accepted")
+    XCTAssertNotEqual(
+      video.health["lastDecodeStatus"] as? Int, 0,
+      "a rejection must carry its OSStatus — that code is the whole diagnosis")
+    XCTAssertEqual(video.health["decodedFrames"] as? Int, 0)
+  }
+
   /// A frame arriving is not enough: it must not be a uniformly blank image.
   /// A decoder that emits empty buffers, or a colour-space/format mismatch that
   /// yields flat black, looks identical to success from a frame counter.

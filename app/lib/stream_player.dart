@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'decode_watchdog.dart';
 import 'gamepad_forwarder.dart';
 import 'src/rust/api.dart';
 import 'vk_keys.dart';
@@ -194,6 +195,7 @@ class StreamPlayerScreen extends StatefulWidget {
     this.upscaleSupported = false,
     this.upscaleActive = false,
     this.onToggleUpscale,
+    this.probeDecodeHealth,
     super.key,
   });
 
@@ -233,6 +235,15 @@ class StreamPlayerScreen extends StatefulWidget {
   final bool upscaleSupported;
   final bool upscaleActive;
   final VoidCallback? onToggleUpscale;
+
+  /// Reads the platform decoder's counters, when the platform provides them.
+  ///
+  /// Frames arriving is *not* evidence of a picture: `playbackFramesRendered`
+  /// counts what the wire delivered, so every historical black screen showed
+  /// this screen's "streaming" state over a black texture. Only the decoder can
+  /// tell the difference — see [DecodeWatchdog]. Null on platforms that don't
+  /// implement it yet (Windows, Android), which simply disables the check.
+  final Future<DecodeHealth?> Function()? probeDecodeHealth;
 
   @override
   State<StreamPlayerScreen> createState() => _StreamPlayerScreenState();
@@ -298,6 +309,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _hasVideo = false;
   bool _videoTimedOut = false;
   bool _videoStalled = false;
+  final _decodeWatchdog = DecodeWatchdog();
+
+  /// The watchdog's user-facing message, null while the decode path is healthy
+  /// (or unmonitored).
+  String? _decodeWarning;
+  bool _decodeProbeInFlight = false;
+  final _watchClock = Stopwatch();
   DateTime? _streamStartedAt;
   DateTime? _lastVideoFrameAt;
   BigInt _lastRenderedFrames = BigInt.zero;
@@ -356,6 +374,56 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   bool get _showStatusOverlay =>
       !widget.isStreaming && (widget.statusIsError || widget.status != null);
+
+  /// Why there's no picture, most specific reason first, or null when there is
+  /// one. `waiting` distinguishes "be patient" from "this is broken".
+  ///
+  /// The decode warning comes first *and* is checked even when frames are
+  /// arriving: a working wire with a dead decoder is precisely the case that
+  /// used to render a confident black rectangle with no overlay at all.
+  ({IconData icon, String title, String detail, bool waiting})? get _noPicture {
+    final decode = _decodeWarning;
+    if (decode != null) {
+      return (
+        icon: Icons.broken_image_outlined,
+        title: 'No picture',
+        detail:
+            '$decode The stream is arriving, so this is a decoding problem on '
+            'this device rather than a connection one.',
+        waiting: false,
+      );
+    }
+    if (_videoStalled) {
+      return (
+        icon: Icons.sync_problem_outlined,
+        title: 'Stream stopped responding',
+        detail:
+            'No new video frames arrived for 5 seconds. The other device may '
+            'be asleep or the connection may have closed.',
+        waiting: false,
+      );
+    }
+    if (_videoTimedOut) {
+      return (
+        icon: Icons.videocam_off_outlined,
+        title: 'No video received',
+        detail:
+            'The connection opened, but no video arrived. Check that the other '
+            'device is awake and still sharing its screen.',
+        waiting: false,
+      );
+    }
+    if (!_hasVideo) {
+      return (
+        icon: Icons.hourglass_top,
+        title: 'Waiting for video…',
+        detail:
+            'Connected to your PC. The first video frame has not arrived yet.',
+        waiting: true,
+      );
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -441,6 +509,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _hasVideo = false;
     _videoTimedOut = false;
     _videoStalled = false;
+    _decodeWarning = null;
+    _decodeWatchdog.reset();
+    _watchClock
+      ..reset()
+      ..start();
     _streamStartedAt = DateTime.now();
     _lastVideoFrameAt = _streamStartedAt;
     _lastRenderedFrames = playbackFramesRendered();
@@ -475,7 +548,30 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           now.difference(lastFrame) > const Duration(seconds: 5)) {
         setState(() => _videoStalled = true);
       }
+      unawaited(_pollDecodeHealth());
     });
+  }
+
+  /// Ask the platform decoder whether the frames we forwarded became pixels.
+  /// Silent on any error: a missing `health` implementation must never affect
+  /// playback.
+  Future<void> _pollDecodeHealth() async {
+    final probe = widget.probeDecodeHealth;
+    if (probe == null || _decodeProbeInFlight) return;
+    _decodeProbeInFlight = true;
+    try {
+      final health = await probe();
+      if (!mounted || !widget.isStreaming || health == null) return;
+      _decodeWatchdog.sample(health, _watchClock.elapsed);
+      final message = _decodeWatchdog.message;
+      if (message != _decodeWarning) {
+        setState(() => _decodeWarning = message);
+      }
+    } catch (_) {
+      // Unimplemented on this platform, or the decoder went away mid-call.
+    } finally {
+      _decodeProbeInFlight = false;
+    }
   }
 
   void _endVideoWatch() {
@@ -487,6 +583,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _hasVideo = false;
     _videoTimedOut = false;
     _videoStalled = false;
+    _decodeWarning = null;
+    _decodeWatchdog.reset();
+    _watchClock.stop();
   }
 
   @override
@@ -941,6 +1040,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final noPicture = _noPicture;
 
     return PopScope(
       canPop: false,
@@ -1131,7 +1231,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                               ),
                             ),
                           ),
-                        if (widget.isStreaming && (!_hasVideo || _videoStalled))
+                        if (widget.isStreaming && noPicture != null)
                           ColoredBox(
                             color: Colors.black,
                             child: Center(
@@ -1143,37 +1243,25 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
-                                      _videoStalled
-                                          ? Icons.sync_problem_outlined
-                                          : _videoTimedOut
-                                          ? Icons.videocam_off_outlined
-                                          : Icons.hourglass_top,
+                                      noPicture.icon,
                                       color: Colors.white70,
                                       size: 48,
                                     ),
                                     const SizedBox(height: 16),
                                     Text(
-                                      _videoStalled
-                                          ? 'Stream stopped responding'
-                                          : _videoTimedOut
-                                          ? 'No video received'
-                                          : 'Waiting for video…',
+                                      noPicture.title,
                                       textAlign: TextAlign.center,
                                       style: theme.textTheme.titleMedium
                                           ?.copyWith(color: Colors.white),
                                     ),
                                     const SizedBox(height: 10),
                                     Text(
-                                      _videoStalled
-                                          ? 'No new video frames arrived for 5 seconds. The other device may be asleep or the connection may have closed.'
-                                          : _videoTimedOut
-                                          ? 'The connection opened, but no video arrived. Check that the other device is awake and still sharing its screen.'
-                                          : 'Connected to your PC. The first video frame has not arrived yet.',
+                                      noPicture.detail,
                                       textAlign: TextAlign.center,
                                       style: theme.textTheme.bodyMedium
                                           ?.copyWith(color: Colors.white60),
                                     ),
-                                    if (!_videoTimedOut && !_videoStalled) ...[
+                                    if (noPicture.waiting) ...[
                                       const SizedBox(height: 20),
                                       const SizedBox(
                                         width: 28,
@@ -1183,8 +1271,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                           color: Colors.white54,
                                         ),
                                       ),
-                                    ],
-                                    if (_videoTimedOut || _videoStalled) ...[
+                                    ] else ...[
                                       const SizedBox(height: 20),
                                       FilledButton.icon(
                                         onPressed: _handleStop,

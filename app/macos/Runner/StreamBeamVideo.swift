@@ -132,7 +132,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     /// (codecConfig = Annex-B SPS/PPS) or `"av01"` (codecConfig = `av1C`
     /// record built by the Rust side). Returns success.
     func configure(codecConfig: Data, codec: String, width: Int32, height: Int32) -> Bool {
-        lastSetupFailure = nil
+        withStats { $0.setupFailure = nil }
         if codec == "av01" {
             isAV1 = true
             return configureAV1(av1c: codecConfig, width: width, height: height)
@@ -293,53 +293,90 @@ class StreamBeamVideo: NSObject, FlutterTexture {
                 + "\(isAV1 ? "av01" : "h264") (hw av1=\(Self.canDecodeAV1())) "
                 + "[obj \(objId) tex \(textureId)]")
         session = sess
-        decodeFailures = 0
-        decodedFrames = 0
-        decodeCalls = 0
-        dropped = 0
+        // Counters are per-decoder-session: a reconfigure means a new stream,
+        // and a stale "0 decoded" would make the watchdog cry wolf.
+        withStats { $0 = Stats() }
         return true
     }
 
-    /// Why the last `configure` call returned false, `nil` if it succeeded.
-    ///
-    /// `configure` returning a bare `Bool` was enough to fail a test but not to
-    /// diagnose one: `NSLog` from inside an XCTest host doesn't reach the
-    /// xcresult console, so a setup failure there was unattributable. Callers
-    /// (and the watchdog) can surface this verbatim.
-    private(set) var lastSetupFailure: String?
-
     private func setupFailed(_ reason: String) -> Bool {
-        lastSetupFailure = reason
+        withStats { $0.setupFailure = reason }
         NSLog("%@", "StreamBeam: decoder setup failed — \(reason)")
         return false
     }
 
-    /// Decode-error bookkeeping — logged sparsely (first few, then every
-    /// 120th) so a persistent failure is obvious without flooding the log.
-    private var decodeFailures = 0
-    private var decodedFrames = 0
-    private var decodeCalls = 0
-    private var dropped = 0
+    /// Decode bookkeeping — logged sparsely (first few, then every 120th) so a
+    /// persistent failure is obvious without flooding the log, and exposed to
+    /// Dart as `health` for the runtime watchdog.
+    struct Stats {
+        var decodeCalls = 0
+        var decodedFrames = 0
+        var decodeFailures = 0
+        var dropped = 0
+        var lastDecodeStatus: OSStatus = noErr
+        /// Why the last `configure` failed, `nil` if it succeeded. `configure`
+        /// returning a bare `Bool` was untraceable — and `NSLog` from an
+        /// XCTest host never reaches the xcresult — so the reason is recorded
+        /// rather than only logged.
+        var setupFailure: String?
+    }
+
+    /// Written from VideoToolbox's decode-callback thread and read from the
+    /// platform-channel thread, so it needs its own lock — `lock` is a
+    /// non-recursive NSLock already held across parts of these same paths.
+    private var stats = Stats()
+    private let statsLock = NSLock()
+
+    private func withStats<T>(_ body: (inout Stats) -> T) -> T {
+        statsLock.lock()
+        defer { statsLock.unlock() }
+        return body(&stats)
+    }
+
+    /// Snapshot for the runtime watchdog. "Frames are arriving and nothing is
+    /// decoding" is exactly the black screen, and it is undetectable from the
+    /// Dart side — which can only see the frames it *sent* — without this.
+    var health: [String: Any] {
+        let s = withStats { $0 }
+        return [
+            "decodeCalls": s.decodeCalls,
+            "decodedFrames": s.decodedFrames,
+            "decodeFailures": s.decodeFailures,
+            "dropped": s.dropped,
+            "lastDecodeStatus": Int(s.lastDecodeStatus),
+            "lastSetupFailure": s.setupFailure ?? "",
+        ]
+    }
+
+    /// Why the last `configure` call returned false, `nil` if it succeeded.
+    var lastSetupFailure: String? { withStats { $0.setupFailure } }
 
     /// A frame that never reached VideoToolbox at all.
     fileprivate func noteDropped(_ reason: String) {
-        dropped += 1
-        if dropped <= 3 || dropped % 240 == 0 {
+        let s = withStats {
+            $0.dropped += 1
+            return $0
+        }
+        if s.dropped <= 3 || s.dropped % 240 == 0 {
             let objId = UInt(bitPattern: ObjectIdentifier(self).hashValue)
             NSLog(
                 "%@",
                 "StreamBeam: frame dropped before decode (\(reason)), "
-                    + "\(dropped) dropped / \(decodeCalls) calls "
+                    + "\(s.dropped) dropped / \(s.decodeCalls) calls "
                     + "[obj \(objId) tex \(textureId) disposed=\(disposed)]")
         }
     }
 
     fileprivate func noteDecodeFailure(_ status: OSStatus) {
-        decodeFailures += 1
-        if decodeFailures <= 3 || decodeFailures % 120 == 0 {
+        let s = withStats {
+            $0.decodeFailures += 1
+            $0.lastDecodeStatus = status
+            return $0
+        }
+        if s.decodeFailures <= 3 || s.decodeFailures % 120 == 0 {
             NSLog(
                 "StreamBeam: decode failed (status %d), %d failures / %d decoded",
-                status, decodeFailures, decodedFrames)
+                status, s.decodeFailures, s.decodedFrames)
         }
     }
 
@@ -349,8 +386,11 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         // Every early return below used to be silent, so "the decoder is never
         // called" and "the decoder rejects every frame" looked identical from
         // outside — see `noteDecodeFailure`.
-        decodeCalls += 1
-        if decodeCalls == 1 {
+        let calls = withStats {
+            $0.decodeCalls += 1
+            return $0.decodeCalls
+        }
+        if calls == 1 {
             NSLog("StreamBeam: decode() first call — %d bytes, av1=%@", frame.count, isAV1 ? "yes" : "no")
         }
         guard let session = session, let fd = formatDesc else {
@@ -423,8 +463,11 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     private func onDecoded(_ imageBuffer: CVImageBuffer) {
         // Runs on VideoToolbox's decode callback thread, so the (short) GPU
         // wait inside the upscaler never blocks the UI or decode submission.
-        decodedFrames += 1
-        if decodedFrames == 1 {
+        let decoded = withStats {
+            $0.decodedFrames += 1
+            return $0.decodedFrames
+        }
+        if decoded == 1 {
             NSLog(
                 "StreamBeam: first frame decoded — %dx%d",
                 CVPixelBufferGetWidth(imageBuffer), CVPixelBufferGetHeight(imageBuffer))

@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'beam_page.dart';
+import 'decode_watchdog.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 import 'stream_player.dart';
@@ -1004,6 +1005,14 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     );
   }
 
+  /// Read the native decoder's counters for the player's watchdog. Returns null
+  /// when the platform has no `health` implementation, which disables the check
+  /// rather than breaking playback.
+  Future<DecodeHealth?> _probeDecodeHealth() async {
+    final reply = await _desktopVideoChannel.invokeMethod<dynamic>('health');
+    return DecodeHealth.fromChannel(reply);
+  }
+
   /// Push the MetalFX preference to the native decoder; it answers whether
   /// upscaling is actually running (false on unsupported hardware).
   Future<void> _applyUpscale() async {
@@ -1485,6 +1494,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         upscaleSupported: _upscaleSupported ?? false,
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
+        probeDecodeHealth: _probeDecodeHealth,
         onStop: () => unawaited(_stopDesktopPlayback()),
         streamMode: _streamMode,
         // Same semantics as Android's `_changeStreamMode`/`_commitCustom-

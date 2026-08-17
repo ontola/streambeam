@@ -20,6 +20,15 @@ in two seconds:
 desktop stream: 1733 complete / 0 abandoned / 7817 shards, fed 75 skipped 1658, awaiting_keyframe=true
 ```
 
+Since 2026-08-17 the client also **tells you itself**: `DecodeWatchdog`
+(`app/lib/decode_watchdog.dart`) polls the platform decoder's counters and, if
+frames are being handed to it and nothing comes back for 3s, replaces the black
+rectangle with the failing stage — "the decoder rejected all 400 frames (status
+-12909)". It only fires when frames actually reached the decoder, so a stalled
+host or dead network can't trigger it. If you are debugging a black screen and
+the UI says nothing, that itself narrows things down: either the watchdog is
+unwired on this platform (see open items) or frames never arrived at all.
+
 | Symptom in that line | Meaning |
 |---|---|
 | `complete` flat, `shards` climbing | reassembly never finishes a frame — FEC/loss or a bucket being dropped mid-fill (`reassemble.rs`) |
@@ -160,6 +169,17 @@ Two live traps when running the suite:
 
 - No ffmpeg-level decode assertion in `e2e_stream` yet (would catch undecodable
   bitstreams and literal black output, but *not* platform-decoder rejection).
+- `app/test/widget_test.dart` ("app loads") **fails on main**, unrelated to any
+  of this: it never calls `RustLib.init()`, so `appCapabilities` throws. Fix it
+  or delete it — a permanently red test trains people to ignore the suite.
+- The watchdog is macOS-only so far: Windows and Android have no `health`
+  method, so `probeDecodeHealth` is null there and the check is silently off.
+  It fails safe, but those platforms keep the old blind spot.
+- Running `xcodebuild test` **launches the full app UI** (the test host is the
+  Runner app), which can crash on Flutter's raster thread in Skia
+  (`GrMakeCachedBitmapProxyView`, an SVG/bitmap draw) after the tests pass. The
+  crash report says `streambeam`, so it looks alarming and isn't — check the pid
+  against the test-run pid before chasing it.
 - No **runtime watchdog**. The highest-value remaining item: if bytes are
   arriving and zero frames have decoded for ~3s, say so in the UI and the log.
   Most of these bugs only ever appeared against real hardware, where the user's

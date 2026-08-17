@@ -312,8 +312,11 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
             "height": Int(dims.height),
           ])
         } else {
+          // Report *why*, so the user sees something better than a black
+          // rectangle and a generic failure.
+          let reason = v.lastSetupFailure ?? "decoder setup failed"
           v.dispose()
-          result(FlutterError(code: "configure", message: "decoder setup failed", details: nil))
+          result(FlutterError(code: "configure", message: reason, details: nil))
         }
       case "frame":
         if let data = (args?["data"] as? FlutterStandardTypedData)?.data {
@@ -323,6 +326,10 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       case "setUpscale":
         let enabled = (args?["enabled"] as? Bool) ?? true
         result(self.video?.setUpscaling(enabled) ?? false)
+      case "health":
+        // Decode counters for the watchdog — nil when there's no decoder, which
+        // is itself the answer.
+        result(self.video?.health)
       case "dispose":
         self.video?.dispose()
         self.video = nil
