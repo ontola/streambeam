@@ -90,14 +90,23 @@ Gotchas, all learned the hard way:
 ```bash
 export STREAMBEAM_CLIENT_DATA="$HOME/.streambeam"
 cargo run -p streambeam-devtools --bin devclient -- "sbm1:ignored" --reconnect \
-  --av1 --width 1920 --height 1080 --fps 60 --frames 3 \
-  --dump-fixture app/macos/RunnerTests/Fixtures/av1_1080p.av1c
+  --av1 --width 3840 --height 2160 --fps 60 --frames 3 \
+  --dump-fixture app/macos/RunnerTests/Fixtures/av1_2160p.av1c
 # writes the av1C record + <path>.keyframe
 ```
 
 `--width/--height/--fps` exist because a real host sizes its encoder from client
 caps — it is the only way to ask for 4K from the CLI. `--dump` writes the raw
-bitstream for `ffprobe`/`ffmpeg` replay.
+bitstream for `ffprobe`/`ffmpeg` replay. Note the host may keep an
+already-built encoder at its existing size, so **check what you actually got**
+(`ffprobe`, or the printed byte counts) instead of trusting the flags.
+
+`--dump-fixture` writes **what the platform decoder is handed**, not the wire
+bytes: for AV1 it converts the host's sequence header into an `av1C` record, the
+same conversion `app/rust/src/api/mod.rs` does. It originally dumped the wire
+config, which cost a debugging round — VideoToolbox rejects a bare sequence
+header with `-12910`, so the test failed on the fixture, not the product. A
+fixture that isn't byte-identical to what production passes down tests nothing.
 
 **`ffmpeg` is not a substitute for the platform decoder.** It happily decoded the
 exact AV1 stream that VideoToolbox rejected with `-12909`. Cross-platform replay
@@ -112,6 +121,33 @@ proves the *host* is sane; only the platform decoder proves the *client* is.
 | `app/macos/RunnerTests` | the real VideoToolbox contract: bitstream shaping, session setup | Windows/Android decoders |
 | Real device | everything else | nothing — but it needs the tooling above to be diagnosable |
 
+### Running the macOS decoder tests
+
+Neither `cargo test` nor `flutter test` runs these — they need `xcodebuild`, and
+the scheme only exists in the **workspace** (`-project` shows just "Flutter
+Assemble"):
+
+```bash
+cd app/macos
+xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
+  -destination 'platform=macOS' -only-testing:RunnerTests \
+  2>&1 | grep -vE "ld: warning|was built for newer" > /tmp/sb-test.log
+grep -E "Test case '|\*\* TEST" /tmp/sb-test.log
+```
+
+The `grep -v` matters: ~4,000 lines of `rust_lib_streambeam` deployment-target
+linker warnings bury the result. **Assertion messages don't appear in that
+output at all** — pull them from the xcresult bundle whose path the log prints:
+
+```bash
+xcrun xcresulttool get test-results tests --path <…>.xcresult --compact
+```
+
+`NSLog` from inside the XCTest host doesn't reach it either, which is why
+`configure()` records `lastSetupFailure` (with the `OSStatus`) instead of only
+logging — that's what turned an unattributable false return into
+`VTDecompressionSessionCreate status -12910`.
+
 Two live traps when running the suite:
 
 - **Rebuild the host binary first.** `cargo test -p streambeam-devtools` spawns a
@@ -122,15 +158,6 @@ Two live traps when running the suite:
 
 ## Open items (2026-08-17)
 
-- `app/macos/RunnerTests/StreamBeamVideoDecodeTests` is **committed failing**:
-  `configure()` returns false because `VTDecompressionSessionCreate` fails inside
-  the XCTest host, though `canDecodeAV1()` is true there and the same fixture
-  decodes fine in the running app. Not a product bug — a test-host environment
-  one. Next step: surface the `OSStatus` (the `makeSession` log doesn't reach the
-  xcresult console capture) and probably set the hardware-decoder specification
-  explicitly. It was left failing rather than skipped on purpose: an `XCTSkip`
-  here is how this bug class hid for months. Note `cargo test`/`flutter test` do
-  not run xcodebuild, so this does not redden the normal suite.
 - No ffmpeg-level decode assertion in `e2e_stream` yet (would catch undecodable
   bitstreams and literal black output, but *not* platform-decoder rejection).
 - No **runtime watchdog**. The highest-value remaining item: if bytes are

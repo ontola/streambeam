@@ -153,8 +153,30 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
     if let Some(path) = &opt.dump_fixture {
         match &session.codec_config {
             Some(cfg) => {
-                std::fs::write(path, cfg)?;
-                println!("fixture: wrote {} byte codec_config to {}", cfg.len(), path.display());
+                // Write what the *platform decoder* is handed, not the raw wire
+                // config. For AV1 the real clients turn the host's sequence
+                // header into an ISO-BMFF `av1C` record first (see
+                // app/rust/src/api/mod.rs), and VideoToolbox rejects a bare
+                // sequence header with -12910
+                // (kVTVideoDecoderUnsupportedDataFormatErr). Dumping the wire
+                // bytes produced a fixture no client ever passes to a decoder,
+                // so the decoder test failed on the fixture rather than on the
+                // product.
+                let payload = if session.codec == "av01" {
+                    streambeam_core::av1_extract_sequence_header(cfg)
+                        .as_deref()
+                        .and_then(streambeam_core::av1c_from_sequence_header)
+                        .ok_or("fixture: host AV1 config has no usable sequence header")?
+                } else {
+                    cfg.clone()
+                };
+                std::fs::write(path, &payload)?;
+                println!(
+                    "fixture: wrote {} byte {} to {}",
+                    payload.len(),
+                    if session.codec == "av01" { "av1C record" } else { "codec_config" },
+                    path.display()
+                );
             }
             None => println!("fixture: host sent no codec_config"),
         }

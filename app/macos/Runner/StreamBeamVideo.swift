@@ -132,6 +132,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     /// (codecConfig = Annex-B SPS/PPS) or `"av01"` (codecConfig = `av1C`
     /// record built by the Rust side). Returns success.
     func configure(codecConfig: Data, codec: String, width: Int32, height: Int32) -> Bool {
+        lastSetupFailure = nil
         if codec == "av01" {
             isAV1 = true
             return configureAV1(av1c: codecConfig, width: width, height: height)
@@ -141,7 +142,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     }
 
     private func configureAV1(av1c: Data, width: Int32, height: Int32) -> Bool {
-        guard width > 0, height > 0 else { return false }
+        guard width > 0, height > 0 else {
+            return setupFailed("av01: non-positive dimensions \(width)x\(height)")
+        }
+        guard !av1c.isEmpty else { return setupFailed("av01: empty av1C record") }
         let atoms: [CFString: Any] = ["av1C" as CFString: av1c as CFData]
         let extensions: [CFString: Any] = [
             kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms:
@@ -163,7 +167,11 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             height: height,
             extensions: extensions as CFDictionary,
             formatDescriptionOut: &fd)
-        guard status == noErr, let fd = fd else { return false }
+        guard status == noErr, let fd = fd else {
+            return setupFailed(
+                "av01: CMVideoFormatDescriptionCreate status \(status) "
+                    + "for \(width)x\(height), av1C \(av1c.count) bytes")
+        }
         formatDesc = fd
         return makeSession(formatDescription: fd)
     }
@@ -181,7 +189,11 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             default: break
             }
         }
-        guard let sps = sps, let pps = pps else { return false }
+        guard let sps = sps, let pps = pps else {
+            return setupFailed(
+                "h264: codec config had no SPS/PPS (\(nals.count) NALs, "
+                    + "\(codecConfig.count) bytes)")
+        }
 
         var fd: CMVideoFormatDescription?
         let status = sps.withUnsafeBufferPointer { spsBuf in
@@ -201,7 +213,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
                 }
             }
         }
-        guard status == noErr, let fd = fd else { return false }
+        guard status == noErr, let fd = fd else {
+            return setupFailed(
+                "h264: CMVideoFormatDescriptionCreateFromH264ParameterSets status \(status)")
+        }
 
         // Desktop-capture content is genuinely full-range RGB (true black is
         // 0, not 16) — but NVENC's H.264 output doesn't signal VUI
@@ -265,10 +280,10 @@ class StreamBeamVideo: NSObject, FlutterTexture {
             decompressionSessionOut: &sess)
         guard s == noErr, let sess = sess else {
             let dims = CMVideoFormatDescriptionGetDimensions(formatDescription)
-            NSLog(
-                "StreamBeam: VTDecompressionSessionCreate failed (status %d) for %dx%d %@",
-                s, dims.width, dims.height, isAV1 ? "av01" : "h264")
-            return false
+            return setupFailed(
+                "VTDecompressionSessionCreate status \(s) for "
+                    + "\(dims.width)x\(dims.height) \(isAV1 ? "av01" : "h264") "
+                    + "(hw av1=\(Self.canDecodeAV1()))")
         }
         let dims = CMVideoFormatDescriptionGetDimensions(formatDescription)
         let objId = UInt(bitPattern: ObjectIdentifier(self).hashValue)
@@ -283,6 +298,20 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         decodeCalls = 0
         dropped = 0
         return true
+    }
+
+    /// Why the last `configure` call returned false, `nil` if it succeeded.
+    ///
+    /// `configure` returning a bare `Bool` was enough to fail a test but not to
+    /// diagnose one: `NSLog` from inside an XCTest host doesn't reach the
+    /// xcresult console, so a setup failure there was unattributable. Callers
+    /// (and the watchdog) can surface this verbatim.
+    private(set) var lastSetupFailure: String?
+
+    private func setupFailed(_ reason: String) -> Bool {
+        lastSetupFailure = reason
+        NSLog("%@", "StreamBeam: decoder setup failed — \(reason)")
+        return false
     }
 
     /// Decode-error bookkeeping — logged sparsely (first few, then every
