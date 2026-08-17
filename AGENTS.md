@@ -31,7 +31,10 @@ session memory. Concretely:
 - `cargo test` — everything except `crates/host`'s Windows paths runs on macOS.
 - `cargo check -p streambeam-host` type-checks on macOS too: Windows-only deps
   are `[target.'cfg(windows)'.dependencies]` and capture/encode/inject sit
-  behind traits with mock impls. Real host runtime work needs the Windows box.
+  behind traits with mock impls. Real host runtime work needs the Windows box —
+  reachable now: `ssh mancave.local` lands in **WSL2**, not Win32 (absolute
+  paths for Windows tools; `appendWindowsPath=false`). Build recipe + gotchas
+  in the PROGRESS decisions log, 2026-07-19.
 - Flutter app: `cd app && flutter analyze --no-pub`. After changing
   `app/rust/src/api/`, regenerate bindings with `flutter_rust_bridge_codegen generate`.
 - Visual smoke test (needs ffplay): `cargo run -p streambeam-devtools --bin streamdemo`

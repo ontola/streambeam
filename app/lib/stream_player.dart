@@ -73,16 +73,16 @@ enum StreamMode {
   };
 
   /// Longest-side request ceiling — matches `MAX_CLIENT_ENCODE_DIM` in
-  /// `crates/host/src/server.rs`. Quality/Custom request up to this instead
-  /// of stopping at the *viewer's* display size: the host clamps to its own
+  /// `crates/host/src/server.rs`. Game/Quality/Custom size their request from
+  /// this rather than from the *viewer's* display: the host clamps to its own
   /// native capture resolution, so a 4K host genuinely streams 4K even to a
   /// smaller viewer (the detail pays off on pinch-zoom, TeamViewer-style).
   static const int maxRequestDim = 3840;
 
   /// Apply this mode's caps to the device's real (width, height, fps).
-  /// Latency-focused modes (`game`, `dataSaver`) only ever tighten the
-  /// device's reported size; detail-focused ones (`quality`, `custom`) may
-  /// request *above* it, up to [maxRequestDim] — see its doc.
+  /// `dataSaver` only ever tightens the device's reported size; `game`,
+  /// `quality` and `custom` normalize to [maxRequestDim] instead — see
+  /// `normalizeToRequestCeiling` below.
   /// `custom` ignores the preset logic entirely and uses `customSettings`
   /// instead (required whenever `this == StreamMode.custom`).
   (int, int, int) apply(
@@ -98,12 +98,20 @@ enum StreamMode {
       return (side * maxLongest / longest).round();
     }
 
-    // Scale the device size up (aspect preserved) until the longest side
-    // reaches [maxRequestDim]. The request is a cap, not a promise — the
-    // host never upscales its capture, so a 1080p host still sends 1080p.
-    (int, int) raiseToRequestCeiling(int w, int h) {
+    // Scale the device size (aspect preserved) so its longest side is exactly
+    // [maxRequestDim]. Scaling *down* matters as much as up: the request is
+    // otherwise only as trustworthy as the viewer's self-reported size, and
+    // this Mac double-counted `devicePixelRatio` on a 5K display and asked for
+    // 10240x5760. Since the host clamps every request to its own 3840 ceiling,
+    // every Custom slider position above ~37% then produced a byte-identical
+    // stream — which is exactly what "the % slider does nothing" was
+    // (diagnosed 2026-07-19 from Mancave's host.log). Normalizing first makes
+    // the percentage mean something no matter how the viewer reports itself.
+    // The request stays a cap, not a promise: the host never upscales its
+    // capture, so a 1080p host still sends 1080p.
+    (int, int) normalizeToRequestCeiling(int w, int h) {
       final longest = math.max(w, h);
-      if (longest <= 0 || longest >= maxRequestDim) return (w, h);
+      if (longest <= 0) return (w, h);
       final scale = maxRequestDim / longest;
       return ((w * scale).round(), (h * scale).round());
     }
@@ -113,10 +121,10 @@ enum StreamMode {
         // Native/4K resolution *and* full refresh-rate fps: modern hardware
         // encoders handle 4K well, and the fps half is what game feel needs
         // — deviceFps already runs to the viewer's refresh rate (120 cap).
-        final (gw, gh) = raiseToRequestCeiling(deviceWidth, deviceHeight);
+        final (gw, gh) = normalizeToRequestCeiling(deviceWidth, deviceHeight);
         return (gw, gh, deviceFps);
       case StreamMode.quality:
-        final (w, h) = raiseToRequestCeiling(deviceWidth, deviceHeight);
+        final (w, h) = normalizeToRequestCeiling(deviceWidth, deviceHeight);
         return (w, h, deviceFps.clamp(1, 30));
       case StreamMode.dataSaver:
         return (
@@ -126,7 +134,7 @@ enum StreamMode {
         );
       case StreamMode.custom:
         final settings = customSettings ?? const CustomStreamSettings();
-        final (w, h) = raiseToRequestCeiling(deviceWidth, deviceHeight);
+        final (w, h) = normalizeToRequestCeiling(deviceWidth, deviceHeight);
         return (
           (w * settings.resolutionScale).round(),
           (h * settings.resolutionScale).round(),
@@ -137,7 +145,7 @@ enum StreamMode {
 }
 
 /// User-chosen values for `StreamMode.custom`. `resolutionScale` is a
-/// fraction of the request ceiling (the device's size raised to
+/// fraction of the request ceiling (the device's size normalized to
 /// `StreamMode.maxRequestDim`, aspect preserved — 100% asks for up to 4K
 /// and the host clamps to its native capture size), not an absolute size,
 /// so it can never produce something the encoder considers invalid and
