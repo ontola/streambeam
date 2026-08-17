@@ -176,6 +176,203 @@ impl<'a> BitReader<'a> {
     }
 }
 
+/// What the AV1 sequence header actually says about the stream.
+///
+/// Parsed rather than assumed, because two things now depend on it: the `av1C`
+/// record handed to VideoToolbox (which used to hardcode 8-bit 4:2:0), and the
+/// client's decision to set up an HDR display path. Deriving that from the
+/// bitstream instead of from the negotiated caps means a stream is described by
+/// what it *is* — a host that changes its mind mid-session, or a capability
+/// mismatch, can't leave the decoder configured for the wrong thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Av1SeqInfo {
+    pub seq_profile: u8,
+    pub seq_level_idx: u8,
+    pub seq_tier: u8,
+    /// 8, 10 or 12.
+    pub bit_depth: u8,
+    pub monochrome: bool,
+    pub subsampling_x: bool,
+    pub subsampling_y: bool,
+    pub chroma_sample_position: u8,
+    /// H.273 / ISO-IEC 23091-4 code points. 2 = unspecified, which is what a
+    /// stream without a colour description reports.
+    pub color_primaries: u8,
+    pub transfer_characteristics: u8,
+    pub matrix_coefficients: u8,
+    pub full_range: bool,
+}
+
+impl Av1SeqInfo {
+    /// HDR10: 10-bit (or deeper) PQ. The primaries are informative here — a
+    /// PQ transfer function at 10-bit is the part a decoder and display path
+    /// have to be set up for, and BT.2020 primaries without PQ is still SDR.
+    pub fn is_hdr10(&self) -> bool {
+        self.bit_depth >= 10 && self.transfer_characteristics == TRANSFER_SMPTE2084
+    }
+}
+
+/// H.273 transfer characteristic for PQ (SMPTE ST.2084).
+pub const TRANSFER_SMPTE2084: u8 = 16;
+/// H.273 colour primaries for BT.2020.
+pub const COLOR_PRIMARIES_BT2020: u8 = 9;
+/// H.273 matrix coefficients for BT.2020 non-constant luminance.
+pub const MATRIX_BT2020_NCL: u8 = 9;
+
+/// Parse a self-contained sequence-header OBU.
+///
+/// Returns `None` for a stream this parser can't walk exactly — notably
+/// `timing_info_present_flag`, which needs `uvlc()` and decoder-model state to
+/// skip correctly. Guessing past it would silently misread every field after,
+/// including the colour description, so it refuses instead; NVENC leaves timing
+/// info off, so this is a theoretical branch here rather than a common one.
+pub fn parse_sequence_header(seq_header_obu: &[u8]) -> Option<Av1SeqInfo> {
+    let payload = split_obus(seq_header_obu)
+        .into_iter()
+        .find(|obu| obu.obu_type == OBU_TYPE_SEQUENCE_HEADER)?
+        .payload;
+    let mut r = BitReader::new(payload);
+
+    let seq_profile = r.read(3)? as u8;
+    let _still_picture = r.read(1)?;
+    let reduced = r.read(1)? == 1;
+
+    let (seq_level_idx, seq_tier) = if reduced {
+        (r.read(5)? as u8, 0)
+    } else {
+        if r.read(1)? == 1 {
+            return None; // timing_info_present — see the doc comment.
+        }
+        let initial_display_delay_present = r.read(1)? == 1;
+        let operating_points_cnt = r.read(5)? + 1;
+        let mut first = (0u8, 0u8);
+        for i in 0..operating_points_cnt {
+            let _idc = r.read(12)?;
+            let level = r.read(5)? as u8;
+            let tier = if level > 7 { r.read(1)? as u8 } else { 0 };
+            if i == 0 {
+                first = (level, tier);
+            }
+            if initial_display_delay_present && r.read(1)? == 1 {
+                let _initial_display_delay_minus_1 = r.read(4)?;
+            }
+        }
+        first
+    };
+
+    let frame_width_bits = r.read(4)? + 1;
+    let frame_height_bits = r.read(4)? + 1;
+    let _max_frame_width_minus_1 = r.read(frame_width_bits)?;
+    let _max_frame_height_minus_1 = r.read(frame_height_bits)?;
+
+    if !reduced && r.read(1)? == 1 {
+        let _delta_frame_id_length_minus_2 = r.read(4)?;
+        let _additional_frame_id_length_minus_1 = r.read(3)?;
+    }
+
+    let _use_128x128_superblock = r.read(1)?;
+    let _enable_filter_intra = r.read(1)?;
+    let _enable_intra_edge_filter = r.read(1)?;
+
+    if !reduced {
+        let _enable_interintra_compound = r.read(1)?;
+        let _enable_masked_compound = r.read(1)?;
+        let _enable_warped_motion = r.read(1)?;
+        let _enable_dual_filter = r.read(1)?;
+        let enable_order_hint = r.read(1)? == 1;
+        if enable_order_hint {
+            let _enable_jnt_comp = r.read(1)?;
+            let _enable_ref_frame_mvs = r.read(1)?;
+        }
+        let seq_force_screen_content_tools = if r.read(1)? == 1 { 2 } else { r.read(1)? };
+        if seq_force_screen_content_tools > 0 && r.read(1)? == 0 {
+            let _seq_force_integer_mv = r.read(1)?;
+        }
+        if enable_order_hint {
+            let _order_hint_bits_minus_1 = r.read(3)?;
+        }
+    }
+
+    let _enable_superres = r.read(1)?;
+    let _enable_cdef = r.read(1)?;
+    let _enable_restoration = r.read(1)?;
+
+    // color_config()
+    let high_bitdepth = r.read(1)? == 1;
+    let bit_depth = if seq_profile == 2 && high_bitdepth {
+        if r.read(1)? == 1 { 12 } else { 10 }
+    } else if high_bitdepth {
+        10
+    } else {
+        8
+    };
+    let monochrome = if seq_profile == 1 {
+        false
+    } else {
+        r.read(1)? == 1
+    };
+    let (color_primaries, transfer_characteristics, matrix_coefficients) = if r.read(1)? == 1 {
+        (r.read(8)? as u8, r.read(8)? as u8, r.read(8)? as u8)
+    } else {
+        (2, 2, 2) // unspecified
+    };
+
+    let (full_range, subsampling_x, subsampling_y, chroma_sample_position);
+    if monochrome {
+        full_range = r.read(1)? == 1;
+        subsampling_x = true;
+        subsampling_y = true;
+        chroma_sample_position = 0;
+    } else if color_primaries == 1 && transfer_characteristics == 13 && matrix_coefficients == 0 {
+        // sRGB, which AV1 defines as implicitly full-range 4:4:4.
+        full_range = true;
+        subsampling_x = false;
+        subsampling_y = false;
+        chroma_sample_position = 0;
+    } else {
+        full_range = r.read(1)? == 1;
+        match seq_profile {
+            0 => {
+                subsampling_x = true;
+                subsampling_y = true;
+            }
+            1 => {
+                subsampling_x = false;
+                subsampling_y = false;
+            }
+            _ => {
+                if bit_depth == 12 {
+                    subsampling_x = r.read(1)? == 1;
+                    subsampling_y = if subsampling_x { r.read(1)? == 1 } else { false };
+                } else {
+                    subsampling_x = true;
+                    subsampling_y = false;
+                }
+            }
+        }
+        chroma_sample_position = if subsampling_x && subsampling_y {
+            r.read(2)? as u8
+        } else {
+            0
+        };
+    }
+
+    Some(Av1SeqInfo {
+        seq_profile,
+        seq_level_idx,
+        seq_tier,
+        bit_depth,
+        monochrome,
+        subsampling_x,
+        subsampling_y,
+        chroma_sample_position,
+        color_primaries,
+        transfer_characteristics,
+        matrix_coefficients,
+        full_range,
+    })
+}
+
 /// Build an ISO-BMFF `AV1CodecConfigurationRecord` (`av1C`) from a
 /// self-contained sequence-header OBU (as returned by
 /// [`extract_sequence_header`]) — what macOS VideoToolbox wants in the
@@ -213,12 +410,32 @@ pub fn av1c_from_sequence_header(seq_header_obu: &[u8]) -> Option<Vec<u8>> {
         (level, tier)
     };
 
+    // Pixel-format bits used to be hardcoded to 8-bit 4:2:0, which was true of
+    // everything this pipeline encoded until HDR10 (docs/HDR.md): a 10-bit
+    // stream described to the decoder as 8-bit is a wrong `av1C`. Parse them
+    // when possible and fall back to the old constants only when the header
+    // can't be walked exactly.
+    let info = parse_sequence_header(seq_header_obu);
+    let pixel_bits = match info {
+        Some(i) => {
+            let high_bitdepth = u8::from(i.bit_depth >= 10);
+            let twelve_bit = u8::from(i.bit_depth == 12);
+            (high_bitdepth << 6)
+                | (twelve_bit << 5)
+                | (u8::from(i.monochrome) << 4)
+                | (u8::from(i.subsampling_x) << 3)
+                | (u8::from(i.subsampling_y) << 2)
+                | (i.chroma_sample_position & 0x03)
+        }
+        // high_bitdepth=0, twelve_bit=0, monochrome=0, subsampling 4:2:0,
+        // chroma_sample_position=0 — this pipeline's pre-HDR output.
+        None => 0x0c,
+    };
+
     let mut out = Vec::with_capacity(4 + seq_header_obu.len());
     out.push(0x81); // marker=1, version=1
     out.push(((seq_profile as u8) << 5) | (level as u8 & 0x1f));
-    // tier + high_bitdepth=0, twelve_bit=0, monochrome=0,
-    // chroma_subsampling_x=1, chroma_subsampling_y=1, chroma_sample_position=0.
-    out.push(((tier as u8) << 7) | 0x0c);
+    out.push(((tier as u8) << 7) | pixel_bits);
     out.push(0x00); // no initial_presentation_delay
     out.extend_from_slice(seq_header_obu);
     Some(out)
@@ -310,6 +527,63 @@ mod tests {
         let (value, len) = read_leb128(&out).expect("decode");
         assert_eq!(value, 300);
         assert_eq!(len, out.len());
+    }
+
+    /// Real sequence header from Mancave's NVENC AV1 encoder in HDR10
+    /// passthrough (10-bit PQ/BT.2020), captured 2026-08-17 with
+    /// `devclient --av1 --hdr --dump-fixture`.
+    const HDR10_SEQ_HEADER: &[u8] = &[
+        0x0a, 0x0f, 0x00, 0x00, 0x00, 0x6a, 0xef, 0xbf, 0xe1, 0xbc, 0x02, 0x19, 0xd0, 0x91, 0x00,
+        0x90, 0x40,
+    ];
+    /// The same encoder, same resolution, SDR — the only difference is the
+    /// negotiated `VideoCaps::hdr`.
+    const SDR_SEQ_HEADER: &[u8] = &[
+        0x0a, 0x0c, 0x00, 0x00, 0x00, 0x6a, 0xef, 0xbf, 0xe1, 0xbc, 0x02, 0x19, 0x80, 0x40,
+    ];
+
+    #[test]
+    fn parses_hdr10_sequence_header() {
+        let info = parse_sequence_header(HDR10_SEQ_HEADER).expect("parse");
+        assert_eq!(info.bit_depth, 10);
+        assert_eq!(info.color_primaries, COLOR_PRIMARIES_BT2020);
+        assert_eq!(info.transfer_characteristics, TRANSFER_SMPTE2084);
+        assert_eq!(info.matrix_coefficients, MATRIX_BT2020_NCL);
+        assert!(!info.monochrome);
+        assert!(info.subsampling_x && info.subsampling_y, "4:2:0");
+        assert!(info.is_hdr10());
+    }
+
+    #[test]
+    fn parses_sdr_sequence_header() {
+        let info = parse_sequence_header(SDR_SEQ_HEADER).expect("parse");
+        assert_eq!(info.bit_depth, 8);
+        assert!(!info.is_hdr10());
+        assert!(info.subsampling_x && info.subsampling_y, "4:2:0");
+    }
+
+    /// The bug this parser exists to fix: the pixel-format bits were hardcoded
+    /// to 8-bit, so a 10-bit stream was described to the platform decoder as
+    /// 8-bit. `high_bitdepth` is bit 6 of the third `av1C` byte.
+    #[test]
+    fn av1c_reports_the_real_bit_depth() {
+        let hdr = av1c_from_sequence_header(HDR10_SEQ_HEADER).expect("av1C");
+        assert_eq!(hdr[2] >> 6 & 1, 1, "10-bit must set high_bitdepth");
+        assert_eq!(hdr[2] >> 5 & 1, 0, "not 12-bit");
+        assert_eq!(hdr[2] & 0x0c, 0x0c, "still 4:2:0");
+
+        let sdr = av1c_from_sequence_header(SDR_SEQ_HEADER).expect("av1C");
+        assert_eq!(sdr[2] >> 6 & 1, 0, "8-bit must not set high_bitdepth");
+        // Byte-for-byte what the pre-HDR code produced, so the SDR path is
+        // provably unchanged by the parser landing.
+        assert_eq!(sdr[2], 0x0c);
+    }
+
+    #[test]
+    fn is_hdr10_needs_pq_not_just_wide_primaries() {
+        let mut info = parse_sequence_header(HDR10_SEQ_HEADER).expect("parse");
+        info.transfer_characteristics = 1; // BT.709 transfer, BT.2020 primaries
+        assert!(!info.is_hdr10(), "wide gamut alone is not HDR");
     }
 
     #[test]
