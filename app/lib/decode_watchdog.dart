@@ -10,6 +10,73 @@
 /// tangled up with I/O; the same mistake isn't worth repeating here.
 library;
 
+import 'package:flutter/material.dart' show IconData, Icons;
+
+/// What the player shows instead of a picture. `waiting` means "be patient",
+/// everything else means "this is broken".
+typedef NoPictureReason = ({
+  IconData icon,
+  String title,
+  String detail,
+  bool waiting,
+});
+
+/// Why there's no picture, most specific reason first, or null when there is
+/// one.
+///
+/// Pure so the state machine is testable: the player widget itself can't be
+/// pumped in a unit test (it reaches into `playbackFramesRendered`, which
+/// needs an initialised Rust bridge), and this ordering has direct consequences
+/// — the decode warning must win *even while frames arrive*, because a healthy
+/// wire feeding a dead decoder is exactly the case that used to render a
+/// confident black rectangle with no overlay at all.
+NoPictureReason? noPictureReason({
+  required String? decodeWarning,
+  required bool videoStalled,
+  required bool videoTimedOut,
+  required bool hasVideo,
+}) {
+  if (decodeWarning != null) {
+    return (
+      icon: Icons.broken_image_outlined,
+      title: 'No picture',
+      detail:
+          '$decodeWarning The stream is arriving, so this is a decoding '
+          'problem on this device rather than a connection one.',
+      waiting: false,
+    );
+  }
+  if (videoStalled) {
+    return (
+      icon: Icons.sync_problem_outlined,
+      title: 'Stream stopped responding',
+      detail:
+          'No new video frames arrived for 5 seconds. The other device may '
+          'be asleep or the connection may have closed.',
+      waiting: false,
+    );
+  }
+  if (videoTimedOut) {
+    return (
+      icon: Icons.videocam_off_outlined,
+      title: 'No video received',
+      detail:
+          'The connection opened, but no video arrived. Check that the other '
+          'device is awake and still sharing its screen.',
+      waiting: false,
+    );
+  }
+  if (!hasVideo) {
+    return (
+      icon: Icons.hourglass_top,
+      title: 'Waiting for video…',
+      detail: 'Connected to your PC. The first video frame has not arrived yet.',
+      waiting: true,
+    );
+  }
+  return null;
+}
+
 /// One reading of the native decoder's counters (the `health` method on
 /// `streambeam/video_desktop`).
 class DecodeHealth {

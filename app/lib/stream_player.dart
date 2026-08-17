@@ -375,55 +375,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool get _showStatusOverlay =>
       !widget.isStreaming && (widget.statusIsError || widget.status != null);
 
-  /// Why there's no picture, most specific reason first, or null when there is
-  /// one. `waiting` distinguishes "be patient" from "this is broken".
-  ///
-  /// The decode warning comes first *and* is checked even when frames are
-  /// arriving: a working wire with a dead decoder is precisely the case that
-  /// used to render a confident black rectangle with no overlay at all.
-  ({IconData icon, String title, String detail, bool waiting})? get _noPicture {
-    final decode = _decodeWarning;
-    if (decode != null) {
-      return (
-        icon: Icons.broken_image_outlined,
-        title: 'No picture',
-        detail:
-            '$decode The stream is arriving, so this is a decoding problem on '
-            'this device rather than a connection one.',
-        waiting: false,
-      );
-    }
-    if (_videoStalled) {
-      return (
-        icon: Icons.sync_problem_outlined,
-        title: 'Stream stopped responding',
-        detail:
-            'No new video frames arrived for 5 seconds. The other device may '
-            'be asleep or the connection may have closed.',
-        waiting: false,
-      );
-    }
-    if (_videoTimedOut) {
-      return (
-        icon: Icons.videocam_off_outlined,
-        title: 'No video received',
-        detail:
-            'The connection opened, but no video arrived. Check that the other '
-            'device is awake and still sharing its screen.',
-        waiting: false,
-      );
-    }
-    if (!_hasVideo) {
-      return (
-        icon: Icons.hourglass_top,
-        title: 'Waiting for video…',
-        detail:
-            'Connected to your PC. The first video frame has not arrived yet.',
-        waiting: true,
-      );
-    }
-    return null;
-  }
+  NoPictureReason? get _noPicture => noPictureReason(
+    decodeWarning: _decodeWarning,
+    videoStalled: _videoStalled,
+    videoTimedOut: _videoTimedOut,
+    hasVideo: _hasVideo,
+  );
 
   @override
   void initState() {
@@ -1271,14 +1228,20 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                                           color: Colors.white54,
                                         ),
                                       ),
-                                    ] else ...[
-                                      const SizedBox(height: 20),
-                                      FilledButton.icon(
-                                        onPressed: _handleStop,
-                                        icon: const Icon(Icons.stop_circle),
-                                        label: const Text('Stop watching'),
-                                      ),
                                     ],
+                                    // Always offered, including while waiting:
+                                    // a spinner with no way out leaves an
+                                    // impatient user force-quitting the app.
+                                    const SizedBox(height: 20),
+                                    FilledButton.icon(
+                                      onPressed: _handleStop,
+                                      icon: const Icon(Icons.stop_circle),
+                                      label: Text(
+                                        noPicture.waiting
+                                            ? 'Cancel'
+                                            : 'Stop watching',
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),

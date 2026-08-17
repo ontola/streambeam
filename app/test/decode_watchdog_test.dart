@@ -129,6 +129,118 @@ void main() {
     });
   });
 
+  group('no-picture reason', () {
+    test('a healthy stream shows no overlay at all', () {
+      expect(
+        noPictureReason(
+          decodeWarning: null,
+          videoStalled: false,
+          videoTimedOut: false,
+          hasVideo: true,
+        ),
+        isNull,
+      );
+    });
+
+    test('waiting for the first frame is the only patient state', () {
+      final r = noPictureReason(
+        decodeWarning: null,
+        videoStalled: false,
+        videoTimedOut: false,
+        hasVideo: false,
+      );
+      expect(r!.title, 'Waiting for video…');
+      expect(r.waiting, isTrue);
+    });
+
+    // The decode warning must win even though frames are arriving (hasVideo
+    // true, nothing stalled) — that combination is the black screen this whole
+    // watchdog exists for, and it previously showed no overlay whatsoever.
+    test('a dead decoder wins over an otherwise healthy stream', () {
+      final r = noPictureReason(
+        decodeWarning: 'No picture: the decoder rejected all 400 frames.',
+        videoStalled: false,
+        videoTimedOut: false,
+        hasVideo: true,
+      );
+      expect(r, isNotNull);
+      expect(r!.detail, contains('rejected all 400 frames'));
+      expect(r.detail, contains('decoding problem'));
+      expect(r.waiting, isFalse);
+    });
+
+    test('a decode warning outranks a stall', () {
+      final r = noPictureReason(
+        decodeWarning: 'No picture: 90 frames never reached the decoder.',
+        videoStalled: true,
+        videoTimedOut: true,
+        hasVideo: true,
+      );
+      expect(r!.title, 'No picture');
+    });
+
+    test('stall outranks the connect timeout', () {
+      final r = noPictureReason(
+        decodeWarning: null,
+        videoStalled: true,
+        videoTimedOut: true,
+        hasVideo: true,
+      );
+      expect(r!.title, 'Stream stopped responding');
+      expect(r.waiting, isFalse);
+    });
+
+    test('no video after the connect timeout', () {
+      final r = noPictureReason(
+        decodeWarning: null,
+        videoStalled: false,
+        videoTimedOut: true,
+        hasVideo: false,
+      );
+      expect(r!.title, 'No video received');
+      expect(r.waiting, isFalse);
+    });
+
+    // The player renders a stop/cancel button unconditionally in this overlay,
+    // so every reason it can return is escapable. A spinner with no way out
+    // leaves an impatient user force-quitting the app.
+    test('every no-picture state carries a title and detail to explain itself', () {
+      final states = <NoPictureReason?>[
+        noPictureReason(
+          decodeWarning: 'x',
+          videoStalled: false,
+          videoTimedOut: false,
+          hasVideo: true,
+        ),
+        noPictureReason(
+          decodeWarning: null,
+          videoStalled: true,
+          videoTimedOut: false,
+          hasVideo: true,
+        ),
+        noPictureReason(
+          decodeWarning: null,
+          videoStalled: false,
+          videoTimedOut: true,
+          hasVideo: false,
+        ),
+        noPictureReason(
+          decodeWarning: null,
+          videoStalled: false,
+          videoTimedOut: false,
+          hasVideo: false,
+        ),
+      ];
+      for (final s in states) {
+        expect(s, isNotNull);
+        expect(s!.title, isNotEmpty);
+        expect(s.detail, isNotEmpty);
+      }
+      // Exactly one of them is a "be patient" state.
+      expect(states.where((s) => s!.waiting).length, 1);
+    });
+  });
+
   group('channel parsing', () {
     test('reads the native reply', () {
       final parsed = DecodeHealth.fromChannel({
