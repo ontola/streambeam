@@ -38,6 +38,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     UNUserNotificationCenter.current().delegate = self
     setUpVideoChannel(flutterViewController)
     setUpDiscoveryChannel(flutterViewController)
+    setUpHdrProbe(flutterViewController)
     setUpDeviceChannel(flutterViewController)
     setUpScreencastChannel(flutterViewController)
     startCaptureDemandPolling()
@@ -283,6 +284,35 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
 
   /// Desktop watch: Rust hands us Annex-B frames over this channel; we decode
   /// with VideoToolbox into a Flutter texture (see StreamBeamVideo).
+  /// EDR probe (docs/HDR.md stage 4): a native platform view is registered so
+  /// HDR can be tested end-to-end on screen before any encoder or protocol work
+  /// depends on it being possible.
+  private func setUpHdrProbe(_ controller: FlutterViewController) {
+    let registrar = controller.registrar(forPlugin: "StreamBeamHdrProbe")
+    registrar.register(
+      HdrProbeViewFactory(), withId: "streambeam/hdr_probe")
+    let channel = FlutterMethodChannel(
+      name: "streambeam/hdr_probe",
+      binaryMessenger: registrar.messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "report":
+        guard let view = HdrProbeViewFactory.latest else {
+          result(nil)
+          return
+        }
+        var report = view.report
+        // Read the granted headroom *now*, after the ramp has been on screen —
+        // macOS only raises it once EDR content is actually being displayed, so
+        // the value captured at view-mount time understates it.
+        report["edrHeadroomLive"] = view.liveHeadroom()
+        result(report)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
   private func setUpVideoChannel(_ controller: FlutterViewController) {
     let registrar = controller.registrar(forPlugin: "StreamBeamVideo")
     let channel = FlutterMethodChannel(

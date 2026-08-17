@@ -11,7 +11,10 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
+
 import 'beam_page.dart';
+import 'hdr_probe.dart';
 import 'decode_watchdog.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
@@ -1660,6 +1663,23 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 24),
                   const BeamPage(embedded: true),
+                  // Debug builds only: the EDR probe behind HDR passthrough
+                  // (docs/HDR.md). Not a user-facing feature — it answers
+                  // whether HDR can reach the screen at all.
+                  if (kDebugMode && Platform.isMacOS) ...[
+                    const SizedBox(height: 12),
+                    Center(
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.hdr_on, size: 18),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const HdrProbeScreen(),
+                          ),
+                        ),
+                        label: const Text('HDR (EDR) probe'),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   Center(
                     child: TextButton(
