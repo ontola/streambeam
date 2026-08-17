@@ -834,6 +834,9 @@ async fn desktop_stream_loop(
     let mut last_stats_log = std::time::Instant::now();
     let mut frames_fed: u64 = 0;
     let mut frames_skipped: u64 = 0;
+    /// Consecutive oversized drains required before skipping kicks in.
+    const BEHIND_DRAINS_BEFORE_SKIP: u32 = 4;
+    let mut consecutive_behind: u32 = 0;
     loop {
         let first =
             match tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram()).await
@@ -894,7 +897,21 @@ async fn desktop_stream_loop(
         // flash and an fps sawtooth every 3s. A quarter-second of genuine
         // backlog is the point where skipping starts beating decoding.
         let behind_threshold = (u32::from(session.fps) / 4).max(10);
-        let behind = completions.len() as u32 > behind_threshold;
+        // A single big drain is not a backlog. The greedy 2ms read above is
+        // *designed* to batch, and at 120fps with the host emitting a duplicate
+        // frame every tick one batch routinely exceeds any fixed threshold — so
+        // treating one batch as "behind" latched `awaiting_keyframe`, skipped
+        // everything until the next keyframe, then re-latched on the very next
+        // batch: 96% of frames discarded with zero packet loss, measured live at
+        // 4K/120 on 2026-08-17 (fed 75 / skipped 1658 / abandoned 0). Skipping
+        // also can't help a decode backlog of P-frames — it *creates* the need
+        // for a fresh keyframe — so only act on a backlog that persists.
+        if completions.len() as u32 > behind_threshold {
+            consecutive_behind += 1;
+        } else {
+            consecutive_behind = 0;
+        }
+        let behind = consecutive_behind >= BEHIND_DRAINS_BEFORE_SKIP;
         // Periodic liveness stats. A client that receives bytes but renders
         // nothing (4K black screen, 2026-08-17) is indistinguishable from a
         // healthy one without these: `frames_abandoned` climbing while
