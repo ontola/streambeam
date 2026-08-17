@@ -351,6 +351,16 @@ struct Pipeline {
     /// misclassified "pool empty" made it start-and-revert 708 times in one
     /// session, each cycle logging two lines and rebuilding a frame pool.
     wgc_last_start: Option<std::time::Instant>,
+    /// Access-lost *rate*, tracked because a consecutive-run trigger alone
+    /// misses the case that actually hurts. A game produces churn — lose the
+    /// duplication, recreate it, get one good frame, lose it again — and every
+    /// successful acquire resets the consecutive counter, so a run of 4 is
+    /// rare even while thousands accumulate. Meanwhile each recreate costs
+    /// ~40ms of capture time, measured live at 4072 access-losts and 20fps
+    /// against a 120fps target. Churn is the signal; a run is just its
+    /// tidiest form.
+    access_lost_window: Option<std::time::Instant>,
+    access_lost_in_window: u32,
     /// Rolling per-report-window totals (reset every 90 calls alongside the
     /// counters above) for pinpointing where per-frame time actually goes.
     stat_capture_us: u64,
@@ -362,6 +372,13 @@ struct Pipeline {
 /// old code started backing off to a 2s retry: by then recreation has failed
 /// three times, which no transient display-mode change survives.
 const WGC_FALLBACK_AFTER_ACCESS_LOST: u32 = 4;
+
+/// Access-losses within [`ACCESS_LOST_WINDOW`] that count as churn rather than
+/// a transient loss. A real display-mode change costs a handful; this many
+/// means something is repeatedly taking the desktop away, and each recreate is
+/// ~40ms of capture time that the frame rate pays for.
+const ACCESS_LOST_CHURN: u32 = 30;
+const ACCESS_LOST_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn ctx<T>(r: windows::core::Result<T>, what: &str) -> Result<T, String> {
     r.map_err(|e| format!("{what}: {e}"))
@@ -481,6 +498,8 @@ impl Pipeline {
                 consecutive_access_lost: 0,
                 wgc: None,
                 wgc_last_start: None,
+                access_lost_window: None,
+                access_lost_in_window: 0,
                 stat_produced: 0,
                 stat_capture_us: 0,
                 stat_encode_us: 0,
@@ -606,6 +625,7 @@ impl Pipeline {
             Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
                 self.stat_access_lost += 1;
                 self.consecutive_access_lost += 1;
+                let churning = self.note_access_lost_rate();
                 // First few: log and retry immediately, matching the pacing
                 // of a real transient loss (display mode change) which
                 // typically clears within one or two frames.
@@ -662,7 +682,7 @@ impl Pipeline {
                 // settling into the 2s retry that used to be the whole
                 // recovery strategy (and that showed the viewer a frozen
                 // picture until their media timeout fired).
-                if self.consecutive_access_lost >= WGC_FALLBACK_AFTER_ACCESS_LOST
+                if (self.consecutive_access_lost >= WGC_FALLBACK_AFTER_ACCESS_LOST || churning)
                     && self.start_wgc_fallback(desktop_is_hdr(&self.device, allow_hdr))
                 {
                     return Ok(());
@@ -788,6 +808,23 @@ impl Pipeline {
     /// fallback is now active; failure leaves duplication in place (still
     /// retrying), because a broken fallback must not be worse than no
     /// fallback.
+    /// Record one access-loss and report whether they're arriving fast enough
+    /// to count as churn. Rolling window, reset once it expires — a slow trickle
+    /// (one every few minutes, e.g. a monitor waking) never accumulates.
+    fn note_access_lost_rate(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        match self.access_lost_window {
+            Some(start) if now.duration_since(start) < ACCESS_LOST_WINDOW => {
+                self.access_lost_in_window += 1;
+            }
+            _ => {
+                self.access_lost_window = Some(now);
+                self.access_lost_in_window = 1;
+            }
+        }
+        self.access_lost_in_window >= ACCESS_LOST_CHURN
+    }
+
     unsafe fn start_wgc_fallback(&mut self, hdr: bool) -> bool {
         if self.wgc.is_some() {
             return true;
