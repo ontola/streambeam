@@ -2,6 +2,7 @@
 
 pub mod annex_b;
 pub mod obu;
+pub mod frame_gate;
 pub mod reassemble;
 pub mod saved_host;
 pub mod session;
@@ -18,6 +19,7 @@ pub use obu::{
     av1c_from_sequence_header, extract_sequence_header as av1_extract_sequence_header,
     obu_type_summary as av1_obu_type_summary,
 };
+pub use frame_gate::{Decision, FrameGate};
 pub use reassemble::{FrameReassembler, FrameStats, LossReport};
 pub use wol::send_magic_packets;
 pub use saved_host::{

@@ -851,13 +851,8 @@ async fn desktop_stream_loop(
     // reference chain and then resumed feeding broken P-frames anyway —
     // the persistent purple-smear corruption on the macOS viewer, on a
     // bitstream a reference decoder replayed bit-clean.
-    let mut awaiting_keyframe = false;
+    let mut gate = streambeam_core::FrameGate::new(session.fps);
     let mut last_stats_log = std::time::Instant::now();
-    let mut frames_fed: u64 = 0;
-    let mut frames_skipped: u64 = 0;
-    /// Consecutive oversized drains required before skipping kicks in.
-    const BEHIND_DRAINS_BEFORE_SKIP: u32 = 4;
-    let mut consecutive_behind: u32 = 0;
     loop {
         let first =
             match tokio::time::timeout(Duration::from_secs(10), session.conn.read_datagram()).await
@@ -917,27 +912,11 @@ async fn desktop_stream_loop(
         // cooldown tick, observed live 2026-07-19 as a 262KB banded intra
         // flash and an fps sawtooth every 3s. A quarter-second of genuine
         // backlog is the point where skipping starts beating decoding.
-        let behind_threshold = (u32::from(session.fps) / 4).max(10);
-        // A single big drain is not a backlog. The greedy 2ms read above is
-        // *designed* to batch, and at 120fps with the host emitting a duplicate
-        // frame every tick one batch routinely exceeds any fixed threshold — so
-        // treating one batch as "behind" latched `awaiting_keyframe`, skipped
-        // everything until the next keyframe, then re-latched on the very next
-        // batch: 96% of frames discarded with zero packet loss, measured live at
-        // 4K/120 on 2026-08-17 (fed 75 / skipped 1658 / abandoned 0). Skipping
-        // also can't help a decode backlog of P-frames — it *creates* the need
-        // for a fresh keyframe — so only act on a backlog that persists.
-        if completions.len() as u32 > behind_threshold {
-            consecutive_behind += 1;
-        } else {
-            consecutive_behind = 0;
-        }
-        let behind = consecutive_behind >= BEHIND_DRAINS_BEFORE_SKIP;
         // Periodic liveness stats. A client that receives bytes but renders
-        // nothing (4K black screen, 2026-08-17) is indistinguishable from a
-        // healthy one without these: `frames_abandoned` climbing while
-        // `frames_complete` stays flat means shards are arriving but buckets
-        // are being dropped before they fill (see `STALE_THRESHOLD`).
+        // nothing (the 4K black screen of 2026-08-17) is indistinguishable from
+        // a healthy one without these: `abandoned` climbing means shards arrive
+        // but buckets are dropped before they fill; `skipped` dominating `fed`
+        // means the gate is discarding what did arrive.
         if last_stats_log.elapsed() >= Duration::from_secs(2) {
             last_stats_log = std::time::Instant::now();
             let s = asm.stats();
@@ -950,24 +929,24 @@ async fn desktop_stream_loop(
                 s.frames_complete,
                 s.frames_abandoned,
                 s.shards_received,
-                frames_fed,
-                frames_skipped,
-                awaiting_keyframe
+                gate.fed(),
+                gate.skipped(),
+                gate.awaiting_keyframe()
             );
         }
-        // Skip-mode for THIS batch: entered by a backlog or a still-armed
-        // `awaiting_keyframe`, and — critically — *exited by the first
-        // keyframe in the batch*, feeding everything after it. The previous
-        // shape re-checked `behind` per completion, so the P-frames right
-        // behind a recovery keyframe (which arrive in the same large drain
-        // — the host's forced-IDR recreate stalls ~400ms, guaranteeing a
-        // "behind" batch) re-armed the latch that keyframe had just
-        // cleared: one rendered frame per IDR request, a ~5s slideshow,
-        // reported live 2026-07-19 as "no flashes but about 0fps".
-        let mut resync = awaiting_keyframe || behind;
+        // Which of these frames are worth decoding is decided by
+        // `streambeam_core::FrameGate` — pure, unit-tested policy, because this
+        // exact decision has silently blacked out the picture three times when
+        // it lived inline here (see that module's docs).
+        let decisions = gate.decide(
+            &completions
+                .iter()
+                .map(|(keyframe, _)| *keyframe)
+                .collect::<Vec<bool>>(),
+        );
         let mut dart_closed = false;
 
-        for (keyframe, frame) in completions {
+        for ((keyframe, frame), decision) in completions.into_iter().zip(decisions) {
             // Always decode a keyframe (resets the reference chain and is
             // worth showing even a little late). Otherwise, while behind,
             // skip every non-keyframe completion — and once even one
@@ -978,15 +957,9 @@ async fn desktop_stream_loop(
             // corrupted video (same failure mode Android's play.rs
             // documents for MediaCodec), and it stays garbage for the rest
             // of the GOP.
-            if keyframe {
-                resync = false;
-                awaiting_keyframe = false;
-            } else if resync {
-                awaiting_keyframe = true;
-                frames_skipped += 1;
+            if decision == streambeam_core::Decision::Skip {
                 continue;
             }
-            frames_fed += 1;
             // "Rendered" here means handed to the platform decoder — the
             // closest observable point on desktop, where decode happens in
             // the native layer past this crate.
@@ -1091,7 +1064,7 @@ async fn desktop_stream_loop(
                     let _ = streambeam_core::request_idr(&mut session).await;
                 }
             }
-        } else if cooled_down && awaiting_keyframe {
+        } else if cooled_down && gate.awaiting_keyframe() {
             // Skip-driven resync: we're deliberately feeding nothing until a
             // keyframe (see `awaiting_keyframe`), so make one arrive sooner
             // than the periodic GOP keyframe would.
