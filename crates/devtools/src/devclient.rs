@@ -76,6 +76,13 @@ struct Opt {
     #[arg(long)]
     av1: bool,
 
+    /// Advertise HDR10 (10-bit PQ/BT.2020) decode support, so a host on an
+    /// HDR desktop sends passthrough instead of tone-mapping. `devclient`
+    /// never decodes, so this is for capturing and inspecting the bitstream
+    /// (see docs/HDR.md stage 1) rather than for looking at a picture.
+    #[arg(long)]
+    hdr: bool,
+
     /// Override the advertised `VideoCaps` resolution/fps instead of the
     /// 1920x1080@60 fallback — the only way to make a real host build a 4K
     /// encoder from the CLI, since it sizes the encode from client caps.
@@ -370,6 +377,7 @@ fn client_identity_path(dir: &Path) -> PathBuf {
 fn requested_video_caps(opt: &Opt) -> streambeam_proto::control::VideoCaps {
     let mut caps = fallback_video_caps();
     caps.av1 = opt.av1;
+    caps.hdr = opt.hdr;
     if let Some(w) = opt.width {
         caps.max_width = w;
     }

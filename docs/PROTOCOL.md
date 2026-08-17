@@ -1,7 +1,7 @@
 # StreamBeam protocol v3
 
 Everything runs over a single QUIC connection (client-initiated), mutual TLS with
-pinned Ed25519 keys. `PROTO_VERSION = 3`.
+pinned Ed25519 keys. `PROTO_VERSION = 5`.
 
 ## Identity & transport security
 
@@ -110,7 +110,8 @@ covers loss).
 
 ```rust
 ClientMsg { Hello { proto_version, client_name, pair_proof: Option<[u8;32]> },
-            SessionRequest { video: VideoCaps { ..., display_id: Option<u32> },
+            SessionRequest { video: VideoCaps { ..., display_id: Option<u32>,
+                                               hdr: bool },              // v5
                              audio: AudioCaps, bitrate_kbps },
             RequestIdr, InvalidateRefFrames { first_frame: u16, last_frame: u16 },
             SetBitrate { kbps }, Ping { t_us }, Bye,
@@ -141,6 +142,22 @@ clients must not wait for more). `WakeInfo` is sent once after
 Security note: the MAC travels only inside the authenticated post-`Hello`
 channel — same trust level as the rest of `HostMsg` — and never in the
 pairing QR payload.
+
+v5 (2026-08-17) adds `VideoCaps::hdr`: the client can decode **and display**
+HDR10 (10-bit PQ, BT.2020 primaries, BT.2020-NCL matrix). Both halves are
+required — decoding 10-bit into an SDR compositor produces a worse picture than
+the tone-mapped SDR it replaces, so a client that can only do one must send
+`false`. The flag is permission, not instruction: the host sends passthrough
+only when the client allows it *and* the desktop is genuinely HDR *and* the
+codec is AV1; otherwise it tone-maps to SDR as before. When passthrough is
+active the colour description travels in the AV1 sequence header (primaries 9,
+transfer 16, matrix 9) rather than out of band, so a decoder that ignores this
+flag still sees what it was given. See docs/HDR.md.
+
+Framing is `postcard`, which is not self-describing, so a new field is a
+breaking change: `Hello` carries `proto_version` and the host rejects anything
+that isn't exactly `PROTO_VERSION`. A v4 client meeting a v5 host gets a clean
+`PairReject`-style refusal rather than a misparsed struct.
 
 ## Input events (S1)
 

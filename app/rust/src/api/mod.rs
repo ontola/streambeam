@@ -635,6 +635,11 @@ fn desktop_video_caps(
         h264: true,
         hevc: false,
         av1: allow_av1,
+        // Stage 3 flips this on once the platform decoder produces 10-bit and
+        // the frames reach an EDR layer. Advertising it before then would get
+        // a PQ stream rendered by an 8-bit SDR path — a worse picture than the
+        // tone-mapped SDR it replaced.
+        hdr: false,
         max_width: if max_width > 0 {
             max_width
         } else {

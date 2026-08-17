@@ -76,6 +76,10 @@ pub fn fallback_video_caps() -> VideoCaps {
         max_height: 1080,
         max_fps: 60,
         display_id: None,
+        // Off unless a client positively knows it can decode *and* display
+        // HDR10; a wrong true here is a garbled picture, a wrong false is
+        // just today's tone-mapped SDR.
+        hdr: false,
     }
 }
 

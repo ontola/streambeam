@@ -414,17 +414,18 @@ fn build_encoder(
     fps: u32,
     max_encode_dim: u32,
     wanted_codec: Codec,
+    wants_hdr: bool,
 ) -> Result<Box<dyn VideoEncoder>, String> {
     // Explicit dev/test opt-in (set by the e2e harness): the platform branches
     // below otherwise wait on real capture — on macOS a Swift layer that only
     // exists inside the app bundle, never in the CLI bin.
     if std::env::var("STREAMBEAM_MOCK").is_ok_and(|v| v == "1") {
-        let _ = (fps, max_encode_dim, wanted_codec);
+        let _ = (fps, max_encode_dim, wanted_codec, wants_hdr);
         return Ok(Box::new(MockEncoder::bundled()));
     }
     #[cfg(windows)]
     {
-        match crate::capture::DesktopEncoder::new(fps, max_encode_dim, wanted_codec) {
+        match crate::capture::DesktopEncoder::new(fps, max_encode_dim, wanted_codec, wants_hdr) {
             Ok(enc) => {
                 let (w, h) = enc.dimensions();
                 crate::logging::log(&format!(
@@ -710,6 +711,10 @@ struct CachedEncoder {
     build_fps: u32,
     build_dim: u32,
     build_codec: Codec,
+    /// Whether this encoder was built for HDR10 passthrough — part of the
+    /// rebuild key, since a client that wants HDR can't be served from an
+    /// SDR-configured encoder (or the reverse).
+    build_hdr: bool,
 }
 
 type SharedEncoderCell = AsyncMutex<Option<CachedEncoder>>;
@@ -945,6 +950,11 @@ async fn handle_client(
                 // doesn't support AV1 NVENC either), but there's no point
                 // even trying for a client that never asked for it.
                 let wanted_codec = if video.av1 { Codec::Av1 } else { Codec::H264 };
+                // HDR10 passthrough only for a client that says it can decode
+                // *and* display it (docs/HDR.md). The host still decides
+                // whether the desktop is actually HDR; this is permission, not
+                // instruction.
+                let wants_hdr = video.hdr;
 
                 // Claim the shared encoder *before* deciding whether to
                 // rebuild it — this waits for a still-live previous
@@ -971,7 +981,7 @@ async fn handle_client(
                     || !matches!(
                         cell.as_ref(),
                         Some(c) if c.build_fps == build_fps && c.build_dim == build_dim
-                            && c.build_codec == wanted_codec
+                            && c.build_codec == wanted_codec && c.build_hdr == wants_hdr
                     );
                 if needs_rebuild {
                     // Rebuilding mid-connection (a client re-sending
@@ -998,7 +1008,7 @@ async fn handle_client(
                     // `start_streaming` above waits for it — so this drops the
                     // last Arc and releases the duplication.
                     let had_previous = cell.take().is_some();
-                    let encoder = build_encoder(build_fps, build_dim, wanted_codec)?;
+                    let encoder = build_encoder(build_fps, build_dim, wanted_codec, wants_hdr)?;
                     let (width, height) = encoder.dimensions();
                     let codec_config = encoder.codec_config();
                     let build_codec = encoder.codec();
@@ -1020,6 +1030,7 @@ async fn handle_client(
                         build_fps,
                         build_dim,
                         build_codec,
+                        build_hdr: wants_hdr,
                     });
                 }
                 let cached = cell.as_ref().expect("just populated above if empty");

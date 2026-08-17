@@ -104,7 +104,12 @@ impl DesktopEncoder {
     /// `wanted_codec` is a request, not a guarantee — `codec()` reports
     /// what actually ended up encoding (see `Pipeline::new`'s AV1-then-H.264
     /// NVENC fallback).
-    pub fn new(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Result<Self, String> {
+    pub fn new(
+        fps: u32,
+        max_encode_dim: u32,
+        wanted_codec: Codec,
+        wants_hdr: bool,
+    ) -> Result<Self, String> {
         let (init_tx, init_rx) =
             std::sync::mpsc::channel::<Result<(u32, u32, Codec), String>>();
         let (req_tx, req_rx) = std::sync::mpsc::channel::<Request>();
@@ -393,7 +398,12 @@ impl Pipeline {
     /// shards with a `u16` count (see `MAX_DATA_SHARDS` in `streambeam_proto`),
     /// and a very large keyframe (native 4K, say) can still exceed it — a
     /// phone screen has no use for that much detail anyway.
-    fn new(fps: u32, max_encode_dim: u32, wanted_codec: Codec) -> Result<Self, String> {
+    fn new(
+        fps: u32,
+        max_encode_dim: u32,
+        wanted_codec: Codec,
+        wants_hdr: bool,
+    ) -> Result<Self, String> {
         unsafe {
             // MTA so the objects can be used from this thread freely.
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -420,7 +430,7 @@ impl Pipeline {
                 // HDR10 passthrough (docs/HDR.md): only when asked for, only on
                 // an HDR desktop, and only for AV1. Anything else keeps the
                 // tone-mapped SDR path, which stays the default.
-                let hdr10 = hdr10_requested() && hdr_capture && codec == Codec::Av1;
+                let hdr10 = (wants_hdr || hdr10_forced()) && hdr_capture && codec == Codec::Av1;
                 let tex = create_encode_texture(&device, width, height, hdr10)?;
                 let encoder =
                     NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps, codec, hdr10)?;
@@ -1183,13 +1193,14 @@ unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Str
 /// Checked by *both* capture sources — a toggle that only bound the duplication
 /// path would silently revert to our shader the moment WGC took over, which is
 /// exactly when a game is on screen and you're looking at the colours.
-/// `STREAMBEAM_HDR=passthrough` opts into HDR10 (docs/HDR.md stage 1).
+/// `STREAMBEAM_HDR=passthrough` forces HDR10 regardless of what the client
+/// asked for.
 ///
-/// An env var rather than a client capability *for now*: stage 2 replaces this
-/// with real negotiation, and until the client can decode 10-bit PQ this would
-/// hand an 8-bit decoder a stream it will render as garbage. Default off means
-/// nobody gets that by accident.
-fn hdr10_requested() -> bool {
+/// Negotiation (`VideoCaps::hdr`) is the real gate; this stays as a testing
+/// override so the encoder path can be exercised with tools that can't display
+/// the result — `devclient --hdr` advertises the cap properly, but forcing it
+/// is useful when bisecting whether a client's advertisement is the problem.
+fn hdr10_forced() -> bool {
     std::env::var("STREAMBEAM_HDR")
         .map(|v| v.eq_ignore_ascii_case("passthrough"))
         .unwrap_or(false)

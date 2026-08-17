@@ -236,6 +236,9 @@ fn video_caps(max_width: u16, max_height: u16, max_fps: u8) -> VideoCaps {
         h264: true,
         hevc: false,
         av1: av1_decode_supported(),
+        // Android has no HDR display path yet (docs/HDR.md is macOS-first),
+        // so it takes the host's tone-mapped SDR like before.
+        hdr: false,
         max_width: if max_width > 0 {
             max_width
         } else {

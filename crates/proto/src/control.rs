@@ -15,6 +15,13 @@ pub struct VideoCaps {
     /// Stable platform display identifier, or `None` for the host's primary
     /// display. Applied when the session starts.
     pub display_id: Option<u32>,
+    /// The client can decode **and display** HDR10 (10-bit PQ / BT.2020).
+    ///
+    /// Both halves matter: decoding 10-bit into an SDR compositor gets you a
+    /// tone-mapped-by-accident picture, which is what this whole feature
+    /// exists to avoid. A host that sees this false tone-maps to SDR itself
+    /// (docs/HDR.md).
+    pub hdr: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
