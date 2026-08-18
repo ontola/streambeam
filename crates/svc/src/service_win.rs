@@ -2,12 +2,16 @@
 //!
 //! SCM registration via the `windows-service` crate; the actual work is
 //! supervising a **worker** process (`streambeam-host.exe`) launched into the
-//! *active console session* as SYSTEM. A plain service runs in Session 0,
-//! which has no console/desktop at all — so it can't capture anything itself;
-//! it must place the worker in the session where the display lives. Doing
-//! that with a SYSTEM token (rather than a logged-on user's) is deliberate:
-//! it's the same mechanism phase 2 needs to attach to the `Winlogon`
-//! (lock/login/UAC) desktop, which no user-token process may touch.
+//! *active console session*. A plain service runs in Session 0, which has no
+//! console/desktop at all — so it can't capture anything itself; it must place
+//! the worker in the session where the display lives.
+//!
+//! **Which identity that worker runs under is not fixed**, because neither
+//! choice can do the whole job (see [`WorkerToken`]): a SYSTEM token is the
+//! only way onto the `Winlogon` (lock/login/UAC) desktop, and a user token is
+//! the only way to use Windows.Graphics.Capture, without which a game holding
+//! exclusive presentation cannot be captured at all. The supervisor watches
+//! which desktop is at the front and runs the worker that can see it.
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
@@ -18,11 +22,15 @@ use windows::Win32::Security::{
     DuplicateTokenEx, SecurityIdentification, SetTokenInformation, TOKEN_ALL_ACCESS,
     TOKEN_DUPLICATE, TOKEN_QUERY, TokenPrimary, TokenSessionId,
 };
-use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
+use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
+use windows::Win32::System::StationsAndDesktops::{
+    CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
+};
 use windows::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
-    GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess,
-    WaitForSingleObject,
+    CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+    GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW,
+    TerminateProcess, WaitForSingleObject,
 };
 use windows_service::service::{
     ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode,
@@ -132,6 +140,10 @@ pub fn install(worker: Option<String>) -> Res {
     // debugging (2026-08-17/18), during which the only component able to
     // stream the lock screen was the only one unreachable. Install runs
     // elevated, which is exactly when the rule can be created, so create it.
+    // While we still hold the elevation the install prompted for.
+    if let Err(e) = allow_user_control() {
+        eprintln!("could not grant the console user start/stop rights: {e}");
+    }
     if let Err(e) = allow_worker_through_firewall(&worker_path_for_rule) {
         eprintln!(
             "warning: could not add the inbound firewall rule ({e}). The service \
@@ -154,6 +166,58 @@ const FIREWALL_RULE: &str = "StreamBeam host (secure desktop worker)";
 /// Shells out to `netsh` rather than binding the firewall COM API: this runs
 /// once, at install, already elevated, and the COM surface (`INetFwPolicy2`)
 /// would be a lot of FFI for a single rule.
+/// The ACE that lets whoever is signed in at the console start and stop this
+/// service: `RP` (start), `WP` (stop) and `DT` (pause/continue) granted to
+/// `IU`, the interactive-users group.
+const USER_CONTROL_ACE: &str = "(A;;RPWPDT;;;IU)";
+
+/// Let the logged-on user start and stop the service without elevation.
+///
+/// Not a convenience. Updating the *worker* is already elevation-free (see
+/// `staging`), but updating the service binary itself means restarting it, and
+/// by default only administrators may do that — so every change here cost a
+/// UAC dance, which is precisely the friction that let the deployed build rot
+/// a month behind the tree. Applied at install time (already elevated) and
+/// available on its own for services installed before this existed.
+///
+/// The trade-off, stated plainly: anyone signed in at this machine's console
+/// can now stop the host service, and stopping it is what removes remote
+/// access. That is a fair trade on a personal machine — someone at your
+/// keyboard has better options than this — and the wrong one on a shared or
+/// managed box, where this should simply not be run.
+pub fn allow_user_control() -> Res {
+    let shown = std::process::Command::new("sc.exe")
+        .args(["sdshow", SERVICE_NAME])
+        .output()?;
+    let sddl = String::from_utf8_lossy(&shown.stdout).trim().to_string();
+    if !sddl.starts_with("D:") {
+        return Err(format!("could not read the service's security descriptor: {sddl}").into());
+    }
+    if sddl.contains(USER_CONTROL_ACE) {
+        println!("the console user can already start/stop {SERVICE_NAME}");
+        return Ok(());
+    }
+    // The DACL is everything before the SACL; a new ACE has to land inside it,
+    // not after `S:`, or it is silently parsed as an audit entry.
+    let updated = match sddl.find("S:") {
+        Some(at) => format!("{}{}{}", &sddl[..at], USER_CONTROL_ACE, &sddl[at..]),
+        None => format!("{sddl}{USER_CONTROL_ACE}"),
+    };
+    let out = std::process::Command::new("sc.exe")
+        .args(["sdset", SERVICE_NAME, &updated])
+        .output()?;
+    if !out.status.success() {
+        return Err(format!(
+            "sc sdset exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout).trim()
+        )
+        .into());
+    }
+    println!("the console user may now start/stop {SERVICE_NAME} without elevation");
+    Ok(())
+}
+
 fn allow_worker_through_firewall(worker: &std::path::Path) -> Res {
     // Remove first so re-installing (or moving the worker) doesn't accumulate
     // duplicate rules pointing at stale paths.
@@ -348,6 +412,7 @@ fn supervise_worker(worker: &std::path::Path, shutdown_rx: &std::sync::mpsc::Rec
     let mut child: Option<Worker> = None;
     let mut probation: Option<Probation> = None;
     let mut last_refusal: Option<String> = None;
+    let mut pending_token: Option<(WorkerToken, std::time::Instant)> = None;
     loop {
         // Stop requested?
         if shutdown_rx.recv_timeout(Duration::from_millis(500)).is_ok() {
@@ -389,6 +454,26 @@ fn supervise_worker(worker: &std::path::Path, shutdown_rx: &std::sync::mpsc::Rec
         let exited = child.as_ref().is_some_and(|w| w.has_exited());
         let wrong_session = child.as_ref().is_some_and(|w| w.session != console);
 
+        // Which identity the machine needs *right now*. Debounced, because a
+        // UAC prompt flicks the input desktop to Winlogon and back, and every
+        // switch costs the viewer their stream: worth it to reach a lock
+        // screen, absurd for a prompt that was dismissed in half a second.
+        let wanted = desired_token(console);
+        let stable = match &pending_token {
+            Some((t, since)) if *t == wanted => since.elapsed() >= TOKEN_SWITCH_DEBOUNCE,
+            _ => {
+                pending_token = Some((wanted, std::time::Instant::now()));
+                false
+            }
+        };
+        let wrong_token = stable && child.as_ref().is_some_and(|w| w.token != wanted);
+        if wrong_token {
+            log(&format!(
+                "input desktop changed — restarting the worker as {}",
+                wanted.label()
+            ));
+        }
+
         // A worker that dies immediately after an update is the update's fault
         // until proven otherwise — and this service is what provides remote
         // sign-in, so a bad binary would take away the very access needed to
@@ -415,16 +500,21 @@ fn supervise_worker(worker: &std::path::Path, shutdown_rx: &std::sync::mpsc::Rec
             }
         }
 
-        if swapped || exited || wrong_session {
+        if swapped || exited || wrong_session || wrong_token {
             if let Some(w) = child.take() {
                 w.terminate();
             }
         }
         if child.is_none() {
-            child = spawn_worker(worker, console);
+            child = spawn_worker(worker, console, wanted);
         }
     }
 }
+
+/// How long the machine must consistently want the other identity before the
+/// worker is restarted into it. Long enough to ignore a UAC prompt that comes
+/// and goes; short enough that reaching a lock screen still feels immediate.
+const TOKEN_SWITCH_DEBOUNCE: Duration = Duration::from_millis(1500);
 
 /// How long a freshly-staged worker has to stay alive before the update counts
 /// as good, and how many immediate deaths trigger a rollback.
@@ -450,6 +540,9 @@ struct Worker {
     process: HANDLE,
     thread: HANDLE,
     session: u32,
+    /// What it was started as, so the supervisor can notice when the machine
+    /// now needs the other one.
+    token: WorkerToken,
 }
 
 impl Worker {
@@ -470,75 +563,234 @@ impl Worker {
     }
 }
 
-/// Launch the worker as SYSTEM inside `session` (the active console session).
-/// `None` on failure — the supervisor simply retries next tick.
-fn spawn_worker(worker: &std::path::Path, session: u32) -> Option<Worker> {
-    unsafe {
-        // 1. Our own (SYSTEM) token.
-        let mut self_token = HANDLE::default();
-        if OpenProcessToken(
-            GetCurrentProcess(),
-            TOKEN_DUPLICATE | TOKEN_QUERY,
-            &mut self_token,
-        )
-        .is_err()
-        {
-            log("spawn: OpenProcessToken failed");
-            return None;
-        }
+/// Which identity the worker runs under. Not a preference — each choice
+/// forfeits something the other provides, so the supervisor switches:
+///
+/// * [`WorkerToken::ConsoleUser`] can use **Windows.Graphics.Capture**, the
+///   only way to capture a game that has taken exclusive presentation. A
+///   SYSTEM token cannot: measured 2026-08-18 on Mancave, `IsSupported()` and
+///   `CreateForMonitor` both fail with `ERROR_SERVICE_DOES_NOT_EXIST`
+///   (0x80070424) as `session 1, LOCAL SYSTEM`, because WinRT activation
+///   needs per-user service instances that exist for a logged-on account and
+///   not for SYSTEM. The identical binary captures fine as the user.
+/// * [`WorkerToken::System`] can attach to the **Winlogon** desktop, which is
+///   how the lock/login/UAC screen is streamed and signed into. No user-token
+///   process may touch it, at all, by design.
+///
+/// Running one worker means giving up games or giving up remote sign-in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WorkerToken {
+    System,
+    ConsoleUser,
+}
 
-        // 2. Duplicate it into a primary token we can retarget + hand to
-        //    CreateProcessAsUser.
-        let mut dup = HANDLE::default();
-        let dup_ok = DuplicateTokenEx(
-            self_token,
-            TOKEN_ALL_ACCESS,
-            None,
-            SecurityIdentification,
-            TokenPrimary,
-            &mut dup,
+impl WorkerToken {
+    fn label(self) -> &'static str {
+        match self {
+            WorkerToken::System => "LOCAL SYSTEM (secure desktop)",
+            WorkerToken::ConsoleUser => "the console user (game capture)",
+        }
+    }
+}
+
+/// Is the secure desktop at the front? That is the one thing only a SYSTEM
+/// worker can capture, so it decides which token the worker needs.
+///
+/// Anything that isn't clearly the user's own desktop is treated as secure:
+/// failing to open the input desktop is itself what a user-token process sees
+/// when Winlogon is up, and guessing "user" there would leave a locked machine
+/// streaming nothing.
+fn secure_desktop_is_active() -> bool {
+    unsafe {
+        let Ok(desk) = OpenInputDesktop(Default::default(), false, DESKTOP_READOBJECTS) else {
+            return true;
+        };
+        let mut buf = [0u16; 64];
+        let mut needed = 0u32;
+        let ok = GetUserObjectInformationW(
+            // `HDESK` and `HANDLE` are the same thing to the API; the crate
+            // just types desktops more precisely than user32 does.
+            HANDLE(desk.0),
+            UOI_NAME,
+            Some(buf.as_mut_ptr() as *mut _),
+            (buf.len() * 2) as u32,
+            Some(&mut needed),
         )
         .is_ok();
-        let _ = CloseHandle(self_token);
-        if !dup_ok {
-            log("spawn: DuplicateTokenEx failed");
-            return None;
+        let _ = CloseDesktop(desk);
+        if !ok {
+            return true;
         }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let name = String::from_utf16_lossy(&buf[..len]);
+        // "Default" is the interactive desktop; "Winlogon" is the secure one,
+        // and "Screen-saver" is neither but is equally out of a user's reach.
+        !name.eq_ignore_ascii_case("Default")
+    }
+}
 
-        // 3. Point the duplicated SYSTEM token at the console session, so the
-        //    worker lands where the display is — the crux of the whole thing.
-        let sid = session;
-        if SetTokenInformation(
-            dup,
-            TokenSessionId,
-            &sid as *const u32 as *const _,
-            std::mem::size_of::<u32>() as u32,
-        )
-        .is_err()
-        {
-            log("spawn: SetTokenInformation(session) failed");
-            let _ = CloseHandle(dup);
-            return None;
+/// The logged-on console user's primary token, if anybody is signed in.
+/// Requires SE_TCB_NAME, which SYSTEM has and nothing else does.
+fn console_user_token(session: u32) -> Option<HANDLE> {
+    unsafe {
+        let mut token = HANDLE::default();
+        WTSQueryUserToken(session, &mut token).ok()?;
+        Some(token)
+    }
+}
+
+/// Which token the worker should be running under right now.
+fn desired_token(session: u32) -> WorkerToken {
+    if secure_desktop_is_active() {
+        return WorkerToken::System;
+    }
+    match console_user_token(session) {
+        Some(t) => {
+            unsafe {
+                let _ = CloseHandle(t);
+            }
+            WorkerToken::ConsoleUser
         }
+        // Nobody signed in: there is no user to run as, and the login screen
+        // is exactly what SYSTEM is for.
+        None => WorkerToken::System,
+    }
+}
 
-        // 4. Share the app's host identity + pairings: point the worker at
-        //    the user's data dir (recorded at enable time). Set it on *this*
-        //    process so the child inherits it via the NULL environment below
-        //    — SYSTEM can read/write the user's %APPDATA% fine. Without this
-        //    the worker would mint its own identity under SYSTEM's profile
-        //    and the client would have to re-pair.
-        if let Some(dir) = recorded_worker_data_dir() {
-            // Already inside spawn_worker's unsafe block.
-            std::env::set_var("STREAMBEAM_DATA_DIR", &dir);
+/// The console user's environment, plus the variables the worker needs.
+///
+/// A user-token process handed SYSTEM's environment gets SYSTEM's `%APPDATA%`,
+/// `%TEMP%` and profile paths, which is a subtle way to produce a worker that
+/// runs but behaves like a different account. The block is built for the real
+/// user and our own variables appended.
+unsafe fn user_environment(token: HANDLE, data_dir: Option<&str>) -> Option<Vec<u16>> {
+    let mut block = std::ptr::null_mut();
+    let mut env: Vec<u16> = Vec::new();
+    unsafe {
+        CreateEnvironmentBlock(&mut block, Some(token), false).ok()?;
+        let p = block as *const u16;
+        let mut i = 0usize;
+        // The block is "KEY=VALUE\0KEY=VALUE\0\0" — copy up to and including
+        // the final entry's terminator, leaving the block terminator to be
+        // re-added after our own entries.
+        loop {
+            let c = *p.add(i);
+            env.push(c);
+            if c == 0 && *p.add(i + 1) == 0 {
+                break;
+            }
+            i += 1;
         }
-        // Opt the worker into desktop-following (capture + input track the
-        // lock/login/UAC desktop). The in-app host never sets this, so its
-        // injection stays on the single interactive desktop — see
-        // `desktop_win::following_enabled`.
-        std::env::set_var("STREAMBEAM_SECURE_DESKTOP", "1");
+        let _ = DestroyEnvironmentBlock(block);
+    }
+    if let Some(dir) = data_dir {
+        env.extend(wide(&format!("STREAMBEAM_DATA_DIR={dir}")));
+    }
+    // Deliberately *not* STREAMBEAM_SECURE_DESKTOP: desktop-following is a
+    // SYSTEM-only trick, and a user worker attempting it would fail every tick.
+    env.push(0);
+    Some(env)
+}
 
-        // `winsta0\default` is the interactive desktop; phase 2 switches the
-        // worker's own threads onto Winlogon as needed.
+/// Launch the worker inside `session` (the active console session).
+/// `None` on failure — the supervisor simply retries next tick.
+fn spawn_worker(worker: &std::path::Path, session: u32, kind: WorkerToken) -> Option<Worker> {
+    unsafe {
+        // The token the worker runs under, plus (for a user worker) the
+        // environment that has to travel with it.
+        let mut env_block: Option<Vec<u16>> = None;
+        let token = match kind {
+            WorkerToken::ConsoleUser => {
+                let Some(user) = console_user_token(session) else {
+                    log("spawn: nobody signed in at the console — using SYSTEM instead");
+                    return spawn_worker(worker, session, WorkerToken::System);
+                };
+                match user_environment(user, recorded_worker_data_dir().as_deref()) {
+                    Some(env) => env_block = Some(env),
+                    None => {
+                        // Rather than silently run the user's worker with
+                        // SYSTEM's profile — a worker that starts and then
+                        // behaves like the wrong account.
+                        log("spawn: CreateEnvironmentBlock failed for the console user");
+                        let _ = CloseHandle(user);
+                        return None;
+                    }
+                }
+                user
+            }
+            WorkerToken::System => {
+                // 1. Our own (SYSTEM) token.
+                let mut self_token = HANDLE::default();
+                if OpenProcessToken(
+                    GetCurrentProcess(),
+                    TOKEN_DUPLICATE | TOKEN_QUERY,
+                    &mut self_token,
+                )
+                .is_err()
+                {
+                    log("spawn: OpenProcessToken failed");
+                    return None;
+                }
+
+                // 2. Duplicate it into a primary token we can retarget + hand
+                //    to CreateProcessAsUser.
+                let mut dup = HANDLE::default();
+                let dup_ok = DuplicateTokenEx(
+                    self_token,
+                    TOKEN_ALL_ACCESS,
+                    None,
+                    SecurityIdentification,
+                    TokenPrimary,
+                    &mut dup,
+                )
+                .is_ok();
+                let _ = CloseHandle(self_token);
+                if !dup_ok {
+                    log("spawn: DuplicateTokenEx failed");
+                    return None;
+                }
+
+                // 3. Point the duplicated SYSTEM token at the console session,
+                //    so the worker lands where the display is — the crux of the
+                //    whole thing. A user token already names its own session.
+                let sid = session;
+                if SetTokenInformation(
+                    dup,
+                    TokenSessionId,
+                    &sid as *const u32 as *const _,
+                    std::mem::size_of::<u32>() as u32,
+                )
+                .is_err()
+                {
+                    log("spawn: SetTokenInformation(session) failed");
+                    let _ = CloseHandle(dup);
+                    return None;
+                }
+
+                // 4. Share the app's host identity + pairings: point the worker
+                //    at the user's data dir (recorded at enable time). Set it on
+                //    *this* process so the child inherits it via the NULL
+                //    environment below — SYSTEM can read/write the user's
+                //    %APPDATA% fine. Without this the worker would mint its own
+                //    identity under SYSTEM's profile and the client would have
+                //    to re-pair. The user worker gets the same directory
+                //    through its own environment block, so both identities
+                //    match and switching between them is invisible to a client.
+                if let Some(dir) = recorded_worker_data_dir() {
+                    // Already inside spawn_worker's unsafe block.
+                    std::env::set_var("STREAMBEAM_DATA_DIR", &dir);
+                }
+                // Opt the worker into desktop-following (capture + input track
+                // the lock/login/UAC desktop). The in-app host never sets this,
+                // so its injection stays on the single interactive desktop —
+                // see `desktop_win::following_enabled`.
+                std::env::set_var("STREAMBEAM_SECURE_DESKTOP", "1");
+                dup
+            }
+        };
+
+        // `winsta0\default` is the interactive desktop; the SYSTEM worker
+        // switches its own threads onto Winlogon as needed.
         let mut cmd = wide(&format!("\"{}\"", worker.display()));
         let mut desktop = wide("winsta0\\default");
         let mut si = STARTUPINFOW {
@@ -547,32 +799,44 @@ fn spawn_worker(worker: &std::path::Path, session: u32) -> Option<Worker> {
             ..Default::default()
         };
         let mut pi = PROCESS_INFORMATION::default();
+        // A user worker must not put a console window on the user's own
+        // desktop; the SYSTEM one keeps the console it has always had.
+        let window_flag = match kind {
+            WorkerToken::ConsoleUser => CREATE_NO_WINDOW,
+            WorkerToken::System => CREATE_NEW_CONSOLE,
+        };
         let created = CreateProcessAsUserW(
-            Some(dup),
+            Some(token),
             None,
             Some(windows::core::PWSTR(cmd.as_mut_ptr())),
             None,
             None,
             false,
-            CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE,
-            None, // inherit SYSTEM environment (worker uses its own data dir)
+            CREATE_UNICODE_ENVIRONMENT | window_flag,
+            // None = inherit SYSTEM's environment (worker uses its own data
+            // dir); Some = the console user's own environment.
+            env_block
+                .as_ref()
+                .map(|e| e.as_ptr() as *const std::ffi::c_void),
             None,
             &mut si,
             &mut pi,
         );
-        let _ = CloseHandle(dup);
+        let _ = CloseHandle(token);
         if created.is_err() {
             log(&format!("spawn: CreateProcessAsUser failed: {:?}", created));
             return None;
         }
         log(&format!(
-            "worker launched in session {session} (pid {})",
+            "worker launched in session {session} as {} (pid {})",
+            kind.label(),
             pi.dwProcessId
         ));
         Some(Worker {
             process: pi.hProcess,
             thread: pi.hThread,
             session,
+            token: kind,
         })
     }
 }

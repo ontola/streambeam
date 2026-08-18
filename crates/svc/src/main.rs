@@ -16,6 +16,9 @@
 //!   streambeam-svc install [--worker <path>]   register with the SCM
 //!   streambeam-svc uninstall                   remove it
 //!   streambeam-svc start | stop                control it
+//!   streambeam-svc allow-user-control          let the console user do that
+//!                                              without elevation (install
+//!                                              does this too)
 //!   streambeam-svc run                          SCM entry point (not for humans)
 //!
 //! Updating the worker needs none of these, and no elevation: drop the new
@@ -37,6 +40,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("help");
     let result = match cmd {
+        "allow-user-control" => service_win::allow_user_control(),
         "install" => {
             // Optional explicit worker path; default is streambeam-host.exe
             // next to this binary.
@@ -74,7 +78,8 @@ fn main() {
         other => {
             eprintln!(
                 "streambeam-svc: unknown command {other:?}\n\
-                 usage: streambeam-svc <install|uninstall|start|stop|run> [--worker <path>]"
+                 usage: streambeam-svc \
+                 <install|uninstall|start|stop|allow-user-control|run> [--worker <path>]"
             );
             std::process::exit(2);
         }
