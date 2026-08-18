@@ -121,12 +121,21 @@ class StreamBeamHdrView: NSView {
       constant float PQ_C1 = 0.8359375;         // 3424 / 4096
       constant float PQ_C2 = 18.8515625;        // 2413 / 4096 * 32
       constant float PQ_C3 = 18.6875;           // 2392 / 4096 * 32
-      // BT.2408 reference ("graphics") white. The host composites the Windows
-      // desktop at its own SDR white level — 228 nits on Mancave, which it
-      // already measures — so signalling that per-stream would be more
-      // accurate than this constant. Until the protocol carries it, the
-      // standard value is the honest default and is within ~12% of it.
-      constant float REFERENCE_WHITE_NITS = 203.0;
+      // The luminance that means "white" here — i.e. what maps to 1.0, the
+      // display's own SDR white.
+      //
+      // 100 nits, the reference-display value sRGB and BT.1886 are defined
+      // against, and what macOS EDR treats 1.0 as. *Not* BT.2408's 203-nit
+      // graphics white, which was tried first (2026-08-18) and rendered
+      // everything half as bright as it should be: measured live, HITMAN's
+      // menu peaked at 113 nits, which 203 turns into 0.55 — a white logo
+      // arriving as mid-grey, which is exactly what was reported.
+      //
+      // 113 nits for a game's white is not an error either: HDR titles render
+      // UI at their own paper-white, near 100 nits, rather than at the
+      // desktop's SDR white level (228 here). So this constant has to be the
+      // *display's* white, not the host's.
+      constant float REFERENCE_WHITE_NITS = 100.0;
       struct VsOut { float4 pos [[position]]; float2 uv; };
       vertex VsOut v_main(uint id [[vertex_id]]) {
         float2 p = float2((id << 1) & 2, id & 2);

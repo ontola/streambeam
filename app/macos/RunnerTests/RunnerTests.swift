@@ -395,7 +395,7 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     func clamp(_ v: Double) -> Double { min(max(v, 0), 1) }
     // The shader now leaves PQ behind: code values become absolute nits, then
     // are anchored to SDR white so 1.0 out is diffuse white on this display.
-    func out(_ code: Double) -> Double { pqToNits(clamp(code)) / 203.0 }
+    func out(_ code: Double) -> Double { pqToNits(clamp(code)) / 100.0 }
     return (
       r: out(yv + 2 * (1 - kr) * crv),
       g: out(yv - (2 * (1 - kb) * kb / kg) * cbv - (2 * (1 - kr) * kr / kg) * crv),
@@ -454,11 +454,11 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     XCTAssertLessThan(
       black.r, 0.004, "video black (Y=64) must reach 0, not a lifted \(black.r) — washed out")
     // Video white is PQ's *peak* (10000 nits), which anchored to SDR white is
-    // ~49x. Far above any real display, and deliberately so: the compositor
+    // 100x. Far above any real display, and deliberately so: the compositor
     // rolls it off against whatever headroom exists instead of the picture
     // being pre-squashed to fit a guess.
     XCTAssertGreaterThan(
-      white.r, 40.0, "video white (Y=940) must reach PQ peak, not a dull \(white.r)")
+      white.r, 80.0, "video white (Y=940) must reach PQ peak, not a dull \(white.r)")
   }
 
   private func decodeHdrFixture() throws -> (video: StreamBeamVideo, pixels: CVPixelBuffer) {
