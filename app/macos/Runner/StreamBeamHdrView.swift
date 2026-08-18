@@ -95,6 +95,13 @@ class StreamBeamHdrView: NSView {
     // first, 2026-08-18) treats the symptom — it tells macOS what to assume
     // while still leaving the mapping to macOS.
     metalLayer.framebufferOnly = true
+    // Hidden until the display's EDR headroom settles. macOS only grants
+    // headroom once EDR content is actually on screen, so the first frames are
+    // necessarily mapped for a display state that is still moving — measured
+    // 1.42 -> 4.00 across ~20 frames. Showing them means watching the picture
+    // wash out and then correct itself a second later, which is exactly what
+    // was reported. Better to show black briefly than to show wrong.
+    metalLayer.opacity = 0
     metalLayer.isOpaque = true
     layer = metalLayer
 
@@ -279,6 +286,7 @@ class StreamBeamHdrView: NSView {
     // nothing upstream changing at all. Log the ramp so it can be correlated
     // with what the eye sees instead of guessed at.
     let headroomNow = liveHeadroom()
+    revealWhenSettled(headroomNow)
     if abs(headroomNow - lastLoggedHeadroom) > 0.05 {
       lastLoggedHeadroom = headroomNow
       NSLog(
@@ -378,6 +386,42 @@ class StreamBeamHdrView: NSView {
 
   /// Last headroom value reported, so only real changes are logged.
   private var lastLoggedHeadroom: Double = 0
+
+  /// Headroom-settling state for the reveal (see `metalLayer.opacity = 0`).
+  private var revealed = false
+  private var headroomAtLastChange: Double = 0
+  private var lastHeadroomChange: CFTimeInterval = 0
+
+  /// Show the picture once the display has stopped changing underneath it.
+  ///
+  /// The hard frame cap is not optional. A reveal condition that never fires
+  /// is a black screen, which is this project's most expensive failure mode
+  /// and has already been shipped twice; a stuck ramp must degrade to "shown,
+  /// possibly mis-mapped", never to "hidden forever".
+  private func revealWhenSettled(_ headroom: Double) {
+    guard !revealed else { return }
+    let now = CACurrentMediaTime()
+    if abs(headroom - headroomAtLastChange) > 0.02 {
+      headroomAtLastChange = headroom
+      lastHeadroomChange = now
+    }
+    let settled = lastHeadroomChange > 0 && now - lastHeadroomChange > 0.4
+    let tooLong = framesPresented > 240
+    guard settled || tooLong else { return }
+    revealed = true
+    NSLog(
+      "%@",
+      "StreamBeam: showing HDR picture — headroom \(headroom) after "
+        + "\(framesPresented) frames\(tooLong ? " (gave up waiting for it to settle)" : "")")
+    DispatchQueue.main.async { [weak self] in
+      // No implicit animation: a half-second cross-fade of a live video layer
+      // is worse than either state.
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      self?.metalLayer.opacity = 1
+      CATransaction.commit()
+    }
+  }
 
   /// What the incoming picture is actually *made of*, in absolute nits.
   ///
