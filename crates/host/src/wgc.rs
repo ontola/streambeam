@@ -70,7 +70,26 @@ mod imp {
     /// falling back, so an older machine keeps the duplication behaviour rather
     /// than erroring.
     pub fn supported() -> bool {
-        GraphicsCaptureSession::IsSupported().unwrap_or(false)
+        // WinRT activation needs the apartment initialised *as WinRT*.
+        // `capture.rs` calls `CoInitializeEx` for COM, which is not the same
+        // thing, and `IsSupported()` answering "no" is indistinguishable from
+        // an OS that genuinely lacks the API. Initialise explicitly and treat
+        // "already initialised" (RPC_E_CHANGED_MODE / S_FALSE) as fine.
+        unsafe {
+            let hr = windows::Win32::System::WinRT::RoInitialize(
+                windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
+            );
+            if let Err(e) = &hr {
+                crate::logging::log(&format!("WGC: RoInitialize returned {e} (continuing)"));
+            }
+        }
+        match GraphicsCaptureSession::IsSupported() {
+            Ok(v) => v,
+            Err(e) => {
+                crate::logging::log(&format!("WGC: IsSupported failed ({e})"));
+                false
+            }
+        }
     }
 
     impl WgcCapture {

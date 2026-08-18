@@ -72,6 +72,7 @@ windows = { version = "0.61", features = [
     # the screen — a game holding exclusive presentation (wgc.rs).
     "Graphics_Capture",
     "Graphics_DirectX_Direct3D11",
+    "Win32_System_WinRT",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_System_WinRT_Direct3D11",
     "Foundation",
