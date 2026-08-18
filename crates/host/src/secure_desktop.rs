@@ -80,7 +80,9 @@ pub fn set_enabled(enable: bool) -> Result<(), String> {
         use windows::Win32::System::Threading::{
             GetExitCodeProcess, INFINITE, WaitForSingleObject,
         };
-        use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+        use windows::Win32::UI::Shell::{
+            SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
+        };
         use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
         use windows::core::{PCWSTR, w};
 

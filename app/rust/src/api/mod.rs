@@ -47,7 +47,9 @@ pub fn set_audio_muted(muted: bool) {
 pub fn secure_desktop_status() -> String {
     #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     {
-        return streambeam_host::secure_desktop::status().as_str().to_string();
+        return streambeam_host::secure_desktop::status()
+            .as_str()
+            .to_string();
     }
     #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
     {

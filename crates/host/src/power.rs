@@ -19,8 +19,8 @@ pub fn suspend(action: PowerAction) -> Result<(), String> {
     unsafe {
         use windows::Win32::Foundation::{HANDLE, LUID};
         use windows::Win32::Security::{
-            AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
-            TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+            AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW,
+            SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
         };
         use windows::Win32::System::Power::SetSuspendState;
         use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -109,9 +109,7 @@ pub fn wake_info(serve_ips: &[IpAddr]) -> Option<([u8; 6], Option<SocketAddr>)> 
                         if mac_len == 6 {
                             let mut mac = [0u8; 6];
                             mac.copy_from_slice(&info.Address[..6]);
-                            let bcast = std::net::Ipv4Addr::from(
-                                u32::from(ip) | !u32::from(mask),
-                            );
+                            let bcast = std::net::Ipv4Addr::from(u32::from(ip) | !u32::from(mask));
                             return Some((mac, Some(SocketAddr::from((bcast, 9)))));
                         }
                     }

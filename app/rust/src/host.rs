@@ -222,10 +222,10 @@ pub fn publish_clipboard(text: String) {
 }
 
 pub fn take_remote_clipboard() -> Option<String> {
-    service_slot()
-        .lock()
-        .ok()
-        .and_then(|slot| slot.as_ref().and_then(|service| service.controls.take_remote_clipboard()))
+    service_slot().lock().ok().and_then(|slot| {
+        slot.as_ref()
+            .and_then(|service| service.controls.take_remote_clipboard())
+    })
 }
 
 pub fn stop() {
