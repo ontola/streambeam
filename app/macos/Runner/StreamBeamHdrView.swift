@@ -232,6 +232,11 @@ class StreamBeamHdrView: NSView {
     cmd.present(drawable)
     cmd.commit()
     framesPresented += 1
+    framesSinceMeasure += 1
+    if framesSinceMeasure >= 60 || framesPresented == 1 {
+      framesSinceMeasure = 0
+      measureContent(buffer)
+    }
     // macOS grants EDR headroom only once EDR content is actually on screen,
     // so it ramps *after* the first frames — and because PQ is absolute, the
     // same code values map to a different luminance before and after. That is
@@ -330,6 +335,56 @@ class StreamBeamHdrView: NSView {
 
   /// Last headroom value reported, so only real changes are logged.
   private var lastLoggedHeadroom: Double = 0
+
+  /// What the incoming picture is actually *made of*, in absolute nits.
+  ///
+  /// The single number this feature kept lacking. "Washed out" and "too dim"
+  /// are both consistent with a correct pipeline carrying content at the wrong
+  /// luminance, and nothing on either side reported it — so three separate
+  /// theories about the display got tested before anyone checked the signal.
+  /// Windows composites its desktop at the SDR white level it reports (228
+  /// nits on the host measured here), so that is what a white window should
+  /// read as.
+  private(set) var contentMedianNits: Double = 0
+  private(set) var contentPeakNits: Double = 0
+  private var framesSinceMeasure = 0
+
+  /// Sample the decoded luma plane and convert PQ code values to nits.
+  /// Strided hard and run rarely — this is a diagnostic, not a per-frame cost.
+  private func measureContent(_ buffer: CVPixelBuffer) {
+    guard CVPixelBufferGetPixelFormatType(buffer)
+      == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+    else { return }
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return }
+    let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+    let width = CVPixelBufferGetWidthOfPlane(buffer, 0)
+    let height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+
+    var codes: [Double] = []
+    codes.reserveCapacity(4096)
+    for row in Swift.stride(from: 0, to: height, by: 16) {
+      let line = (base + row * stride).assumingMemoryBound(to: UInt16.self)
+      for col in Swift.stride(from: 0, to: width, by: 16) {
+        // 10 bits in the MSBs, limited range 64...940.
+        let code = Double(line[col] >> 6)
+        codes.append(min(max((code - 64) / 876, 0), 1))
+      }
+    }
+    guard !codes.isEmpty else { return }
+    codes.sort()
+    contentMedianNits = pqToNits(codes[codes.count / 2])
+    contentPeakNits = pqToNits(codes[min(codes.count - 1, Int(Double(codes.count) * 0.99))])
+  }
+
+  /// ST.2084 EOTF, matching the shader's.
+  private func pqToNits(_ code: Double) -> Double {
+    let m1 = 2610.0 / 16384, m2 = 2523.0 / 4096 * 128
+    let c1 = 3424.0 / 4096, c2 = 2413.0 / 4096 * 32, c3 = 2392.0 / 4096 * 32
+    let e = pow(max(code, 0), 1 / m2)
+    return 10000 * pow(max(e - c1, 0) / (c2 - c3 * e), 1 / m1)
+  }
 
   private(set) var drawFailures = 0
   private(set) var lastDrawFailure: String?

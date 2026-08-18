@@ -16,6 +16,8 @@ class HdrStatus {
     required this.present,
     required this.frames,
     required this.headroom,
+    this.medianNits = 0,
+    this.peakNits = 0,
     this.setupFailure = '',
     this.drawFailures = 0,
     this.lastDrawFailure = '',
@@ -32,6 +34,13 @@ class HdrStatus {
   /// none, and PQ content will look very dark through no fault of the stream.
   final double headroom;
 
+  /// Absolute luminance of the incoming picture. A white Windows window
+  /// should read near the host's SDR white level (228 nits on Mancave); much
+  /// lower means the host is sending a dim signal and no display-side fix
+  /// will help.
+  final double medianNits;
+  final double peakNits;
+
   final String setupFailure;
   final int drawFailures;
   final String lastDrawFailure;
@@ -42,6 +51,8 @@ class HdrStatus {
       present: map['present'] == true,
       frames: (map['frames'] as num?)?.toInt() ?? 0,
       headroom: (map['headroom'] as num?)?.toDouble() ?? 1.0,
+      medianNits: (map['medianNits'] as num?)?.toDouble() ?? 0,
+      peakNits: (map['peakNits'] as num?)?.toDouble() ?? 0,
       setupFailure: (map['setupFailure'] as String?) ?? '',
       drawFailures: (map['drawFailures'] as num?)?.toInt() ?? 0,
       lastDrawFailure: (map['lastDrawFailure'] as String?) ?? '',
@@ -72,6 +83,7 @@ String hdrStatusLine(HdrStatus status) {
         'turn off Low Power Mode, or stream SDR';
   }
   final headroom = status.headroom.toStringAsFixed(1);
-  return 'HDR active — ${status.frames} frames, ${headroom}x headroom '
-      'above SDR white';
+  return 'HDR active — ${headroom}x headroom, content '
+      '${status.medianNits.round()} nits median / '
+      '${status.peakNits.round()} nits peak';
 }

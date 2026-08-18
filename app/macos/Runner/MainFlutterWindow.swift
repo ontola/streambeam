@@ -385,6 +385,11 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
           // The number that separates real HDR from a PQ stream being crushed
           // into SDR. Nothing upstream can observe it.
           "headroom": view?.liveHeadroom() ?? 1.0,
+          // What the stream is actually carrying, in absolute nits — the
+          // difference between "the display is mapping it oddly" and "the host
+          // sent a dim picture", which look identical on screen.
+          "medianNits": view?.contentMedianNits ?? 0,
+          "peakNits": view?.contentPeakNits ?? 0,
           "drawFailures": view?.drawFailures ?? 0,
           "lastDrawFailure": view?.lastDrawFailure ?? "",
           "setupFailure": view?.setupFailure ?? "",
