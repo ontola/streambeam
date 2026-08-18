@@ -93,7 +93,10 @@ fn describe(event: &InputEvent) -> (diag::Kind, String) {
         ),
         InputEvent::MouseButton { button, down } => (
             Kind::MouseButton,
-            format!("mouse button {button} {}", if *down { "down" } else { "up" }),
+            format!(
+                "mouse button {button} {}",
+                if *down { "down" } else { "up" }
+            ),
         ),
         InputEvent::MouseMove { .. } => (Kind::MouseMove, "mouse move".to_string()),
         InputEvent::MouseAbs { .. } => (Kind::MouseAbs, "mouse abs".to_string()),
@@ -633,7 +636,10 @@ unsafe fn key(vk: u16, down: bool) {
     };
     let inserted = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
     diag::note_injected(
-        &format!("key vk={vk} scan={scan} {}", if down { "down" } else { "up" }),
+        &format!(
+            "key vk={vk} scan={scan} {}",
+            if down { "down" } else { "up" }
+        ),
         inserted,
         GetLastError(),
     );

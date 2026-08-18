@@ -865,8 +865,14 @@ impl NvencEncoder {
     /// P-frame's size) and is one more opportunity for whatever's still
     /// unverified about this reconfigure path to go wrong.
     pub unsafe fn reconfigure(&mut self, bitrate_bps: u32, force_idr: bool) -> Result<(), String> {
-        let mut config =
-            build_config(&self.functions, self.encoder, self.codec, self.fps, bitrate_bps, self.hdr10)?;
+        let mut config = build_config(
+            &self.functions,
+            self.encoder,
+            self.codec,
+            self.fps,
+            bitrate_bps,
+            self.hdr10,
+        )?;
 
         let mut init_params: InitializeParams = std::mem::zeroed();
         init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;

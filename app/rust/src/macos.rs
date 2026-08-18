@@ -43,16 +43,17 @@ pub extern "C" fn streambeam_macos_capture_request_revision() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn streambeam_macos_capture_set_displays(
-    json: *const u8,
-    len: usize,
-) {
+pub unsafe extern "C" fn streambeam_macos_capture_set_displays(json: *const u8, len: usize) {
     if json.is_null() || len == 0 {
         return;
     }
     let bytes = unsafe { slice::from_raw_parts(json, len) };
-    let Ok(text) = str::from_utf8(bytes) else { return };
-    let Ok(displays) = serde_json::from_str(text) else { return };
+    let Ok(text) = str::from_utf8(bytes) else {
+        return;
+    };
+    let Ok(displays) = serde_json::from_str(text) else {
+        return;
+    };
     streambeam_host::macos_screen::set_displays(displays);
 }
 

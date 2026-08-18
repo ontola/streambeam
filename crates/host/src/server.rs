@@ -1460,7 +1460,10 @@ async fn stream_video(
             let timestamps: Vec<u64> = (0..span as u16)
                 .filter_map(|off| {
                     let id = first.wrapping_add(off);
-                    sent_frames.iter().find(|(fid, _)| *fid == id).map(|(_, ts)| *ts)
+                    sent_frames
+                        .iter()
+                        .find(|(fid, _)| *fid == id)
+                        .map(|(_, ts)| *ts)
                 })
                 .collect();
             let mut enc = encoder.lock().await;

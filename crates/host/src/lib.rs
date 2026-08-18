@@ -10,10 +10,10 @@ pub mod audio;
 pub mod audio_capture_win;
 #[cfg(windows)]
 pub mod capture;
-#[cfg(windows)]
-pub mod desktop_win;
 pub mod config;
 pub mod data_dir;
+#[cfg(windows)]
+pub mod desktop_win;
 pub mod encode;
 pub mod gamepad_inject;
 pub mod input_inject;
@@ -25,9 +25,9 @@ pub mod mock;
 pub mod nvenc;
 pub mod power;
 pub mod qr;
-pub mod secure_desktop;
 #[cfg(windows)]
 pub mod scale;
+pub mod secure_desktop;
 pub mod server;
 #[cfg(windows)]
 pub mod viiper_server;

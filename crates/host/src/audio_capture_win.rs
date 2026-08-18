@@ -119,7 +119,9 @@ unsafe fn capture_until_stopped() -> Result<(), String> {
         .Activate(CLSCTX_ALL, None)
         .map_err(|err| e("IMMDevice::Activate", err))?;
 
-    let fmt_ptr = client.GetMixFormat().map_err(|err| e("GetMixFormat", err))?;
+    let fmt_ptr = client
+        .GetMixFormat()
+        .map_err(|err| e("GetMixFormat", err))?;
     // WAVEFORMATEX is repr(packed) in the windows crate — copy the fields
     // into locals once instead of referencing them in place (E0793).
     let fmt = std::ptr::read_unaligned(fmt_ptr);
@@ -135,7 +137,8 @@ unsafe fn capture_until_stopped() -> Result<(), String> {
         (WAVE_FORMAT_PCM, 16) => Some(SampleKind::I16),
         (WAVE_FORMAT_EXTENSIBLE, _) => {
             let ext = std::ptr::read_unaligned(fmt_ptr as *const WAVEFORMATEXTENSIBLE);
-            const SUBTYPE_IEEE_FLOAT: GUID = GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
+            const SUBTYPE_IEEE_FLOAT: GUID =
+                GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
             const SUBTYPE_PCM: GUID = GUID::from_u128(0x00000001_0000_0010_8000_00aa00389b71);
             let sub = ext.SubFormat;
             match (sub, bits) {
@@ -170,7 +173,9 @@ unsafe fn capture_until_stopped() -> Result<(), String> {
     let capture: IAudioCaptureClient = client
         .GetService()
         .map_err(|err| e("GetService IAudioCaptureClient", err))?;
-    client.Start().map_err(|err| e("IAudioClient::Start", err))?;
+    client
+        .Start()
+        .map_err(|err| e("IAudioClient::Start", err))?;
     crate::logging::log(&format!(
         "audio capture: loopback running ({src_rate} Hz, {src_channels} ch, {}) -> 48 kHz stereo",
         match kind {
@@ -213,14 +218,16 @@ unsafe fn capture_until_stopped() -> Result<(), String> {
                     let right = (src_channels > 1) as usize;
                     match kind {
                         SampleKind::F32 => {
-                            let s = std::slice::from_raw_parts(data as *const f32, n * src_channels);
+                            let s =
+                                std::slice::from_raw_parts(data as *const f32, n * src_channels);
                             for f in s.chunks_exact(src_channels) {
                                 stereo.push(f32_to_i16(f[0]));
                                 stereo.push(f32_to_i16(f[right]));
                             }
                         }
                         SampleKind::I16 => {
-                            let s = std::slice::from_raw_parts(data as *const i16, n * src_channels);
+                            let s =
+                                std::slice::from_raw_parts(data as *const i16, n * src_channels);
                             for f in s.chunks_exact(src_channels) {
                                 stereo.push(f[0]);
                                 stereo.push(f[right]);

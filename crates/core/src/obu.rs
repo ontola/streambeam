@@ -343,7 +343,11 @@ pub fn parse_sequence_header(seq_header_obu: &[u8]) -> Option<Av1SeqInfo> {
             _ => {
                 if bit_depth == 12 {
                     subsampling_x = r.read(1)? == 1;
-                    subsampling_y = if subsampling_x { r.read(1)? == 1 } else { false };
+                    subsampling_y = if subsampling_x {
+                        r.read(1)? == 1
+                    } else {
+                        false
+                    };
                 } else {
                     subsampling_x = true;
                     subsampling_y = false;
@@ -517,7 +521,10 @@ mod tests {
         let stripped = access_unit_without_redundant_headers(&tu);
         let obus = split_obus(&stripped);
         assert_eq!(obus.len(), 2);
-        assert!(obus.iter().all(|o| o.obu_type != OBU_TYPE_REDUNDANT_FRAME_HEADER));
+        assert!(
+            obus.iter()
+                .all(|o| o.obu_type != OBU_TYPE_REDUNDANT_FRAME_HEADER)
+        );
     }
 
     #[test]

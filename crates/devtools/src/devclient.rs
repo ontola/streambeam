@@ -181,7 +181,11 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
                 println!(
                     "fixture: wrote {} byte {} to {}",
                     payload.len(),
-                    if session.codec == "av01" { "av1C record" } else { "codec_config" },
+                    if session.codec == "av01" {
+                        "av1C record"
+                    } else {
+                        "codec_config"
+                    },
                     path.display()
                 );
             }

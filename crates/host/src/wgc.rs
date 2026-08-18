@@ -38,10 +38,10 @@ mod imp {
     use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
     use windows::Graphics::DirectX::DirectXPixelFormat;
     use windows::Graphics::SizeInt32;
+    use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
     use windows::Win32::Graphics::Dxgi::IDXGIDevice;
     use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
-    use windows::Win32::Foundation::POINT;
     use windows::Win32::System::WinRT::Direct3D11::{
         CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
     };
@@ -82,7 +82,8 @@ mod imp {
             if !supported() {
                 return Err("Windows.Graphics.Capture is not supported on this build".into());
             }
-            let monitor: HMONITOR = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+            let monitor: HMONITOR =
+                MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
             if monitor.is_invalid() {
                 return Err("MonitorFromPoint found no primary monitor".into());
             }
@@ -98,9 +99,9 @@ mod imp {
                 .cast()
                 .map_err(|e| format!("IInspectable -> IDirect3DDevice: {e}"))?;
 
-            let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>(
-            )
-            .map_err(|e| format!("GraphicsCaptureItem interop factory: {e}"))?;
+            let interop =
+                windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+                    .map_err(|e| format!("GraphicsCaptureItem interop factory: {e}"))?;
             let item: GraphicsCaptureItem = interop
                 .CreateForMonitor(monitor)
                 .map_err(|e| format!("CreateForMonitor: {e}"))?;
@@ -131,12 +132,12 @@ mod imp {
             // Item closing (monitor unplugged / mode change) must not take the
             // process with it — the pipeline notices via `try_next_frame`
             // returning nothing and can rebuild.
-            let _ = item.Closed(&TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(
-                |_, _| {
+            let _ = item.Closed(
+                &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(|_, _| {
                     crate::logging::log("WGC: capture item closed");
                     Ok(())
-                },
-            ));
+                }),
+            );
 
             session
                 .StartCapture()

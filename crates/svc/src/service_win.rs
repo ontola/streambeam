@@ -21,8 +21,8 @@ use windows::Win32::Security::{
 use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
 use windows::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
-    GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW,
-    TerminateProcess, WaitForSingleObject,
+    GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess,
+    WaitForSingleObject,
 };
 use windows_service::service::{
     ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode,
@@ -37,7 +37,10 @@ const DISPLAY_NAME: &str = "StreamBeam Host Service";
 type Res = Result<(), Box<dyn std::error::Error>>;
 
 fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 /// Default worker path: `streambeam-host.exe` beside this binary.
@@ -54,7 +57,9 @@ fn default_worker() -> std::path::PathBuf {
 /// elevated *as the user*) writes it; the service (SYSTEM) reads it.
 fn worker_cfg_path() -> std::path::PathBuf {
     let base = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
-    std::path::Path::new(&base).join("streambeam").join("worker.cfg")
+    std::path::Path::new(&base)
+        .join("streambeam")
+        .join("worker.cfg")
 }
 
 /// Record `%APPDATA%\streambeam` (the current user's host data dir) for the
@@ -394,7 +399,10 @@ fn spawn_worker(worker: &std::path::Path, session: u32) -> Option<Worker> {
             log(&format!("spawn: CreateProcessAsUser failed: {:?}", created));
             return None;
         }
-        log(&format!("worker launched in session {session} (pid {})", pi.dwProcessId));
+        log(&format!(
+            "worker launched in session {session} (pid {})",
+            pi.dwProcessId
+        ));
         Some(Worker {
             process: pi.hProcess,
             thread: pi.hThread,
@@ -417,11 +425,17 @@ fn wait_worker(worker: &Worker, ms: u32) -> bool {
 fn log(msg: &str) {
     use std::io::Write;
     let dir = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
-    let path = std::path::Path::new(&dir).join("streambeam").join("svc.log");
+    let path = std::path::Path::new(&dir)
+        .join("streambeam")
+        .join("svc.log");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = writeln!(f, "{msg}");
     }
 }

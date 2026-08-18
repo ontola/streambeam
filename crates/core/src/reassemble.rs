@@ -557,7 +557,10 @@ mod tests {
         for id in 1..=(STALE_THRESHOLD as u16 + 3) {
             let small = vec![id as u8; 200];
             let shards = encode_video_frame(id, &small, false, 0, mtu).unwrap();
-            assert!(push(&mut asm, &shards[0]).is_some(), "frame {id} should complete");
+            assert!(
+                push(&mut asm, &shards[0]).is_some(),
+                "frame {id} should complete"
+            );
             // Keep the keyframe visibly active between completions.
             let idx = 3 + id as usize;
             if idx < key_shards.len() {
@@ -606,7 +609,10 @@ mod tests {
             "a frame that stopped receiving shards must still be abandoned"
         );
         assert!(asm.stats().frames_abandoned > 0);
-        assert!(asm.take_loss_report().is_some(), "loss must still be reported");
+        assert!(
+            asm.take_loss_report().is_some(),
+            "loss must still be reported"
+        );
     }
 
     /// RFI (b): losing frames before anything has ever completed leaves no
