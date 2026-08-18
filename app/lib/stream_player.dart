@@ -2107,8 +2107,10 @@ class _StreamMenu extends StatelessWidget {
     final tileDensity = compact
         ? VisualDensity.compact
         : VisualDensity.standard;
+    // Horizontal zero on purpose: the ListView's padding is the gutter, so a
+    // tile's leading icon lines up with every section heading below it.
     final tilePadding = EdgeInsets.symmetric(
-      horizontal: metrics.horizontal,
+      horizontal: 0,
       vertical: compact ? 0 : 2,
     );
 
@@ -2139,9 +2141,12 @@ class _StreamMenu extends StatelessWidget {
               children: [
                 Padding(
                   padding: EdgeInsets.fromLTRB(
-                    metrics.horizontal + 4,
+                    metrics.gutter,
                     metrics.top,
-                    metrics.horizontal + 4,
+                    // Trailing icon buttons carry their own visual padding, so
+                    // pull the edge in to keep the tap target from looking
+                    // adrift in the corner.
+                    metrics.gutter - 8,
                     compact ? 4 : 8,
                   ),
                   child: Row(
@@ -2169,9 +2174,9 @@ class _StreamMenu extends StatelessWidget {
                 Expanded(
                   child: ListView(
                     padding: EdgeInsets.fromLTRB(
-                      metrics.horizontal,
+                      metrics.gutter,
                       0,
-                      metrics.horizontal,
+                      metrics.gutter,
                       metrics.bottom,
                     ),
                     children: [
@@ -2200,14 +2205,14 @@ class _StreamMenu extends StatelessWidget {
                           contentPadding: tilePadding,
                           onTap: onKeyboard,
                         ),
-                      const Divider(height: 1),
+                      Divider(height: metrics.sectionGap),
                       if (displays.length > 1) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(
-                            metrics.horizontal + 4,
-                            compact ? 4 : 8,
-                            metrics.horizontal + 4,
-                            compact ? 2 : 4,
+                            0,
+                            metrics.sectionGap,
+                            0,
+                            metrics.labelGap,
                           ),
                           child: Text(
                             'Screen',
@@ -2215,9 +2220,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: metrics.horizontal,
-                          ),
+                          padding: EdgeInsets.zero,
                           child: DropdownButtonFormField<int>(
                             key: ValueKey(selectedDisplayId),
                             initialValue:
@@ -2252,25 +2255,22 @@ class _StreamMenu extends StatelessWidget {
                             },
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        const Divider(height: 1),
+                        Divider(height: metrics.sectionGap),
                       ],
                       Padding(
                         padding: EdgeInsets.fromLTRB(
-                          metrics.horizontal + 4,
-                          compact ? 4 : 8,
-                          metrics.horizontal + 4,
-                          compact ? 2 : 4,
-                        ),
+                            0,
+                            metrics.sectionGap,
+                            0,
+                            metrics.labelGap,
+                          ),
                         child: Text(
                           'Streaming mode',
                           style: theme.textTheme.titleSmall,
                         ),
                       ),
                       Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: metrics.horizontal,
-                        ),
+                        padding: EdgeInsets.zero,
                         child: DropdownButtonFormField<StreamMode>(
                           initialValue: streamMode,
                           isExpanded: true,
@@ -2310,9 +2310,9 @@ class _StreamMenu extends StatelessWidget {
                       ),
                       Padding(
                         padding: EdgeInsets.fromLTRB(
-                          metrics.horizontal + 4,
-                          compact ? 2 : 6,
-                          metrics.horizontal + 4,
+                          0,
+                          metrics.labelGap,
+                          0,
                           compact ? 4 : 8,
                         ),
                         child: Text(
@@ -2324,9 +2324,7 @@ class _StreamMenu extends StatelessWidget {
                       ),
                       if (streamMode == StreamMode.custom) ...[
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: metrics.horizontal + 4,
-                          ),
+                          padding: EdgeInsets.zero,
                           child: Row(
                             children: [
                               Expanded(
@@ -2343,9 +2341,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: math.max(0.0, metrics.horizontal - 8),
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 0),
                           child: Slider(
                             value: customSettings.resolutionScale,
                             min: 0.25,
@@ -2360,9 +2356,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: metrics.horizontal + 4,
-                          ),
+                          padding: EdgeInsets.zero,
                           child: Row(
                             children: [
                               Expanded(
@@ -2379,9 +2373,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: math.max(0.0, metrics.horizontal - 8),
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 0),
                           child: Slider(
                             value: customSettings.maxFps.toDouble(),
                             min: 15,
@@ -2395,7 +2387,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                       ],
-                      const Divider(height: 1),
+                      Divider(height: metrics.sectionGap),
                       SwitchListTile(
                         value: soundEnabled,
                         onChanged: onSoundEnabledChanged,
@@ -2407,7 +2399,7 @@ class _StreamMenu extends StatelessWidget {
                         dense: compact,
                         contentPadding: tilePadding,
                       ),
-                      const Divider(height: 1),
+                      Divider(height: metrics.sectionGap),
                       // Windows only, and only meaningful when the host runs
                       // the secure-desktop service — Ctrl+Alt+Del cannot be
                       // synthesised from key events, so this is a distinct
@@ -2424,7 +2416,7 @@ class _StreamMenu extends StatelessWidget {
                           contentPadding: tilePadding,
                           onTap: () => sendSecureAttention(),
                         ),
-                      if (hostIsWindows) const Divider(height: 1),
+                      if (hostIsWindows) Divider(height: metrics.sectionGap),
                       ListTile(
                         leading: const Icon(Icons.bedtime_outlined),
                         title: const Text('Put PC to sleep'),
@@ -2436,14 +2428,14 @@ class _StreamMenu extends StatelessWidget {
                         contentPadding: tilePadding,
                         onTap: onSleepHost,
                       ),
-                      const Divider(height: 1),
+                      Divider(height: metrics.sectionGap),
                       if (upscaleSupported) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(
-                            metrics.horizontal + 4,
-                            compact ? 4 : 8,
-                            metrics.horizontal + 4,
-                            compact ? 2 : 4,
+                            0,
+                            metrics.sectionGap,
+                            0,
+                            metrics.labelGap,
                           ),
                           child: Text(
                             'Video',
@@ -2463,15 +2455,15 @@ class _StreamMenu extends StatelessWidget {
                           dense: compact,
                           contentPadding: tilePadding,
                         ),
-                        const Divider(height: 1),
+                        Divider(height: metrics.sectionGap),
                       ],
                       if (touchControls) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(
-                            metrics.horizontal + 4,
-                            compact ? 4 : 8,
-                            metrics.horizontal + 4,
-                            compact ? 2 : 4,
+                            0,
+                            metrics.sectionGap,
+                            0,
+                            metrics.labelGap,
                           ),
                           child: Text(
                             'Pointer mode',
@@ -2479,9 +2471,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: metrics.horizontal,
-                          ),
+                          padding: EdgeInsets.zero,
                           child: SegmentedButton<PointerMode>(
                             segments: [
                               ButtonSegment(
@@ -2515,9 +2505,9 @@ class _StreamMenu extends StatelessWidget {
                         ),
                         Padding(
                           padding: EdgeInsets.fromLTRB(
-                            metrics.horizontal + 4,
+                            0,
                             compact ? 2 : 6,
-                            metrics.horizontal + 4,
+                            0,
                             compact ? 4 : 8,
                           ),
                           child: Text(
@@ -2544,9 +2534,9 @@ class _StreamMenu extends StatelessWidget {
                       ],
                       Padding(
                         padding: EdgeInsets.fromLTRB(
-                          metrics.horizontal + 4,
+                          0,
                           compact ? 4 : 8,
-                          metrics.horizontal + 4,
+                          0,
                           compact ? 4 : 8,
                         ),
                         child: Text(
@@ -2564,13 +2554,13 @@ class _StreamMenu extends StatelessWidget {
                         ),
                       ),
                       if (showDiagnostics) ...[
-                        const Divider(height: 1),
+                        Divider(height: metrics.sectionGap),
                         Padding(
                           padding: EdgeInsets.fromLTRB(
-                            metrics.horizontal + 4,
-                            compact ? 4 : 8,
-                            metrics.horizontal + 4,
-                            compact ? 2 : 4,
+                            0,
+                            metrics.sectionGap,
+                            0,
+                            metrics.labelGap,
                           ),
                           child: Text(
                             'Connection',
@@ -2578,9 +2568,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         ),
                         Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: metrics.horizontal,
-                          ),
+                          padding: EdgeInsets.zero,
                           child: _DiagnosticsPanel(
                             diagnostics: diagnostics,
                             compact: compact,
@@ -2744,7 +2732,24 @@ class _MenuMetrics {
   final double screenWidth;
   final EdgeInsets insets;
 
-  double get horizontal => compact ? 4 : (screenWidth * 0.025).clamp(6.0, 14.0);
+  /// The single horizontal inset every row in the sidebar aligns to.
+  ///
+  /// Previously each kind of row added its own: the list added one gutter,
+  /// tiles added another via `contentPadding`, section headers added that plus
+  /// 4, and the dropdown something else again — so labels, switches and
+  /// headings all started at different x. One value, applied once by the list,
+  /// and every child sits flush to it.
+  ///
+  /// Fixed rather than derived from screen width: the panel is a roughly fixed
+  /// width, so scaling with the *screen* made a wide display feel cramped
+  /// (the clamp bottomed out at 6px) for no benefit.
+  double get gutter => compact ? 12 : 16;
+
+  /// Space above a section heading — the rhythm that separates groups.
+  double get sectionGap => compact ? 10 : 16;
+
+  /// Space between a heading and the control it labels.
+  double get labelGap => compact ? 2 : 4;
 
   double get top => math.max(insets.top, compact ? 6 : 12);
 
