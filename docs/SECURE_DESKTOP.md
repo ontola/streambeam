@@ -144,6 +144,38 @@ If capture goes black specifically on the secure desktop (some GPUs/drivers
 refuse DXGI Duplication there), that's the known phase-3 item: add the WinRT
 `Windows.Graphics.Capture` fallback.
 
+## Updating the worker (no elevation)
+
+Drop the new binary beside the old one as `streambeam-host.new.exe`. The
+running service rotates it into place and restarts the worker within a tick:
+
+```
+streambeam-host.exe          <- what the service launches (and the firewall rule names)
+streambeam-host.new.exe      <- stage here; consumed on pickup
+streambeam-host.old.exe      <- the binary that was replaced, kept for rollback
+streambeam-host.rejected.exe <- a staged build that couldn't stay running
+```
+
+Windows forbids overwriting a running image but permits *renaming* one, which
+is what makes this work without stopping the service — and therefore without
+an admin. If the new worker exits immediately three times, the service puts the
+previous binary back by itself, because this service is what provides remote
+sign-in and a bad build would take away the access needed to fix it.
+
+Why it exists: the deployed worker silently drifted a month behind the tree
+(PROGRESS, 2026-08-18) because updating it meant an elevated stop/copy/start
+that nobody did, and nothing in the log said which build was running.
+
+Updating **`streambeam-svc.exe` itself** still needs an elevated `stop`/`start`
+(the SCM holds its path). The same rename trick applies to staging it, so the
+elevated part can be just those two commands.
+
+Security: a service that runs a binary any non-admin can replace is a
+privilege-escalation path to SYSTEM. That is a property of the worker directory
+— equally true of the plain `streambeam-host.exe` the service already launches
+— so a packaged install must put the worker somewhere only administrators can
+write, and ideally check a signature before swapping.
+
 ## Relationship to other docs
 
 - [WOL.md](WOL.md) — waking the box; this doc is what makes a woken box

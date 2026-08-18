@@ -346,6 +346,8 @@ fn run_service(arguments: Vec<OsString>) -> Res {
 /// a stop is requested.
 fn supervise_worker(worker: &std::path::Path, shutdown_rx: &std::sync::mpsc::Receiver<()>) {
     let mut child: Option<Worker> = None;
+    let mut probation: Option<Probation> = None;
+    let mut last_refusal: Option<String> = None;
     loop {
         // Stop requested?
         if shutdown_rx.recv_timeout(Duration::from_millis(500)).is_ok() {
@@ -359,16 +361,87 @@ fn supervise_worker(worker: &std::path::Path, shutdown_rx: &std::sync::mpsc::Rec
         if console == u32::MAX {
             continue;
         }
-        match &child {
-            // Worker gone, or now in the wrong session → (re)spawn.
-            Some(w) if w.session != console || w.has_exited() => {
-                if let Some(w) = child.take() {
-                    w.terminate();
-                }
-                child = spawn_worker(worker, console);
+
+        // Pick up a staged worker binary before deciding what to do with the
+        // child, so an update lands on this tick rather than the next. The
+        // firewall rule survives the swap untouched: it names the worker's
+        // path, which is exactly what a rotation preserves.
+        let mut swapped = false;
+        match crate::staging::apply_staged(worker) {
+            crate::staging::Applied::Swapped => {
+                log("staged worker binary applied — restarting the worker to run it");
+                swapped = true;
+                probation = Some(Probation::new());
+                last_refusal = None;
             }
-            Some(_) => {}
-            None => child = spawn_worker(worker, console),
+            // A staged file that can't be used is usually a copy still in
+            // flight, which fixes itself within a tick. Log the reason once
+            // rather than every 500ms until someone notices.
+            crate::staging::Applied::Refused(why) => {
+                if last_refusal.as_deref() != Some(why.as_str()) {
+                    log(&format!("staged worker ignored: {why}"));
+                    last_refusal = Some(why);
+                }
+            }
+            crate::staging::Applied::Nothing => last_refusal = None,
+        }
+
+        let exited = child.as_ref().is_some_and(|w| w.has_exited());
+        let wrong_session = child.as_ref().is_some_and(|w| w.session != console);
+
+        // A worker that dies immediately after an update is the update's fault
+        // until proven otherwise — and this service is what provides remote
+        // sign-in, so a bad binary would take away the very access needed to
+        // replace it. Put the previous one back instead.
+        if let Some(p) = probation.as_mut() {
+            if exited {
+                p.deaths += 1;
+                if p.deaths >= PROBATION_DEATHS {
+                    match crate::staging::roll_back(worker) {
+                        Ok(()) => log(
+                            "the staged worker exited immediately 3 times — rolled back to \
+                             the previous binary (the rejected one is kept as \
+                             streambeam-host.rejected.exe)",
+                        ),
+                        Err(e) => log(&format!(
+                            "the staged worker keeps exiting and the rollback failed: {e}"
+                        )),
+                    }
+                    probation = None;
+                }
+            } else if p.started.elapsed() >= PROBATION_PERIOD {
+                log("the staged worker has stayed up — update looks good");
+                probation = None;
+            }
+        }
+
+        if swapped || exited || wrong_session {
+            if let Some(w) = child.take() {
+                w.terminate();
+            }
+        }
+        if child.is_none() {
+            child = spawn_worker(worker, console);
+        }
+    }
+}
+
+/// How long a freshly-staged worker has to stay alive before the update counts
+/// as good, and how many immediate deaths trigger a rollback.
+const PROBATION_PERIOD: Duration = Duration::from_secs(20);
+const PROBATION_DEATHS: u32 = 3;
+
+/// Bookkeeping for a worker running a just-installed binary.
+struct Probation {
+    started: std::time::Instant,
+    deaths: u32,
+}
+
+impl Probation {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            deaths: 0,
         }
     }
 }

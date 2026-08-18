@@ -17,9 +17,20 @@
 //!   streambeam-svc uninstall                   remove it
 //!   streambeam-svc start | stop                control it
 //!   streambeam-svc run                          SCM entry point (not for humans)
+//!
+//! Updating the worker needs none of these, and no elevation: drop the new
+//! binary beside the old one as `streambeam-host.new.exe` and the running
+//! service swaps it in and restarts the worker within a tick (`staging`).
 
 #[cfg(windows)]
 mod service_win;
+
+/// Worker-binary staging (see the module docs). Pure file shuffling, so it is
+/// compiled — and tested — on every platform rather than only on the Windows
+/// box where it runs. Its whole job is to make deploying a new worker a file
+/// copy instead of an elevated stop/copy/start.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod staging;
 
 #[cfg(windows)]
 fn main() {
