@@ -23,9 +23,10 @@ use windows::Win32::Security::{
     TOKEN_DUPLICATE, TOKEN_QUERY, TokenPrimary, TokenSessionId,
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
-use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
-use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
+use windows::Win32::System::RemoteDesktop::{
+    WTS_CURRENT_SERVER_HANDLE, WTS_SESSIONSTATE_LOCK, WTS_SESSIONSTATE_UNLOCK, WTSFreeMemory,
+    WTSGetActiveConsoleSessionId, WTSINFOEXW, WTSQuerySessionInformationW, WTSQueryUserToken,
+    WTSSessionInfoEx,
 };
 use windows::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
@@ -593,39 +594,44 @@ impl WorkerToken {
     }
 }
 
-/// Is the secure desktop at the front? That is the one thing only a SYSTEM
-/// worker can capture, so it decides which token the worker needs.
+/// Is the console session locked (or showing the login screen)?
 ///
-/// Anything that isn't clearly the user's own desktop is treated as secure:
-/// failing to open the input desktop is itself what a user-token process sees
-/// when Winlogon is up, and guessing "user" there would leave a locked machine
-/// streaming nothing.
-fn secure_desktop_is_active() -> bool {
+/// Asked of the **session manager**, not of the desktop. A service lives in
+/// session 0 and the window-station/desktop APIs are per-session, so
+/// `OpenInputDesktop` here describes session 0's own station and can say
+/// nothing at all about the session at the screen — it simply fails, and
+/// reading that failure as "the secure desktop is up" made the first version
+/// of this pick SYSTEM every single time.
+///
+/// `None` means the state could not be determined, which is deliberately kept
+/// distinct from "unlocked": the caller treats it as locked, because guessing
+/// wrong in that direction costs a game capture, and guessing wrong in the
+/// other costs the ability to sign in remotely at all.
+fn session_is_locked(session: u32) -> Option<bool> {
     unsafe {
-        let Ok(desk) = OpenInputDesktop(Default::default(), false, DESKTOP_READOBJECTS) else {
-            return true;
-        };
-        let mut buf = [0u16; 64];
-        let mut needed = 0u32;
-        let ok = GetUserObjectInformationW(
-            // `HDESK` and `HANDLE` are the same thing to the API; the crate
-            // just types desktops more precisely than user32 does.
-            HANDLE(desk.0),
-            UOI_NAME,
-            Some(buf.as_mut_ptr() as *mut _),
-            (buf.len() * 2) as u32,
-            Some(&mut needed),
+        let mut buf = windows::core::PWSTR::null();
+        let mut bytes = 0u32;
+        WTSQuerySessionInformationW(
+            Some(WTS_CURRENT_SERVER_HANDLE),
+            session,
+            WTSSessionInfoEx,
+            &mut buf,
+            &mut bytes,
         )
-        .is_ok();
-        let _ = CloseDesktop(desk);
-        if !ok {
-            return true;
+        .ok()?;
+        if buf.is_null() || (bytes as usize) < std::mem::size_of::<WTSINFOEXW>() {
+            WTSFreeMemory(buf.0 as *mut std::ffi::c_void);
+            return None;
         }
-        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        let name = String::from_utf16_lossy(&buf[..len]);
-        // "Default" is the interactive desktop; "Winlogon" is the secure one,
-        // and "Screen-saver" is neither but is equally out of a user's reach.
-        !name.eq_ignore_ascii_case("Default")
+        let info = &*(buf.0 as *const WTSINFOEXW);
+        let flags = info.Data.WTSInfoExLevel1.SessionFlags;
+        WTSFreeMemory(buf.0 as *mut std::ffi::c_void);
+        // `SessionFlags` is signed in the struct and the constants are not.
+        match flags as u32 {
+            WTS_SESSIONSTATE_LOCK => Some(true),
+            WTS_SESSIONSTATE_UNLOCK => Some(false),
+            _ => None,
+        }
     }
 }
 
@@ -640,8 +646,15 @@ fn console_user_token(session: u32) -> Option<HANDLE> {
 }
 
 /// Which token the worker should be running under right now.
+///
+/// Known gap: a **UAC prompt** raises the secure desktop without locking the
+/// session, so a user worker stays selected and the viewer sees a frozen
+/// desktop until the prompt is answered. Catching that needs the worker (which
+/// is in the right session to ask) to report it back, rather than the service
+/// guessing from session 0. A lock screen, a login screen and fast-user-switch
+/// are all covered.
 fn desired_token(session: u32) -> WorkerToken {
-    if secure_desktop_is_active() {
+    if session_is_locked(session).unwrap_or(true) {
         return WorkerToken::System;
     }
     match console_user_token(session) {
