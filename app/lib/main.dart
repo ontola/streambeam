@@ -1024,15 +1024,29 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   bool? _desktopHdrCapable;
 
-  /// HDR10 passthrough is opt-in until the EDR display path is proven on real
-  /// streams. It shipped advertising itself and produced a black picture:
-  /// frames decoded, the EDR layer didn't draw, and the video widget had
-  /// already switched away from the texture. Default off means a broken HDR
-  /// path can't cost anyone their working SDR stream.
-  static const _hdrPassthroughEnabled = bool.fromEnvironment(
+  /// Initial state of the HDR toggle. Off, deliberately.
+  ///
+  /// HDR10 passthrough is opt-in because the *display* end of it is not
+  /// finished, and that is a judgement made from evidence rather than caution:
+  /// every stage is verified correct — the host's encode, the capture, the
+  /// decode, the colour conversion, the EDR layer — and the picture still
+  /// looks worse than the SDR tone-mapped path on a laptop. The reason is
+  /// exposure: a game's diffuse white sits near 73 nits (measured, HITMAN),
+  /// which reads as white on a TV your eye has adapted to and as grey next to
+  /// an app's own UI white. Until that is mapped properly, the default must
+  /// not cost anyone their working SDR stream.
+  ///
+  /// `--dart-define=STREAMBEAM_HDR=true` just presets the toggle, for
+  /// development.
+  static const _hdrDefault = bool.fromEnvironment(
     'STREAMBEAM_HDR',
     defaultValue: false,
   );
+
+  /// Whether the user has asked for HDR passthrough this session. Session
+  /// scoped, like the stream mode and sound settings next to it — this app
+  /// persists no playback preferences yet.
+  bool _hdrEnabled = _hdrDefault;
 
   /// Whether to advertise HDR10 in `VideoCaps`. Requires hardware AV1 decode
   /// *and* an EDR-capable display — see the native side for why both.
@@ -1041,12 +1055,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   /// the tap's future waits for a reply that needs the thread the tap is
   /// occupying. Observed as the whole app freezing on the Watch button. The
   /// capability is primed once at startup and read synchronously afterwards.
-  bool _canDisplayHdrNow() => _hdrPassthroughEnabled && (_desktopHdrCapable ?? false);
+  bool _canDisplayHdrNow() => _hdrEnabled && (_desktopHdrCapable ?? false);
 
   /// Fire-and-forget probe, run once from `initState` so the answer is ready
   /// before anything needs it.
   void _primeHdrCapability() {
-    if (!_hdrPassthroughEnabled || _desktopHdrCapable != null) return;
+    // Probed even when the toggle is off: the answer decides whether the
+    // toggle is offered at all, and asking later would mean asking from a tap
+    // handler, which deadlocks on this app's merged UI/platform thread.
+    if (_desktopHdrCapable != null) return;
     unawaited(() async {
       try {
         _desktopHdrCapable =
@@ -1788,6 +1805,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         onToggleUpscale: _toggleUpscale,
         probeDecodeHealth: _probeDecodeHealth,
         probeHdrStatus: _desktopHdr ? _probeHdrStatus : null,
+        hdrSupported: _desktopHdrCapable ?? false,
+        hdrEnabled: _hdrEnabled,
+        onHdrEnabledChanged: (on) {
+          if (on == _hdrEnabled) return;
+          setState(() => _hdrEnabled = on);
+          // HDR is negotiated in the client's `VideoCaps` at connect time, so
+          // changing it mid-session means re-dialling — same as the stream
+          // mode and resolution controls above.
+          unawaited(_reconnectDesktopForNewCaps());
+        },
         hostPlatform: _watchedHostPlatform,
         onStop: () => unawaited(_stopDesktopPlayback()),
         streamMode: _streamMode,

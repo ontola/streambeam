@@ -198,6 +198,9 @@ class StreamPlayerScreen extends StatefulWidget {
     this.onToggleUpscale,
     this.probeDecodeHealth,
     this.probeHdrStatus,
+    this.hdrSupported = false,
+    this.hdrEnabled = false,
+    this.onHdrEnabledChanged,
     this.hostPlatform = '',
     super.key,
   });
@@ -257,6 +260,13 @@ class StreamPlayerScreen extends StatefulWidget {
   /// menu then says nothing about HDR at all, rather than something reassuring
   /// and untrue.
   final Future<HdrStatus?> Function()? probeHdrStatus;
+
+  /// Whether this device can display HDR at all (hardware AV1 decode plus an
+  /// EDR-capable screen). False hides the toggle rather than offering a switch
+  /// that cannot do anything.
+  final bool hdrSupported;
+  final bool hdrEnabled;
+  final ValueChanged<bool>? onHdrEnabledChanged;
 
   @override
   State<StreamPlayerScreen> createState() => _StreamPlayerScreenState();
@@ -974,6 +984,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           widget.onDisplayChanged();
         },
         hdrStatus: _hdrLine,
+        hdrSupported: widget.hdrSupported,
+        hdrEnabled: widget.hdrEnabled,
+        onHdrEnabledChanged: widget.onHdrEnabledChanged,
         upscaleSupported: widget.upscaleSupported,
         upscaleActive: widget.upscaleActive,
         onToggleUpscale: widget.onToggleUpscale,
@@ -2072,6 +2085,9 @@ class _StreamMenu extends StatelessWidget {
     required this.selectedDisplayId,
     required this.onDisplayChanged,
     this.hdrStatus,
+    this.hdrSupported = false,
+    this.hdrEnabled = false,
+    this.onHdrEnabledChanged,
     required this.upscaleSupported,
     required this.upscaleActive,
     required this.onToggleUpscale,
@@ -2115,6 +2131,9 @@ class _StreamMenu extends StatelessWidget {
   final ValueChanged<int> onDisplayChanged;
   /// One line from the EDR layer, or null when this stream isn't HDR.
   final String? hdrStatus;
+  final bool hdrSupported;
+  final bool hdrEnabled;
+  final ValueChanged<bool>? onHdrEnabledChanged;
   final bool upscaleSupported;
   final bool upscaleActive;
   final VoidCallback? onToggleUpscale;
@@ -2467,11 +2486,14 @@ class _StreamMenu extends StatelessWidget {
                         onTap: onSleepHost,
                       ),
                       Divider(height: metrics.sectionGap),
-                      // HDR is the one feature nobody can judge by
-                      // looking: a PQ stream granted no EDR headroom is merely
-                      // dim, which is indistinguishable from a dim scene. So
-                      // the display layer reports what it measured.
-                      if (hdrStatus != null) ...[
+                      // Off by default and clearly labelled experimental: the
+                      // pipeline is verified end to end, but a game's diffuse
+                      // white lands near 73 nits, which reads as grey on a
+                      // laptop beside the UI's own white. Until exposure is
+                      // handled, SDR is the better picture and the honest
+                      // default — so this offers the choice instead of
+                      // pretending it is finished.
+                      if (hdrSupported || hdrStatus != null) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(
                             0,
@@ -2481,15 +2503,30 @@ class _StreamMenu extends StatelessWidget {
                           ),
                           child: Text('HDR', style: theme.textTheme.titleSmall),
                         ),
-                        ListTile(
-                          leading: const Icon(Icons.hdr_on),
-                          title: Text(
-                            hdrStatus!,
-                            style: theme.textTheme.bodySmall,
+                        if (hdrSupported)
+                          SwitchListTile(
+                            value: hdrEnabled,
+                            onChanged: onHdrEnabledChanged,
+                            title: const Text('HDR passthrough'),
+                            subtitle: Text(
+                              'Experimental — 10-bit colour straight from the '
+                              'host. Reconnects the stream. Games may look '
+                              'dimmer than with it off.',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            dense: compact,
+                            contentPadding: tilePadding,
                           ),
-                          dense: compact,
-                          contentPadding: tilePadding,
-                        ),
+                        if (hdrStatus != null)
+                          ListTile(
+                          leading: const Icon(Icons.hdr_on),
+                            title: Text(
+                              hdrStatus!,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            dense: compact,
+                            contentPadding: tilePadding,
+                          ),
                         Divider(height: metrics.sectionGap),
                       ],
                       if (upscaleSupported) ...[

@@ -336,6 +336,9 @@ struct Pipeline {
     stat_acquired: u32,
     stat_timeout: u32,
     stat_access_lost: u32,
+    /// Frames seen since capture-value reporting was enabled, so it samples
+    /// rather than floods.
+    stats_frames: u64,
     stat_produced: u32,
     /// Consecutive `ACCESS_LOST` recreate attempts with no successful frame
     /// in between. Recreating the duplication interface is the right move
@@ -536,6 +539,7 @@ impl Pipeline {
                 stat_acquired: 0,
                 stat_timeout: 0,
                 stat_access_lost: 0,
+                stats_frames: 0,
                 consecutive_access_lost: 0,
                 wgc: None,
                 wgc_last_start: None,
@@ -705,7 +709,18 @@ impl Pipeline {
                 // UAC, or unlock) raises — re-attach this thread to the new
                 // input desktop before recreating the duplication so a SYSTEM
                 // worker follows onto Winlogon (no-op in a user session).
-                crate::desktop_win::input_desktop().follow();
+                let followed = crate::desktop_win::input_desktop().follow();
+                // Which desktop capture is actually sitting on, and whether the
+                // switch worked. Without this, "the lock screen is blind" and
+                // "a game holds the display" produce identical logs — and they
+                // need opposite fixes.
+                if self.consecutive_access_lost == 4 {
+                    crate::logging::log(&format!(
+                        "capture: desktop follow {} — {}",
+                        if followed { "ok" } else { "FAILED" },
+                        crate::desktop_win::desktop_diagnosis()
+                    ));
+                }
                 match create_duplication(&self.device, allow_hdr) {
                     Ok((dup, _, _, nits)) => {
                         self.duplication = dup;
@@ -747,6 +762,7 @@ impl Pipeline {
         let result = (|| -> Result<(), String> {
             let resource = resource.ok_or("duplication returned no resource")?;
             let texture: ID3D11Texture2D = ctx(resource.cast(), "resource.cast texture")?;
+            self.report_capture_values(&texture, "duplication");
             self.consume_texture(&texture)
         })();
 
@@ -758,6 +774,119 @@ impl Pipeline {
     /// by both capture sources — duplication and WGC hand back the same thing
     /// (a texture on our device, BGRA8 or FP16 scRGB), so everything
     /// downstream of here is identical.
+    /// Report what the raw captured values actually look like, per source.
+    ///
+    /// Built because duplication and WGC disagree: measured on the client from
+    /// the same scene, white arrived at 148 nits through duplication and 73
+    /// through WGC — half — with the fullscreen (WGC) picture washed out,
+    /// blacks lifted and saturation gone. That is the signature of a
+    /// non-linear buffer read as a linear one, not of a brightness error.
+    ///
+    /// scRGB is linear with 1.0 = 80 nits, so on this HDR desktop (SDR white
+    /// 228 nits) white should read near 2.85 and a healthy fraction of pixels
+    /// should exceed 1.0. **If nothing exceeds 1.0, the surface is not linear
+    /// scRGB** — which is exactly how a gamma- or PQ-encoded buffer looks when
+    /// interpreted as one. That single fraction is the whole experiment.
+    ///
+    /// Enable with `STREAMBEAM_CAPTURE_STATS=1`; off, it costs one bool test.
+    unsafe fn report_capture_values(&mut self, texture: &ID3D11Texture2D, source: &str) {
+        if !capture_stats_enabled() {
+            return;
+        }
+        self.stats_frames += 1;
+        if self.stats_frames % 120 != 1 {
+            return;
+        }
+        let mut desc = Default::default();
+        texture.GetDesc(&mut desc);
+        // Staging copy, because a render target can't be mapped for reading.
+        let staging_desc = D3D11_TEXTURE2D_DESC {
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+            ..desc
+        };
+        let mut staging: Option<ID3D11Texture2D> = None;
+        if self
+            .device
+            .CreateTexture2D(&staging_desc, None, Some(&mut staging))
+            .is_err()
+        {
+            crate::logging::log("capture stats: could not create a staging texture");
+            return;
+        }
+        let Some(staging) = staging else { return };
+        self.context.CopyResource(&staging, texture);
+        let mut mapped = Default::default();
+        if self
+            .context
+            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+            .is_err()
+        {
+            crate::logging::log("capture stats: could not map the staging texture");
+            return;
+        }
+
+        let is_fp16 = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+        let mut peak = 0.0f32;
+        let mut over_one = 0u32;
+        let mut samples = 0u32;
+        // Percentiles, because the shape of the distribution names the
+        // encoding where a peak alone cannot. PQ lifts shadows hugely — a dark
+        // menu would sit near 0.3-0.5 — while a linear buffer leaves them near
+        // zero. Same scene through both paths makes the mapping readable.
+        let mut values: Vec<f32> = Vec::with_capacity(4096);
+        let base = mapped.pData as *const u8;
+        for y in (0..desc.Height).step_by(16) {
+            let row = base.add(y as usize * mapped.RowPitch as usize);
+            for x in (0..desc.Width).step_by(16) {
+                let value = if is_fp16 {
+                    let px = (row as *const u16).add(x as usize * 4);
+                    // Luma of the raw values, in whatever space they are in.
+                    0.2627 * half_to_f32(*px)
+                        + 0.6780 * half_to_f32(*px.add(1))
+                        + 0.0593 * half_to_f32(*px.add(2))
+                } else {
+                    let px = row.add(x as usize * 4);
+                    (0.2627 * *px.add(2) as f32
+                        + 0.6780 * *px.add(1) as f32
+                        + 0.0593 * *px as f32)
+                        / 255.0
+                };
+                if value > peak {
+                    peak = value;
+                }
+                values.push(value);
+                if value > 1.0 {
+                    over_one += 1;
+                }
+                samples += 1;
+            }
+        }
+        self.context.Unmap(&staging, 0);
+
+        let over_pct = 100.0 * over_one as f32 / samples.max(1) as f32;
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let at = |q: f32| -> f32 {
+            if values.is_empty() {
+                return 0.0;
+            }
+            values[((values.len() - 1) as f32 * q) as usize]
+        };
+        crate::logging::log(&format!(
+            "capture stats [{source}]: format {:?}, raw luma p50 {:.4} p90 {:.4} \
+             p99 {:.4} peak {peak:.3}, {over_pct:.1}% above 1.0 — scRGB white \
+             here is ~2.85 ({} nits / 80). Nothing above 1.0 means this is not \
+             linear scRGB; a high p50 with a low peak means PQ.",
+            desc.Format,
+            at(0.5),
+            at(0.9),
+            at(0.99),
+            self.scaler_sdr_white as u32
+        ));
+    }
+
     unsafe fn consume_texture(&mut self, texture: &ID3D11Texture2D) -> Result<(), String> {
         match &self.backend {
             EncoderBackend::Nvenc {
@@ -835,6 +964,7 @@ impl Pipeline {
         };
 
         self.stat_acquired += 1;
+        self.report_capture_values(&texture, "WGC");
         let result = self.consume_texture(&texture);
         // Rebuild *after* consuming: this frame is still the old pool size, so
         // it's the last usable one at that geometry. Same limitation the
@@ -1213,6 +1343,24 @@ unsafe fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Str
 /// Checked by *both* capture sources — a toggle that only bound the duplication
 /// path would silently revert to our shader the moment WGC took over, which is
 /// exactly when a game is on screen and you're looking at the colours.
+/// Half-precision float to `f32`, for reading FP16 capture surfaces back.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = ((bits >> 10) & 0x1F) as i32;
+    let mantissa = (bits & 0x3FF) as f32;
+    match exponent {
+        0 => sign * mantissa * 2f32.powi(-24),
+        31 => sign * f32::INFINITY,
+        e => sign * (1.0 + mantissa / 1024.0) * 2f32.powi(e - 15),
+    }
+}
+
+/// Whether to report what the raw captured surface contains — see
+/// `report_capture_values`.
+fn capture_stats_enabled() -> bool {
+    std::env::var("STREAMBEAM_CAPTURE_STATS").is_ok()
+}
+
 /// `STREAMBEAM_HDR=passthrough` forces HDR10 regardless of what the client
 /// asked for.
 ///
