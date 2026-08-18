@@ -78,6 +78,20 @@ class StreamBeamHdrView: NSView {
       return
     }
     metalLayer.wantsExtendedDynamicRangeContent = true
+    // PQ encodes *absolute* luminance, so the compositor cannot map it to this
+    // display without knowing the range it was mastered for. Left unset,
+    // macOS falls back to its own assumptions — which is one of the ways a
+    // technically-correct PQ signal still arrives looking washed out, blacks
+    // lifted and highlights flat.
+    //
+    // These are the mastering-display hints, not measurements of the content:
+    // 1000 nits peak is the usual HDR10 grade, and `opticalOutputScale` 100 is
+    // the reference-white scale PQ is defined against. They are the first knob
+    // to reach for if the picture is too bright or too dim overall.
+    if #available(macOS 10.15, *) {
+      metalLayer.edrMetadata = CAEDRMetadata.hdr10(
+        minLuminance: 0.0001, maxLuminance: 1000, opticalOutputScale: 100)
+    }
     metalLayer.framebufferOnly = true
     metalLayer.isOpaque = true
     layer = metalLayer
