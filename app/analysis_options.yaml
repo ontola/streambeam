@@ -7,6 +7,22 @@
 
 # The following line activates a set of recommended lints for Flutter apps,
 # packages, and plugins designed to encourage good coding practices.
+analyzer:
+  # `flutter analyze` otherwise descends into the vendored cargokit build tool
+  # (flutter_rust_bridge's Rust build helper), a standalone Dart CLI with its
+  # own pubspec whose dependencies aren't resolved here — producing dozens of
+  # spurious "uri doesn't exist"/"undefined name" errors for code we don't own.
+  # The platform/build dirs below are what `flutter pub get` migrates in on
+  # its own; listing them keeps `pub get` from rewriting this file.
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - linux/**
+    - macos/**
+    - web/**
+    - windows/**
+    - rust_builder/cargokit/**
 include: package:flutter_lints/flutter.yaml
 
 linter:
