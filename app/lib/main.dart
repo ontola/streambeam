@@ -141,6 +141,27 @@ final streamBeamMessengerKey = GlobalKey<ScaffoldMessengerState>();
 /// than either tab, so errors remain visible while switching tabs and over the
 /// fullscreen player. A newer error replaces the current one instead of
 /// building a stale queue of notices.
+/// Put an error on the clipboard and say so, since the snackbar it came from
+/// is replaced by the confirmation.
+void _copyErrorToClipboard(String text) {
+  unawaited(Clipboard.setData(ClipboardData(text: text)));
+  final messenger = streamBeamMessengerKey.currentState;
+  if (messenger == null) return;
+  try {
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+          content: Text('Error copied to clipboard'),
+        ),
+      );
+  } catch (_) {
+    // Nowhere to confirm; the clipboard write still happened.
+  }
+}
+
 void showErrorToast(String message) {
   final text = message.trim();
   if (text.isEmpty) return;
@@ -181,6 +202,14 @@ void showErrorToast(String message) {
               ),
             ],
           ),
+          // These messages are the useful half of a bug report — decoder
+          // statuses, host errors, addresses — and they vanish after 8
+          // seconds. Copying beats retyping from a photo of the screen.
+          action: SnackBarAction(
+            label: 'Copy',
+            textColor: colors.onErrorContainer,
+            onPressed: () => _copyErrorToClipboard(text),
+          ),
         ),
       );
   } catch (_) {
@@ -196,6 +225,10 @@ void showErrorToast(String message) {
             duration: const Duration(seconds: 8),
             showCloseIcon: true,
             content: Text(text),
+            action: SnackBarAction(
+              label: 'Copy',
+              onPressed: () => _copyErrorToClipboard(text),
+            ),
           ),
         );
       } catch (_) {
