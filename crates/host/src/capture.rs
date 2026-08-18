@@ -110,8 +110,7 @@ impl DesktopEncoder {
         wanted_codec: Codec,
         wants_hdr: bool,
     ) -> Result<Self, String> {
-        let (init_tx, init_rx) =
-            std::sync::mpsc::channel::<Result<(u32, u32, Codec), String>>();
+        let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(u32, u32, Codec), String>>();
         let (req_tx, req_rx) = std::sync::mpsc::channel::<Request>();
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Option<EncodedFrame>>(4);
         let force_idr = Arc::new(AtomicBool::new(false));
@@ -130,6 +129,7 @@ impl DesktopEncoder {
                     fps,
                     max_encode_dim,
                     wanted_codec,
+                    wants_hdr,
                     init_tx,
                     req_rx,
                     frame_tx,
@@ -204,6 +204,7 @@ fn run_pipeline(
     fps: u32,
     max_encode_dim: u32,
     wanted_codec: Codec,
+    wants_hdr: bool,
     init_tx: Sender<Result<(u32, u32, Codec), String>>,
     req_rx: Receiver<Request>,
     frame_tx: SyncSender<Option<EncodedFrame>>,
@@ -219,7 +220,7 @@ fn run_pipeline(
     // every ACCESS_LOST recovery (see `capture_frame`) since a desktop switch
     // is exactly what raises that error.
     crate::desktop_win::input_desktop().follow();
-    let mut pipe = match Pipeline::new(fps, max_encode_dim, wanted_codec) {
+    let mut pipe = match Pipeline::new(fps, max_encode_dim, wanted_codec, wants_hdr) {
         Ok(p) => p,
         Err(e) => {
             let _ = init_tx.send(Err(e));
@@ -426,14 +427,25 @@ impl Pipeline {
             // this is false, because DWM has already flattened it to SDR and
             // there is nothing left to pass through.
             let hdr_capture = desktop_is_hdr(&device, true);
-            let try_nvenc = |codec: Codec| -> Result<(NvencEncoder, ID3D11Texture2D, Option<GpuScaler>), String> {
+            let try_nvenc = |codec: Codec| -> Result<
+                (NvencEncoder, ID3D11Texture2D, Option<GpuScaler>),
+                String,
+            > {
                 // HDR10 passthrough (docs/HDR.md): only when asked for, only on
                 // an HDR desktop, and only for AV1. Anything else keeps the
                 // tone-mapped SDR path, which stays the default.
                 let hdr10 = (wants_hdr || hdr10_forced()) && hdr_capture && codec == Codec::Av1;
                 let tex = create_encode_texture(&device, width, height, hdr10)?;
-                let encoder =
-                    NvencEncoder::new(&device, &tex, width, height, fps, bitrate_bps, codec, hdr10)?;
+                let encoder = NvencEncoder::new(
+                    &device,
+                    &tex,
+                    width,
+                    height,
+                    fps,
+                    bitrate_bps,
+                    codec,
+                    hdr10,
+                )?;
                 if hdr10 {
                     crate::logging::log(
                         "HDR10 passthrough: encoding 10-bit PQ / BT.2020, no tone-map",
@@ -1292,8 +1304,9 @@ unsafe fn create_duplication(
         DXGI_FORMAT_B8G8R8A8_UNORM
     };
     let sdr_white_nits = if hdr {
-        let nits = query_sdr_white_nits(&output.GetDesc().map(|d| d.DeviceName).unwrap_or_default())
-            .unwrap_or(DEFAULT_SDR_WHITE_NITS);
+        let nits =
+            query_sdr_white_nits(&output.GetDesc().map(|d| d.DeviceName).unwrap_or_default())
+                .unwrap_or(DEFAULT_SDR_WHITE_NITS);
         crate::logging::log(&format!(
             "HDR desktop: capturing FP16 scRGB, tone-mapping in-shader at SDR white {nits:.0} nits"
         ));
