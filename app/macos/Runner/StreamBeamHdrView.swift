@@ -146,7 +146,8 @@ class StreamBeamHdrView: NSView {
       }
       fragment float4 f_main(VsOut i [[stage_in]],
                              texture2d<float> luma [[texture(0)]],
-                             texture2d<float> chroma [[texture(1)]]) {
+                             texture2d<float> chroma [[texture(1)]],
+                             constant float &headroom [[buffer(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float y = luma.sample(s, i.uv).r;
         float2 cbcr = chroma.sample(s, i.uv).rg;
@@ -165,10 +166,35 @@ class StreamBeamHdrView: NSView {
         float3 den = PQ_C2 - PQ_C3 * e;
         float3 nits = 10000.0 * pow(num / den, 1.0 / PQ_M1);
         // Anchor to SDR white: 1.0 out == diffuse white on this display, so
-        // the base image cannot drift as the panel's headroom ramps. Anything
-        // brighter than reference white lands above 1.0 and uses the headroom
-        // that actually exists, which the compositor rolls off for us.
-        return float4(nits / REFERENCE_WHITE_NITS, 1.0);
+        // the base image cannot drift as the panel's headroom ramps.
+        float3 lin = nits / REFERENCE_WHITE_NITS;
+        // Roll the highlights into the headroom this display actually grants,
+        // instead of handing over values it cannot show.
+        //
+        // Letting the compositor clip is not neutral: it clips per channel, so
+        // a bright saturated red (R far above headroom, G and B below it)
+        // loses only its red and slides towards orange. That was reported
+        // exactly — HITMAN's tie, "supposed to be bright red, looks orange" —
+        // and it is why the scale below is applied to all three channels
+        // together. Uniform scaling moves luminance without touching the ratio
+        // between channels, so hue survives compression.
+        float l = dot(lin, float3(0.2627, 0.6780, 0.0593));
+        float kneePoint = max(headroom * 0.5, 0.5);
+        // Only what is above the knee gets bent. Applying the curve to
+        // everything scaled the whole picture by knee/l, which for ordinary
+        // content is a colossal multiplier — caught by the tests as half-float
+        // overflow rather than by anyone's eyes.
+        if (l > kneePoint) {
+          // Everything up to the knee is reproduced exactly — most of the
+          // picture, including diffuse white — and only what is brighter gets
+          // bent, asymptotically approaching the headroom limit.
+          float knee = kneePoint;
+          float over = l - knee;
+          float room = max(headroom - knee, 0.0001);
+          float mapped = knee + room * (over / (over + room));
+          lin *= mapped / l;
+        }
+        return float4(lin, 1.0);
       }
       """
     do {
@@ -292,7 +318,9 @@ class StreamBeamHdrView: NSView {
   /// shader at all — and a wrong matrix, mis-scaled planes or the wrong
   /// limited-range offsets each look like exactly the washed-out picture this
   /// feature exists to remove.
-  func encodeConversion(of buffer: CVPixelBuffer, into target: MTLTexture) -> MTLCommandBuffer? {
+  func encodeConversion(
+    of buffer: CVPixelBuffer, into target: MTLTexture, headroom: Double? = nil
+  ) -> MTLCommandBuffer? {
     guard let pipeline, let queue, let textureCache else {
       noteDrawFailure("view not initialised: \(setupFailure ?? "unknown")")
       return nil
@@ -323,6 +351,12 @@ class StreamBeamHdrView: NSView {
     encoder.setRenderPipelineState(pipeline)
     encoder.setFragmentTexture(CVMetalTextureGetTexture(luma), index: 0)
     encoder.setFragmentTexture(CVMetalTextureGetTexture(chroma), index: 1)
+    // Read live rather than cached: macOS ramps this over the first second of
+    // EDR content (measured 1.42 -> 4.00 across frames 22-42), and the roll-off
+    // has to track it or the highlights are mapped for a display state that no
+    // longer exists.
+    var room = Float(max(headroom ?? liveHeadroom(), 1.0))
+    encoder.setFragmentBytes(&room, length: MemoryLayout<Float>.size, index: 0)
     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     encoder.endEncoding()
     // The CVMetalTexture wrappers must outlive the *GPU* work, not just the

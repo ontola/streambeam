@@ -316,17 +316,21 @@ final class StreamBeamHdrRenderTests: XCTestCase {
   }
 
   /// Run one frame through the real shader and read the RGB code values back.
-  private func render(_ buffer: CVPixelBuffer, with view: StreamBeamHdrView, size: Int = 8) throws
-    -> [(r: Double, g: Double, b: Double)]
-  {
+  private func render(
+    _ buffer: CVPixelBuffer, with view: StreamBeamHdrView, size: Int = 8,
+    headroom: Double = 1_000_000
+  ) throws -> [(r: Double, g: Double, b: Double)] {
     let device = try XCTUnwrap(view.renderDevice)
     let desc = MTLTextureDescriptor.texture2DDescriptor(
       pixelFormat: .rgba16Float, width: size, height: size, mipmapped: false)
     desc.usage = [.renderTarget, .shaderRead]
     desc.storageMode = .shared
     let target = try XCTUnwrap(device.makeTexture(descriptor: desc))
+    // Default headroom is absurdly large so the highlight roll-off is inert
+    // and these tests still measure the conversion alone; the roll-off has its
+    // own test below.
     let cmd = try XCTUnwrap(
-      view.encodeConversion(of: buffer, into: target),
+      view.encodeConversion(of: buffer, into: target, headroom: headroom),
       "the HDR view refused to encode a conversion — \(view.lastDrawFailure ?? "no reason recorded")")
     cmd.commit()
     cmd.waitUntilCompleted()
@@ -459,6 +463,39 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     // being pre-squashed to fit a guess.
     XCTAssertGreaterThan(
       white.r, 80.0, "video white (Y=940) must reach PQ peak, not a dull \(white.r)")
+  }
+
+  /// Highlights brighter than the display are rolled off, not clipped — and
+  /// the roll-off must not bend hue.
+  ///
+  /// Clipping is what the compositor does if we hand it values it cannot show,
+  /// and it clips per channel: a saturated red whose red component is far over
+  /// the limit loses only red and turns orange. Reported from a live stream
+  /// (HITMAN's tie, 2026-08-18) before this existed.
+  func testHighlightsRollOffWithoutShiftingHue() throws {
+    let view = try makeView()
+    let headroom = 4.0
+    // A saturated red well past what a 4x display can show.
+    let red = try makeTenBitFrame(y: 400, cb: 300, cr: 900)
+    let plain = try render(red, with: view)[0]
+    let rolled = try render(red, with: view, headroom: headroom)[0]
+
+    XCTAssertGreaterThan(
+      plain.r, headroom,
+      "test frame isn't bright enough to exercise the roll-off (\(plain.r))")
+    let luma = 0.2627 * rolled.r + 0.6780 * rolled.g + 0.0593 * rolled.b
+    XCTAssertLessThanOrEqual(
+      luma, headroom + 0.01,
+      "rolled-off luminance \(luma) still exceeds the display's \(headroom)x headroom")
+
+    // Hue is the ratio between channels; uniform scaling preserves it, and
+    // per-channel clipping does not.
+    let before = plain.r / max(plain.g, 1e-6)
+    let after = rolled.r / max(rolled.g, 1e-6)
+    XCTAssertEqual(
+      after, before, accuracy: before * 0.02,
+      "red:green went from \(before) to \(after) — the roll-off shifted hue, "
+        + "which is how a red tie turns orange")
   }
 
   private func decodeHdrFixture() throws -> (video: StreamBeamVideo, pixels: CVPixelBuffer) {
