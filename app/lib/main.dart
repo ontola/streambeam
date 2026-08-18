@@ -419,6 +419,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   /// `_HostListEntry.alternates`), and only some of them may be reachable.
   List<DiscoveredHost> _desktopFailoverQueue = const [];
   String? _lastDesktopPayload;
+
+  /// Re-dials spent on the current endpoint. Bounded so a genuinely dead host
+  /// still reports itself as dead instead of retrying forever behind a
+  /// hopeful spinner.
+  int _desktopRetries = 0;
+  static const _maxDesktopRetries = 3;
   // MetalFX upscaling (macOS): on by default; the native side reports back
   // whether it's actually available on this machine.
   bool _upscaleEnabled = true;
@@ -1189,6 +1195,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                 _showVideo = true;
                 _busy = false;
               });
+              // Media is flowing, so the endpoint is healthy: a later drop
+              // deserves its own full retry budget rather than inheriting the
+              // one spent getting here.
+              _desktopRetries = 0;
               appImmersive.value = true;
               unawaited(_applyUpscale());
             }
@@ -1223,6 +1233,33 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
             unawaited(_startDesktopPlaybackKnown(next, addr, failover: rest));
             return;
           }
+        }
+        // Re-dial the *same* endpoint before giving up. The Windows host now
+        // restarts its worker whenever the machine locks or unlocks — the
+        // service swaps between a SYSTEM worker (the only one that can see the
+        // login screen) and a user-token worker (the only one that can capture
+        // a game). That tears the session down by design, so a client that
+        // quits on the first drop turns a deliberate two-second handover into
+        // "timed out waiting for media" and a dead end.
+        if (_looksUnreachable(e.toString()) &&
+            _desktopRetries < _maxDesktopRetries) {
+          _desktopRetries++;
+          final host = _lastDesktopHost;
+          final addr = _lastDesktopAddr;
+          final payload = _lastDesktopPayload;
+          setState(() {
+            _status = 'Reconnecting to the host…';
+            _statusIsError = false;
+          });
+          Future.delayed(const Duration(seconds: 2), () {
+            if (!mounted || attempt != _desktopPlaybackAttempt) return;
+            if (host != null && addr != null) {
+              unawaited(_startDesktopPlaybackKnown(host, addr));
+            } else if (payload != null) {
+              unawaited(_startDesktopPlayback(payload));
+            }
+          });
+          return;
         }
         _reportError(_humanizeError(e.toString()));
         unawaited(_stopDesktopPlayback());

@@ -208,6 +208,19 @@ class StreamBeamHdrView: NSView {
     cmd.present(drawable)
     cmd.commit()
     framesPresented += 1
+    // macOS grants EDR headroom only once EDR content is actually on screen,
+    // so it ramps *after* the first frames — and because PQ is absolute, the
+    // same code values map to a different luminance before and after. That is
+    // a picture visibly changing colour a moment after it appears, with
+    // nothing upstream changing at all. Log the ramp so it can be correlated
+    // with what the eye sees instead of guessed at.
+    let headroomNow = liveHeadroom()
+    if abs(headroomNow - lastLoggedHeadroom) > 0.05 {
+      lastLoggedHeadroom = headroomNow
+      NSLog(
+        "%@",
+        "StreamBeam: EDR headroom now \(headroomNow) (frame \(framesPresented))")
+    }
     if framesPresented == 1 {
       let width = CVPixelBufferGetWidth(buffer)
       let height = CVPixelBufferGetHeight(buffer)
@@ -290,6 +303,9 @@ class StreamBeamHdrView: NSView {
       window?.screen?.maximumExtendedDynamicRangeColorComponentValue
         ?? NSScreen.main?.maximumExtendedDynamicRangeColorComponentValue ?? 1.0)
   }
+
+  /// Last headroom value reported, so only real changes are logged.
+  private var lastLoggedHeadroom: Double = 0
 
   private(set) var drawFailures = 0
   private(set) var lastDrawFailure: String?
