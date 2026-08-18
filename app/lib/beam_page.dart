@@ -81,6 +81,7 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
     running: false,
     hostName: '',
     listenAddr: '',
+    lanAddrs: const [],
     discoverable: false,
     acceptsConnections: false,
     clients: [],
@@ -353,6 +354,73 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Where peers reach this device. Prefers IPv4 — it's the one a human can
+  /// recognise and retype — and falls back to the bind address only when
+  /// nothing better is known.
+  String _reachableLabel() {
+    final addrs = _snap.lanAddrs;
+    if (addrs.isEmpty) {
+      return _snap.listenAddr.isEmpty ? 'Starting…' : _snap.listenAddr;
+    }
+    final ipv4 = addrs.firstWhere(
+      (a) => !a.startsWith('[') && a.split(':').length == 2,
+      orElse: () => addrs.first,
+    );
+    final extra = addrs.length - 1;
+    return extra > 0 ? '$ipv4  ·  +$extra more' : ipv4;
+  }
+
+  Future<void> _promptRename() async {
+    final controller = TextEditingController(text: _snap.hostName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename this device'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Device name',
+            helperText: 'How this device appears to your other devices',
+          ),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty || name.trim() == _snap.hostName) {
+      return;
+    }
+    try {
+      setCustomDeviceName(name: name.trim());
+    } catch (e) {
+      if (mounted) _setStatus('Could not rename: $e', error: true);
+      return;
+    }
+    // The name is baked into the mDNS advertisement and the pairing payload
+    // when the host starts, so a restart is what makes peers see it.
+    stopHost();
+    startHost(
+      hostName: null,
+      listen: null,
+      fps: 30,
+      maxEncodeDim: Platform.isMacOS ? 1920 : 1280,
+    );
+    if (mounted) {
+      _refresh();
+      _setStatus('Renamed to ${name.trim()}');
+    }
+  }
+
   Future<void> _refreshAndroidCapture() async {
     try {
       final active =
@@ -569,6 +637,7 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
           running: _snap.running,
           hostName: _snap.hostName,
           listenAddr: _snap.listenAddr,
+          lanAddrs: _snap.lanAddrs,
           discoverable: _snap.discoverable,
           acceptsConnections: _snap.acceptsConnections,
           pairingLink: _snap.pairingLink,
@@ -621,6 +690,34 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
           clipBehavior: Clip.antiAlias,
           child: Column(
             children: [
+              // Identity row, matching how every other device is presented in
+              // the list above: name, and the address peers reach it on. This
+              // device previously showed neither, so there was no way to tell
+              // what others see you as, or which address to type.
+              ListTile(
+                leading: Icon(
+                  Platform.isAndroid
+                      ? Icons.smartphone
+                      : Platform.isMacOS
+                      ? Icons.laptop_mac
+                      : Icons.desktop_windows,
+                  color: theme.colorScheme.primary,
+                ),
+                title: Text(
+                  _snap.hostName.isEmpty ? 'This device' : _snap.hostName,
+                  style: theme.textTheme.titleSmall,
+                ),
+                subtitle: Text(
+                  _reachableLabel(),
+                  style: theme.textTheme.bodySmall,
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.edit_outlined, size: 20),
+                  tooltip: 'Rename this device',
+                  onPressed: running ? _promptRename : null,
+                ),
+              ),
+              const Divider(height: 1),
               if (viewers.isNotEmpty) ...[
                 ColoredBox(
                   color: theme.colorScheme.primaryContainer,

@@ -36,4 +36,4 @@ pub mod wgc;
 
 pub use config::{build_host_config, default_host_name};
 pub use encode::{EncodeError, EncodedFrame, VideoEncoder};
-pub use server::{ClientEntry, HostConfig, HostControls, PairApproval};
+pub use server::{ClientEntry, HostConfig, HostControls, PairApproval, pairing_addrs};

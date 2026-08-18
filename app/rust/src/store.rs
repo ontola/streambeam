@@ -10,15 +10,49 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// recognizable name instead of a generic "streambeam-…". Set from Flutter.
 static DEVICE_NAME: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// Whether [`DEVICE_NAME`] came from the user rather than the platform. A
+/// user's choice must survive the platform name being pushed in at every
+/// startup, and survive restarts, so it is persisted and wins.
+static NAME_IS_CUSTOM: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+const NAME_FILE: &str = "device_name.txt";
+
 pub fn set_data_dir(dir: &str) {
     let _ = DATA_DIR.set(PathBuf::from(dir));
+    // Adopt a previously chosen name as soon as we know where to look, so it
+    // is in place before the platform pushes its own name in.
+    if let Some(name) = std::fs::read_to_string(PathBuf::from(dir).join(NAME_FILE))
+        .ok()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+    {
+        *DEVICE_NAME.lock().unwrap() = Some(name);
+        *NAME_IS_CUSTOM.lock().unwrap() = true;
+    }
 }
 
+/// Platform-provided name (the OS device name), pushed in at startup. Never
+/// overrides a name the user chose.
 pub fn set_device_name(name: &str) {
     let trimmed = name.trim();
-    if !trimmed.is_empty() {
-        *DEVICE_NAME.lock().unwrap() = Some(trimmed.to_string());
+    if trimmed.is_empty() || *NAME_IS_CUSTOM.lock().unwrap() {
+        return;
     }
+    *DEVICE_NAME.lock().unwrap() = Some(trimmed.to_string());
+}
+
+/// User-chosen name: persisted, and takes precedence from here on.
+pub fn set_custom_device_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("device name cannot be empty".into());
+    }
+    let dir = DATA_DIR.get().ok_or("app data dir not set yet")?;
+    std::fs::write(dir.join(NAME_FILE), trimmed)
+        .map_err(|e| format!("could not save the device name: {e}"))?;
+    *DEVICE_NAME.lock().unwrap() = Some(trimmed.to_string());
+    *NAME_IS_CUSTOM.lock().unwrap() = true;
+    Ok(())
 }
 
 /// The configured device name, if one has been set.

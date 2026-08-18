@@ -57,6 +57,9 @@ pub struct HostSnapshot {
     pub running: bool,
     pub host_name: String,
     pub listen_addr: String,
+    /// Reachable `ip:port` addresses, for showing the user where this device
+    /// can be found — the same expansion a pairing payload gets.
+    pub lan_addrs: Vec<String>,
     pub pairing_link: Option<String>,
     pub pairing_payload: Option<String>,
     pub error: Option<String>,
@@ -251,6 +254,7 @@ pub fn snapshot() -> HostSnapshot {
             running: false,
             host_name: String::new(),
             listen_addr: String::new(),
+            lan_addrs: Vec::new(),
             pairing_link: None,
             pairing_payload: None,
             error: None,
@@ -289,6 +293,14 @@ pub fn snapshot() -> HostSnapshot {
         running: true,
         host_name: ui.map(|u| u.host_name.clone()).unwrap_or_default(),
         listen_addr: ui.map(|u| u.listen.to_string()).unwrap_or_default(),
+        lan_addrs: ui
+            .map(|u| {
+                streambeam_host::pairing_addrs(u.listen)
+                    .into_iter()
+                    .map(|a| a.to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
         pairing_link: ui.and_then(|u| u.pairing_link.clone()),
         pairing_payload: ui.and_then(|u| u.pairing_payload.clone()),
         error: ui.and_then(|u| u.fatal.clone()),

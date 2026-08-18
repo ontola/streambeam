@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1565584886;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -754955382;
 
 // Section: executor
 
@@ -1580,14 +1580,14 @@ fn wire__crate__api__set_audio_muted_impl(
         },
     )
 }
-fn wire__crate__api__set_device_name_impl(
+fn wire__crate__api__set_custom_device_name_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "set_device_name",
+            debug_name: "set_custom_device_name",
             port: None,
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
@@ -1603,12 +1603,45 @@ fn wire__crate__api__set_device_name_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_name = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let output_ok = Result::<_, ()>::Ok({
-                    crate::api::set_device_name(api_name);
-                })?;
+            transform_result_sse::<_, String>((move || {
+                let output_ok = crate::api::set_custom_device_name(api_name)?;
                 Ok(output_ok)
             })())
+        },
+    )
+}
+fn wire__crate__api__set_device_name_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_device_name",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::set_device_name(api_name);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
         },
     )
 }
@@ -1909,6 +1942,7 @@ impl SseDecode for crate::api::HostSnapshot {
         let mut var_running = <bool>::sse_decode(deserializer);
         let mut var_hostName = <String>::sse_decode(deserializer);
         let mut var_listenAddr = <String>::sse_decode(deserializer);
+        let mut var_lanAddrs = <Vec<String>>::sse_decode(deserializer);
         let mut var_pairingLink = <Option<String>>::sse_decode(deserializer);
         let mut var_pairingPayload = <Option<String>>::sse_decode(deserializer);
         let mut var_error = <Option<String>>::sse_decode(deserializer);
@@ -1922,6 +1956,7 @@ impl SseDecode for crate::api::HostSnapshot {
             running: var_running,
             host_name: var_hostName,
             listen_addr: var_listenAddr,
+            lan_addrs: var_lanAddrs,
             pairing_link: var_pairingLink,
             pairing_payload: var_pairingPayload,
             error: var_error,
@@ -2200,6 +2235,7 @@ fn pde_ffi_dispatcher_primary_impl(
         24 => wire__crate__api__reconnect_play_stream_impl(port, ptr, rust_vec_len, data_len),
         26 => wire__crate__api__save_host_from_payload_impl(port, ptr, rust_vec_len, data_len),
         44 => wire__crate__api__set_app_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__set_device_name_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2246,13 +2282,13 @@ fn pde_ffi_dispatcher_sync_impl(
         42 => wire__crate__api__send_secure_attention_impl(ptr, rust_vec_len, data_len),
         43 => wire__crate__api__send_touch_frame_impl(ptr, rust_vec_len, data_len),
         45 => wire__crate__api__set_audio_muted_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__set_device_name_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__start_host_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__stop_host_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__stop_playback_impl(ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__take_remote_clipboard_impl(ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__wake_saved_host_impl(ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__set_custom_device_name_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__start_host_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__stop_host_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__stop_playback_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__streambeam_version_impl(ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__take_remote_clipboard_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__wake_saved_host_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2349,6 +2385,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::HostSnapshot {
             self.running.into_into_dart().into_dart(),
             self.host_name.into_into_dart().into_dart(),
             self.listen_addr.into_into_dart().into_dart(),
+            self.lan_addrs.into_into_dart().into_dart(),
             self.pairing_link.into_into_dart().into_dart(),
             self.pairing_payload.into_into_dart().into_dart(),
             self.error.into_into_dart().into_dart(),
@@ -2533,6 +2570,7 @@ impl SseEncode for crate::api::HostSnapshot {
         <bool>::sse_encode(self.running, serializer);
         <String>::sse_encode(self.host_name, serializer);
         <String>::sse_encode(self.listen_addr, serializer);
+        <Vec<String>>::sse_encode(self.lan_addrs, serializer);
         <Option<String>>::sse_encode(self.pairing_link, serializer);
         <Option<String>>::sse_encode(self.pairing_payload, serializer);
         <Option<String>>::sse_encode(self.error, serializer);

@@ -324,6 +324,14 @@ pub fn set_app_data_dir(dir: String) {
 /// Set the name peers see for this device (client name when watching, host name
 /// when beaming). Call at startup with the platform device name.
 #[flutter_rust_bridge::frb(sync)]
+/// Rename this device, persistently. Peers see the new name after the host
+/// restarts (the name is baked into the mDNS advertisement and pairing
+/// payload at start), which the caller is expected to do.
+#[flutter_rust_bridge::frb(sync)]
+pub fn set_custom_device_name(name: String) -> Result<(), String> {
+    crate::store::set_custom_device_name(&name)
+}
+
 pub fn set_device_name(name: String) {
     crate::store::set_device_name(&name);
 }
@@ -1176,6 +1184,9 @@ pub struct HostSnapshot {
     pub running: bool,
     pub host_name: String,
     pub listen_addr: String,
+    /// Reachable `ip:port` addresses for this device, so the UI can show where
+    /// peers will find it rather than the bind address (`0.0.0.0:47989`).
+    pub lan_addrs: Vec<String>,
     pub pairing_link: Option<String>,
     pub pairing_payload: Option<String>,
     pub error: Option<String>,
@@ -1260,6 +1271,7 @@ pub fn host_snapshot() -> HostSnapshot {
             running: s.running,
             host_name: s.host_name,
             listen_addr: s.listen_addr,
+            lan_addrs: s.lan_addrs,
             pairing_link: s.pairing_link,
             pairing_payload: s.pairing_payload,
             error: s.error,
@@ -1295,6 +1307,7 @@ pub fn host_snapshot() -> HostSnapshot {
         running: false,
         host_name: String::new(),
         listen_addr: String::new(),
+        lan_addrs: Vec::new(),
         pairing_link: None,
         pairing_payload: None,
         error: None,

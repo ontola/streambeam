@@ -687,7 +687,10 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     Ok(())
 }
 
-fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
+/// The addresses a peer can actually reach this host on, expanding an
+/// unspecified bind (`0.0.0.0`) into the machine's real LAN IPs. Public so the
+/// app can show the user the same thing it puts in a pairing payload.
+pub fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
     let port = listen.port();
     if listen.ip().is_unspecified() {
         advertise_ips(listen.ip())

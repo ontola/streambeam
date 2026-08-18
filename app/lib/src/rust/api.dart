@@ -158,7 +158,13 @@ Future<void> setAppDataDir({required String dir}) =>
 
 /// Set the name peers see for this device (client name when watching, host name
 /// when beaming). Call at startup with the platform device name.
-void setDeviceName({required String name}) =>
+/// Rename this device, persistently. Peers see the new name after the host
+/// restarts (the name is baked into the mDNS advertisement and pairing
+/// payload at start), which the caller is expected to do.
+void setCustomDeviceName({required String name}) =>
+    StreambeamFfi.instance.api.crateApiSetCustomDeviceName(name: name);
+
+Future<void> setDeviceName({required String name}) =>
     StreambeamFfi.instance.api.crateApiSetDeviceName(name: name);
 
 String streambeamVersion() =>
@@ -500,6 +506,10 @@ class HostSnapshot {
   final bool running;
   final String hostName;
   final String listenAddr;
+
+  /// Reachable `ip:port` addresses for this device, so the UI can show where
+  /// peers will find it rather than the bind address (`0.0.0.0:47989`).
+  final List<String> lanAddrs;
   final String? pairingLink;
   final String? pairingPayload;
   final String? error;
@@ -515,6 +525,7 @@ class HostSnapshot {
     required this.running,
     required this.hostName,
     required this.listenAddr,
+    required this.lanAddrs,
     this.pairingLink,
     this.pairingPayload,
     this.error,
@@ -530,6 +541,7 @@ class HostSnapshot {
       running.hashCode ^
       hostName.hashCode ^
       listenAddr.hashCode ^
+      lanAddrs.hashCode ^
       pairingLink.hashCode ^
       pairingPayload.hashCode ^
       error.hashCode ^
@@ -547,6 +559,7 @@ class HostSnapshot {
           running == other.running &&
           hostName == other.hostName &&
           listenAddr == other.listenAddr &&
+          lanAddrs == other.lanAddrs &&
           pairingLink == other.pairingLink &&
           pairingPayload == other.pairingPayload &&
           error == other.error &&
