@@ -64,34 +64,36 @@ class StreamBeamHdrView: NSView {
       return
     }
     metalLayer.device = device
-    // 10-bit unorm carries PQ code values exactly; a float layer would work too
-    // but costs bandwidth for precision PQ doesn't need.
-    metalLayer.pixelFormat = .rgb10a2Unorm
-    // BT.2100 PQ needs macOS 11; the project still targets 10.15. Hardware
-    // AV1 decode (M3+) implies a far newer OS anyway, so this branch is
-    // unreachable in practice — but failing loudly beats a silently wrong
-    // colour space, which would look like every other washed-out bug here.
-    if #available(macOS 11.0, *) {
-      metalLayer.colorspace = CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+    // Half-float, because what we hand the compositor is no longer PQ code
+    // values but *linear light relative to SDR white* — 1.0 is diffuse white
+    // and highlights go above it, so the range needed is open-ended.
+    metalLayer.pixelFormat = .rgba16Float
+    // Extended-linear BT.2020 rather than PQ.
+    //
+    // Handing the compositor absolute PQ meant the picture's appearance was
+    // whatever macOS decided to map 10000 nits onto — against headroom that
+    // *moves*: measured live on 2026-08-18, this display ramped 1.42 -> 4.00
+    // over frames 22-42, inside 1.2 seconds. The image visibly shifted colour
+    // a moment after it appeared, with nothing upstream changing, and the
+    // steady state looked washed out because nothing anchored it to SDR white.
+    //
+    // In extended-linear, 1.0 *is* SDR white by definition. The base image
+    // therefore sits still no matter what headroom the display grants, and
+    // headroom only buys highlights above 1.0 — which is what headroom is
+    // supposed to be for. Keeping BT.2020 primaries also means the shader
+    // doesn't have to convert them; the compositor does that, correctly, for
+    // whatever panel this is.
+    if #available(macOS 10.14.3, *) {
+      metalLayer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
     } else {
-      setupFailure = "HDR display needs macOS 11 or newer"
+      setupFailure = "HDR display needs macOS 10.14.3 or newer"
       return
     }
     metalLayer.wantsExtendedDynamicRangeContent = true
-    // PQ encodes *absolute* luminance, so the compositor cannot map it to this
-    // display without knowing the range it was mastered for. Left unset,
-    // macOS falls back to its own assumptions — which is one of the ways a
-    // technically-correct PQ signal still arrives looking washed out, blacks
-    // lifted and highlights flat.
-    //
-    // These are the mastering-display hints, not measurements of the content:
-    // 1000 nits peak is the usual HDR10 grade, and `opticalOutputScale` 100 is
-    // the reference-white scale PQ is defined against. They are the first knob
-    // to reach for if the picture is too bright or too dim overall.
-    if #available(macOS 10.15, *) {
-      metalLayer.edrMetadata = CAEDRMetadata.hdr10(
-        minLuminance: 0.0001, maxLuminance: 1000, opticalOutputScale: 100)
-    }
+    // Deliberately no `edrMetadata`: it describes how to interpret a PQ or HLG
+    // signal, and this layer no longer carries one. Setting it here (tried
+    // first, 2026-08-18) treats the symptom — it tells macOS what to assume
+    // while still leaving the mapping to macOS.
     metalLayer.framebufferOnly = true
     metalLayer.isOpaque = true
     layer = metalLayer
@@ -113,6 +115,18 @@ class StreamBeamHdrView: NSView {
     let source = """
       #include <metal_stdlib>
       using namespace metal;
+      // ST.2084 constants, from the standard.
+      constant float PQ_M1 = 0.1593017578125;   // 2610 / 16384
+      constant float PQ_M2 = 78.84375;          // 2523 / 4096 * 128
+      constant float PQ_C1 = 0.8359375;         // 3424 / 4096
+      constant float PQ_C2 = 18.8515625;        // 2413 / 4096 * 32
+      constant float PQ_C3 = 18.6875;           // 2392 / 4096 * 32
+      // BT.2408 reference ("graphics") white. The host composites the Windows
+      // desktop at its own SDR white level — 228 nits on Mancave, which it
+      // already measures — so signalling that per-stream would be more
+      // accurate than this constant. Until the protocol carries it, the
+      // standard value is the honest default and is within ~12% of it.
+      constant float REFERENCE_WHITE_NITS = 203.0;
       struct VsOut { float4 pos [[position]]; float2 uv; };
       vertex VsOut v_main(uint id [[vertex_id]]) {
         float2 p = float2((id << 1) & 2, id & 2);
@@ -135,7 +149,17 @@ class StreamBeamHdrView: NSView {
         float r = y + 1.4746 * cr;
         float g = y - 0.16455 * cb - 0.57135 * cr;
         float b = y + 1.8814 * cb;
-        return float4(saturate(float3(r, g, b)), 1.0);
+        float3 pq = saturate(float3(r, g, b));
+        // PQ (ST.2084) EOTF: code value -> absolute luminance in nits.
+        float3 e = pow(pq, 1.0 / PQ_M2);
+        float3 num = max(e - PQ_C1, 0.0);
+        float3 den = PQ_C2 - PQ_C3 * e;
+        float3 nits = 10000.0 * pow(num / den, 1.0 / PQ_M1);
+        // Anchor to SDR white: 1.0 out == diffuse white on this display, so
+        // the base image cannot drift as the panel's headroom ramps. Anything
+        // brighter than reference white lands above 1.0 and uses the headroom
+        // that actually exists, which the compositor rolls off for us.
+        return float4(nits / REFERENCE_WHITE_NITS, 1.0);
       }
       """
     do {
@@ -143,7 +167,7 @@ class StreamBeamHdrView: NSView {
       let desc = MTLRenderPipelineDescriptor()
       desc.vertexFunction = library.makeFunction(name: "v_main")
       desc.fragmentFunction = library.makeFunction(name: "f_main")
-      desc.colorAttachments[0].pixelFormat = .rgb10a2Unorm
+      desc.colorAttachments[0].pixelFormat = .rgba16Float
       pipeline = try device.makeRenderPipelineState(descriptor: desc)
     } catch {
       setupFailure = "pipeline: \(error)"

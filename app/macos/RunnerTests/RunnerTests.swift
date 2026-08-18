@@ -321,7 +321,7 @@ final class StreamBeamHdrRenderTests: XCTestCase {
   {
     let device = try XCTUnwrap(view.renderDevice)
     let desc = MTLTextureDescriptor.texture2DDescriptor(
-      pixelFormat: .rgb10a2Unorm, width: size, height: size, mipmapped: false)
+      pixelFormat: .rgba16Float, width: size, height: size, mipmapped: false)
     desc.usage = [.renderTarget, .shaderRead]
     desc.storageMode = .shared
     let target = try XCTUnwrap(device.makeTexture(descriptor: desc))
@@ -331,27 +331,55 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     cmd.commit()
     cmd.waitUntilCompleted()
 
-    var words = [UInt32](repeating: 0, count: size * size)
-    words.withUnsafeMutableBytes { raw in
+    // rgba16Float: four halves per pixel, so the readback is linear light
+    // relative to SDR white rather than code values. Decoded by hand rather
+    // than via `Float16`, which needs macOS 11 while this target still says
+    // 10.15.
+    var halves = [UInt16](repeating: 0, count: size * size * 4)
+    halves.withUnsafeMutableBytes { raw in
       target.getBytes(
-        raw.baseAddress!, bytesPerRow: size * 4,
+        raw.baseAddress!, bytesPerRow: size * 8,
         from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
     }
-    // rgb10a2Unorm packs R in the low 10 bits, then G, then B, then 2 bits of
-    // alpha.
-    return words.map {
-      (
-        r: Double($0 & 0x3FF) / 1023.0,
-        g: Double(($0 >> 10) & 0x3FF) / 1023.0,
-        b: Double(($0 >> 20) & 0x3FF) / 1023.0
-      )
+    var out: [(r: Double, g: Double, b: Double)] = []
+    out.reserveCapacity(size * size)
+    for i in 0..<(size * size) {
+      out.append(
+        (
+          r: half(halves[i * 4]),
+          g: half(halves[i * 4 + 1]),
+          b: half(halves[i * 4 + 2])
+        ))
     }
+    return out
   }
 
   /// What the shader *should* produce, derived from the BT.2020 luma
   /// coefficients rather than copied from the shader's rounded constants — a
   /// reference that restates the code proves only that the code is consistent
   /// with itself.
+  /// IEEE 754 binary16 -> Double.
+  private func half(_ bits: UInt16) -> Double {
+    let sign: Double = (bits & 0x8000) != 0 ? -1 : 1
+    let exponent = Int((bits >> 10) & 0x1F)
+    let mantissa = Double(bits & 0x3FF)
+    if exponent == 0 {
+      return sign * mantissa * pow(2.0, -24)
+    }
+    if exponent == 31 {
+      return mantissa == 0 ? sign * .infinity : .nan
+    }
+    return sign * (1 + mantissa / 1024) * pow(2.0, Double(exponent - 15))
+  }
+
+  /// ST.2084 EOTF: PQ code value (0...1) to absolute luminance in nits.
+  private func pqToNits(_ code: Double) -> Double {
+    let m1 = 2610.0 / 16384, m2 = 2523.0 / 4096 * 128
+    let c1 = 3424.0 / 4096, c2 = 2413.0 / 4096 * 32, c3 = 2392.0 / 4096 * 32
+    let e = pow(max(code, 0), 1 / m2)
+    return 10000 * pow(max(e - c1, 0) / (c2 - c3 * e), 1 / m1)
+  }
+
   private func reference(y: UInt16, cb: UInt16, cr: UInt16) -> (r: Double, g: Double, b: Double) {
     let kr = 0.2627, kb = 0.0593
     let kg = 1 - kr - kb
@@ -365,10 +393,13 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     let cbv = (Double(cb) - 512) / 896
     let crv = (Double(cr) - 512) / 896
     func clamp(_ v: Double) -> Double { min(max(v, 0), 1) }
+    // The shader now leaves PQ behind: code values become absolute nits, then
+    // are anchored to SDR white so 1.0 out is diffuse white on this display.
+    func out(_ code: Double) -> Double { pqToNits(clamp(code)) / 203.0 }
     return (
-      r: clamp(yv + 2 * (1 - kr) * crv),
-      g: clamp(yv - (2 * (1 - kb) * kb / kg) * cbv - (2 * (1 - kr) * kr / kg) * crv),
-      b: clamp(yv + 2 * (1 - kb) * cbv)
+      r: out(yv + 2 * (1 - kr) * crv),
+      g: out(yv - (2 * (1 - kb) * kb / kg) * cbv - (2 * (1 - kr) * kr / kg) * crv),
+      b: out(yv + 2 * (1 - kb) * cbv)
     )
   }
 
@@ -391,18 +422,23 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     for c in cases {
       let pixels = try render(try makeTenBitFrame(y: c.y, cb: c.cb, cr: c.cr), with: view)
       let want = reference(y: c.y, cb: c.cb, cr: c.cr)
-      // 10-bit output quantises at 1/1023, and reading MSB-aligned samples as
-      // 16-bit unorm scales by 65535/65472 — a 0.1% stretch that the matrix
-      // can amplify to ~0.3% on the blue axis. Anything past this is a bug,
-      // not arithmetic.
-      let tolerance = 0.006
+      // Relative, because output is no longer confined to 0...1: PQ peak white
+      // lands near 49x SDR white. Half-float carries ~3 decimal digits, and
+      // the EOTF's steep top end amplifies the 10-bit input quantisation, so
+      // 2% is the honest floor here — still far tighter than any of the
+      // failures this catches, which are off by whole factors.
       for (i, got) in pixels.enumerated() where i % 17 == 0 {
-        XCTAssertEqual(
-          got.r, want.r, accuracy: tolerance, "\(c.name): red is wrong (pixel \(i))")
-        XCTAssertEqual(
-          got.g, want.g, accuracy: tolerance, "\(c.name): green is wrong (pixel \(i))")
-        XCTAssertEqual(
-          got.b, want.b, accuracy: tolerance, "\(c.name): blue is wrong (pixel \(i))")
+        let channels: [(String, Double, Double)] = [
+          ("red", got.r, want.r),
+          ("green", got.g, want.g),
+          ("blue", got.b, want.b),
+        ]
+        for channel in channels {
+          let tolerance: Double = max(0.004, abs(channel.2) * 0.02)
+          XCTAssertEqual(
+            channel.1, channel.2, accuracy: tolerance,
+            "\(c.name): \(channel.0) is wrong (pixel \(i))")
+        }
       }
     }
   }
@@ -417,8 +453,12 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     let white = try render(try makeTenBitFrame(y: 940, cb: 512, cr: 512), with: view)[0]
     XCTAssertLessThan(
       black.r, 0.004, "video black (Y=64) must reach 0, not a lifted \(black.r) — washed out")
+    // Video white is PQ's *peak* (10000 nits), which anchored to SDR white is
+    // ~49x. Far above any real display, and deliberately so: the compositor
+    // rolls it off against whatever headroom exists instead of the picture
+    // being pre-squashed to fit a guess.
     XCTAssertGreaterThan(
-      white.r, 0.996, "video white (Y=940) must reach 1, not a dull \(white.r)")
+      white.r, 40.0, "video white (Y=940) must reach PQ peak, not a dull \(white.r)")
   }
 
   private func decodeHdrFixture() throws -> (video: StreamBeamVideo, pixels: CVPixelBuffer) {
@@ -488,10 +528,10 @@ final class StreamBeamHdrRenderTests: XCTestCase {
     let brightest = luma.max() ?? 0
     let darkest = luma.min() ?? 0
     XCTAssertGreaterThan(
-      brightest, 0.05,
+      brightest, 0.01,
       "the whole frame rendered black — decoded pixels reached the shader and nothing came out")
     XCTAssertGreaterThan(
-      brightest - darkest, 0.02,
+      brightest - darkest, 0.005,
       "the frame rendered as a flat fill (\(darkest)...\(brightest)) — a picture would vary")
     XCTAssertEqual(
       view.drawFailures, 0, "the view reported: \(view.lastDrawFailure ?? "")")
