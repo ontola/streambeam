@@ -104,6 +104,7 @@ pub fn install(worker: Option<String>) -> Res {
     // The service binary itself is what the SCM launches (with `run`); it then
     // spawns the worker. Store the worker path as a launch argument so the
     // service can find it at SYSTEM-start time (its cwd/relative paths differ).
+    let worker_path_for_rule = worker.clone();
     let manager =
         ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CREATE_SERVICE)?;
     let info = ServiceInfo {
@@ -122,8 +123,86 @@ pub fn install(worker: Option<String>) -> Res {
     service.set_description(
         "Keeps StreamBeam streaming across logout and (later) the lock/login screen.",
     )?;
+    // Do this here or the feature is self-defeating. Windows Firewall defaults
+    // inbound to Block, and StreamBeam's allow-rules are per *program path* —
+    // created when Windows prompts the first time the user runs a host by
+    // hand. The worker lives at a different path and, as a SYSTEM service, can
+    // never surface that prompt: it binds its port successfully and receives
+    // nothing, forever, with no error anywhere. That cost two days of
+    // debugging (2026-08-17/18), during which the only component able to
+    // stream the lock screen was the only one unreachable. Install runs
+    // elevated, which is exactly when the rule can be created, so create it.
+    if let Err(e) = allow_worker_through_firewall(&worker_path_for_rule) {
+        eprintln!(
+            "warning: could not add the inbound firewall rule ({e}). The service \
+             will run but clients may not reach it; add it by hand with:\n  \
+             netsh advfirewall firewall add rule name=\"{FIREWALL_RULE}\" \
+             dir=in action=allow protocol=UDP program=\"{}\" enable=yes profile=any",
+            worker_path_for_rule.display()
+        );
+    }
     println!("installed {SERVICE_NAME}. Start it with: streambeam-svc start");
     Ok(())
+}
+
+/// Name used for both creation and removal, so `uninstall` can clean up
+/// exactly what `install` added rather than leaving a stale hole open.
+const FIREWALL_RULE: &str = "StreamBeam host (secure desktop worker)";
+
+/// Allow inbound UDP to the worker binary.
+///
+/// Shells out to `netsh` rather than binding the firewall COM API: this runs
+/// once, at install, already elevated, and the COM surface (`INetFwPolicy2`)
+/// would be a lot of FFI for a single rule.
+fn allow_worker_through_firewall(worker: &std::path::Path) -> Res {
+    // Remove first so re-installing (or moving the worker) doesn't accumulate
+    // duplicate rules pointing at stale paths.
+    let _ = std::process::Command::new("netsh")
+        .args([
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            &format!("name={FIREWALL_RULE}"),
+        ])
+        .output();
+    let out = std::process::Command::new("netsh")
+        .args([
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            &format!("name={FIREWALL_RULE}"),
+            "dir=in",
+            "action=allow",
+            "protocol=UDP",
+            &format!("program={}", worker.display()),
+            "enable=yes",
+            "profile=any",
+        ])
+        .output()?;
+    if !out.status.success() {
+        return Err(format!(
+            "netsh exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout).trim()
+        )
+        .into());
+    }
+    println!("firewall: allowed inbound UDP to {}", worker.display());
+    Ok(())
+}
+
+fn remove_firewall_rule() {
+    let _ = std::process::Command::new("netsh")
+        .args([
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            &format!("name={FIREWALL_RULE}"),
+        ])
+        .output();
 }
 
 pub fn uninstall() -> Res {
@@ -140,6 +219,8 @@ pub fn uninstall() -> Res {
         }
     }
     service.delete()?;
+    // Don't leave an inbound hole open for a service that no longer exists.
+    remove_firewall_rule();
     println!("uninstalled {SERVICE_NAME}");
     Ok(())
 }
