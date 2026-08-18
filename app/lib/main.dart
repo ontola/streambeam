@@ -406,6 +406,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   // Last desktop connection target, so a stream-mode/custom-settings change
   // can tear down and re-dial with the new caps (the Android path's
   // `_reconnectForNewCaps` uses `_beginSession`, which desktop doesn't).
+  /// Platform of the host being watched, for OS-specific actions in the
+  /// player (Ctrl+Alt+Del). Kept separately from the connect state because
+  /// that is consumed when the session starts, and both the desktop and
+  /// Android paths need it while streaming.
+  String _watchedHostPlatform = '';
   DiscoveredHost? _lastDesktopHost;
   String? _lastDesktopAddr;
   /// Endpoints for the same identity still worth trying if the current one
@@ -1037,6 +1042,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   Future<void> _startDesktopPlayback(String payload) async {
     await _stopDesktopPlayback();
     _lastDesktopPayload = payload;
+    _watchedHostPlatform = '';
     _lastDesktopHost = null;
     _lastDesktopAddr = null;
     final attempt = _desktopPlaybackAttempt;
@@ -1084,6 +1090,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }) async {
     await _stopDesktopPlayback();
     _desktopFailoverQueue = failover;
+    _watchedHostPlatform = host.platform;
     _lastDesktopHost = host;
     _lastDesktopAddr = addr;
     _lastDesktopPayload = null;
@@ -1643,6 +1650,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     _pendingLanHost = host;
     _pendingLanAddr = addr;
     _pendingLanFailover = failover;
+    _watchedHostPlatform = host.platform;
     await _beginSession(reconnect: false);
   }
 
@@ -1727,7 +1735,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
         probeDecodeHealth: _probeDecodeHealth,
-        hostPlatform: _lastDesktopHost?.platform ?? '',
+        hostPlatform: _watchedHostPlatform,
         onStop: () => unawaited(_stopDesktopPlayback()),
         streamMode: _streamMode,
         // Same semantics as Android's `_changeStreamMode`/`_commitCustom-
@@ -1765,6 +1773,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           layoutDirection: TextDirection.ltr,
         ),
         hostAcceptsTouch: playbackHostAcceptsTouch(),
+        hostPlatform: _watchedHostPlatform,
         onStop: _stopStreaming,
         streamMode: _streamMode,
         onStreamModeChanged: _changeStreamMode,
