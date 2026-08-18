@@ -1115,6 +1115,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         // endpoints before telling the user their PC is unreachable, since
         // from their side it plainly isn't.
         final next = _desktopFailoverQueue.firstOrNull;
+        debugPrint(
+          'StreamBeam: stream error (failover queue: '
+          '${_desktopFailoverQueue.length}, retryable: '
+          '${_looksUnreachable(e.toString())})',
+        );
         if (next != null && _looksUnreachable(e.toString())) {
           final rest = _desktopFailoverQueue.skip(1).toList();
           final addr = _bestLanAddr(next);
@@ -1561,6 +1566,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _reportError('No network address for ${host.name}.');
       return;
     }
+    debugPrint(
+      'StreamBeam: connecting to ${host.name} at $addr'
+      '${failover.isEmpty ? " (no alternates)" : ", ${failover.length} alternate endpoint(s)"}',
+    );
     _pendingLanHost = host;
     _pendingLanAddr = addr;
     _pendingLanFailover = failover;
@@ -1867,20 +1876,15 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                               children: [
                                 const CircularProgressIndicator(),
                                 const SizedBox(height: 20),
+                                // One line, not two: the status already says
+                                // "Connecting to <host>…" and often more, so a
+                                // separate "Connecting…" title just repeated
+                                // the least informative half of it.
                                 Text(
-                                  'Connecting…',
-                                  style: Theme.of(context).textTheme.titleLarge,
+                                  _status ?? 'Connecting…',
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context).textTheme.titleMedium,
                                 ),
-                                if (_status != null) ...[
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    _status!,
-                                    textAlign: TextAlign.center,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
-                                  ),
-                                ],
                                 const SizedBox(height: 24),
                                 FilledButton.tonalIcon(
                                   onPressed: _cancelConnectionAttempt,

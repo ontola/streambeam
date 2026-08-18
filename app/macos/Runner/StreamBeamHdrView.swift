@@ -212,10 +212,24 @@ class StreamBeamHdrView: NSView {
     withExtendedLifetime((luma, chroma)) {}
     framesPresented += 1
     if framesPresented == 1 {
+      let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
       NSLog(
         "%@",
         "StreamBeam: first HDR frame presented — \(width)x\(height), "
-          + "EDR headroom \(window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1)")
+          + "EDR headroom \(headroom)")
+      // Headroom of 1.0 means the display is granting no extra range, so PQ —
+      // which encodes absolute luminance up to 10000 nits — gets squashed
+      // toward black. The picture looks broken rather than merely dim, and
+      // nothing upstream is wrong, so say so plainly. Low Power Mode disabling
+      // EDR is the usual cause (measured 2026-08-18: 3.68 on mains, 1.0 in
+      // Low Power Mode on the same display).
+      if headroom <= 1.0 {
+        NSLog(
+          "%@",
+          "StreamBeam: display granted no EDR headroom — HDR content will look "
+            + "very dark. Low Power Mode disables EDR on Apple displays; turn it "
+            + "off, or stream SDR instead.")
+      }
     }
   }
 
