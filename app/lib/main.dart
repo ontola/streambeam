@@ -2185,7 +2185,16 @@ class _DevicesSection extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   StatusChip(
-                    label: h.online ? 'Online' : 'Offline',
+                    // "Offline" during the very first discovery sweep is a
+                    // lie that costs the user an action: a saved host reads as
+                    // offline until mDNS answers, which prompted a
+                    // Wake-on-LAN packet at a machine that was awake all along
+                    // (2026-08-18). Say we're still looking instead.
+                    label: h.online
+                        ? 'Online'
+                        : discovering
+                        ? 'Checking…'
+                        : 'Offline',
                     highlight: h.online,
                   ),
                   // Not gated on !online: a sleeping host can linger as
