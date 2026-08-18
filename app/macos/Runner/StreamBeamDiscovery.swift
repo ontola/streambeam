@@ -16,6 +16,7 @@ class StreamBeamDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelega
         started = true
         browser.delegate = self
         browser.searchForServices(ofType: "_streambeam._udp.", inDomain: "local.")
+        NSLog("StreamBeam discovery: browsing for _streambeam._udp.local.")
     }
 
     func stop() {
@@ -31,9 +32,23 @@ class StreamBeamDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelega
 
     // MARK: Browser
 
+    /// Bonjour reports a browse that never started here — most importantly a
+    /// denied Local Network permission, which otherwise looks exactly like "no
+    /// hosts on this network". Without this the failure is invisible: the
+    /// device list simply stays empty forever (hit live 2026-08-17, while
+    /// `dns-sd` on the same machine saw every host).
+    func netServiceBrowser(
+        _ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]
+    ) {
+        NSLog("%@", "StreamBeam discovery: browse failed — \(errorDict) "
+            + "(error 10 with domain -72000/-65563 usually means Local Network "
+            + "permission is denied for this app bundle)")
+    }
+
     func netServiceBrowser(
         _ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool
     ) {
+        NSLog("%@", "StreamBeam discovery: found \(service.name)")
         service.delegate = self
         resolving.insert(service)
         service.resolve(withTimeout: 5.0)
@@ -91,6 +106,7 @@ class StreamBeamDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelega
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        NSLog("%@", "StreamBeam discovery: could not resolve \(sender.name) — \(errorDict)")
         resolving.remove(sender)
     }
 

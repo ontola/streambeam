@@ -545,6 +545,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshSavedHost();
+    _primeHdrCapability();
     if (Platform.isAndroid) {
       _scannerController = MobileScannerController(
         autoStart: false,
@@ -915,20 +916,26 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   /// Whether to advertise HDR10 in `VideoCaps`. Requires hardware AV1 decode
   /// *and* an EDR-capable display — see the native side for why both.
-  Future<bool> _canDisplayHdr() async {
-    if (!_hdrPassthroughEnabled) return false;
-    final cached = _desktopHdrCapable;
-    if (cached != null) return cached;
-    bool can;
-    try {
-      can =
-          await _desktopVideoChannel.invokeMethod<bool>('canDisplayHDR') ??
-          false;
-    } catch (_) {
-      can = false; // platform without the method: keep SDR.
-    }
-    _desktopHdrCapable = can;
-    return can;
+  /// Non-blocking by design. This app runs with a merged UI/platform thread,
+  /// so awaiting a platform-channel reply *inside* a tap handler deadlocks:
+  /// the tap's future waits for a reply that needs the thread the tap is
+  /// occupying. Observed as the whole app freezing on the Watch button. The
+  /// capability is primed once at startup and read synchronously afterwards.
+  bool _canDisplayHdrNow() => _hdrPassthroughEnabled && (_desktopHdrCapable ?? false);
+
+  /// Fire-and-forget probe, run once from `initState` so the answer is ready
+  /// before anything needs it.
+  void _primeHdrCapability() {
+    if (!_hdrPassthroughEnabled || _desktopHdrCapable != null) return;
+    unawaited(() async {
+      try {
+        _desktopHdrCapable =
+            await _desktopVideoChannel.invokeMethod<bool>('canDisplayHDR') ??
+            false;
+      } catch (_) {
+        _desktopHdrCapable = false; // platform without the method: keep SDR.
+      }
+    }());
   }
 
   /// Desktop watch: drive the Rust frame stream into the native VideoToolbox
@@ -947,7 +954,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
     final allowAv1 = await _desktopCanAv1();
-    final allowHdr = await _canDisplayHdr();
+    final allowHdr = _canDisplayHdrNow();
     if (!mounted || attempt != _desktopPlaybackAttempt) return;
     _attachDesktopStream(
       playStreamDesktop(
@@ -989,7 +996,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     });
     final (maxWidth, maxHeight, maxFps) = _deviceVideoCaps();
     final allowAv1 = await _desktopCanAv1();
-    final allowHdr = await _canDisplayHdr();
+    final allowHdr = _canDisplayHdrNow();
     if (!mounted || attempt != _desktopPlaybackAttempt) return;
     _attachDesktopStream(
       playStreamDesktopKnown(

@@ -28,6 +28,19 @@ class StreamBeamHdrView: NSView {
   private let metalLayer = CAMetalLayer()
   private let lock = NSLock()
   private var pending: CVPixelBuffer?
+  /// Rendering runs off the main thread. `nextDrawable()` blocks while the
+  /// drawable pool is exhausted — at 120fps on the main queue that is a frozen
+  /// UI, which is exactly what happened the first time this shipped. Metal
+  /// supports drawing a CAMetalLayer from a background thread; only layout
+  /// stays on main.
+  private let renderQueue = DispatchQueue(
+    label: "io.streambeam.hdr-render", qos: .userInteractive)
+  /// One draw in flight at a time. Without this, a 120fps decoder queues draw
+  /// blocks faster than the GPU retires them and the backlog grows forever;
+  /// the newest frame is the only one worth showing anyway.
+  private var drawScheduled = false
+  /// Set from `layout()` on the main thread, read by the render thread.
+  private var targetSize = CGSize.zero
   private(set) var framesPresented = 0
   private(set) var setupFailure: String?
 
@@ -126,22 +139,33 @@ class StreamBeamHdrView: NSView {
   func present(_ buffer: CVPixelBuffer) {
     lock.lock()
     pending = buffer
+    let alreadyScheduled = drawScheduled
+    drawScheduled = true
     lock.unlock()
-    DispatchQueue.main.async { [weak self] in self?.draw() }
+    guard !alreadyScheduled else { return }
+    renderQueue.async { [weak self] in self?.draw() }
   }
 
   override func layout() {
     super.layout()
     let scale = window?.backingScaleFactor ?? 2
+    let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
     metalLayer.contentsScale = scale
-    metalLayer.drawableSize = CGSize(
-      width: bounds.width * scale, height: bounds.height * scale)
-    draw()
+    metalLayer.drawableSize = size
+    lock.lock()
+    targetSize = size
+    let alreadyScheduled = drawScheduled
+    drawScheduled = true
+    lock.unlock()
+    guard !alreadyScheduled else { return }
+    renderQueue.async { [weak self] in self?.draw() }
   }
 
   private func draw() {
     lock.lock()
     let buffer = pending
+    let size = targetSize
+    drawScheduled = false
     lock.unlock()
     // Say why nothing is drawn rather than returning silently: "frames arrive
     // and the screen is black" with no explanation is the single most expensive
@@ -151,7 +175,7 @@ class StreamBeamHdrView: NSView {
       noteDrawFailure("view not initialised: \(setupFailure ?? "unknown")")
       return
     }
-    guard metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else {
+    guard size.width > 0, size.height > 0 else {
       noteDrawFailure("layer has no drawable size yet")
       return
     }
