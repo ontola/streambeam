@@ -26,7 +26,7 @@
 //! so the rest of the pipeline (tone-map, scale, NVENC) is unchanged.
 
 #[cfg(windows)]
-pub use imp::WgcCapture;
+pub use imp::{WgcCapture, process_context};
 
 #[cfg(windows)]
 mod imp {
@@ -66,9 +66,16 @@ mod imp {
         format: DirectXPixelFormat,
     }
 
-    /// Whether this Windows build supports WGC at all (1903+). Checked before
-    /// falling back, so an older machine keeps the duplication behaviour rather
-    /// than erroring.
+    /// Whether this Windows build claims to support WGC at all (1903+).
+    ///
+    /// **Advisory, not a gate.** This answers false in the SYSTEM service
+    /// worker on a machine where the identical binary captures happily in the
+    /// user session (measured 2026-08-18: the 47990 user host rescued HITMAN
+    /// via WGC; the 47989 service worker was told "not supported" on the same
+    /// desktop minutes later). Since the answer is demonstrably about the
+    /// caller's context rather than the OS, `WgcCapture::new` reports it and
+    /// tries anyway — an API that refuses will say so with a real error, which
+    /// is worth more than a bare `false`.
     pub fn supported() -> bool {
         // WinRT activation needs the apartment initialised *as WinRT*.
         // `capture.rs` calls `CoInitializeEx` for COM, which is not the same
@@ -92,14 +99,85 @@ mod imp {
         }
     }
 
+    /// Which security context this process runs in — the thing that actually
+    /// predicts whether WGC works here. Session 0 or a SYSTEM token is the
+    /// interesting case; a normal interactive user is the case that works.
+    pub fn process_context() -> String {
+        use windows::Win32::System::Threading::{
+            GetCurrentProcess, GetCurrentProcessId, OpenProcessToken, TOKEN_QUERY,
+        };
+        let mut session: u32 = 0;
+        unsafe {
+            let _ = windows::Win32::System::RemoteDesktop::ProcessIdToSessionId(
+                GetCurrentProcessId(),
+                &mut session,
+            );
+        }
+        let mut user = "unknown".to_string();
+        unsafe {
+            let mut token = windows::Win32::Foundation::HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_ok() {
+                let mut len = 0u32;
+                let _ = windows::Win32::Security::GetTokenInformation(
+                    token,
+                    windows::Win32::Security::TokenUser,
+                    None,
+                    0,
+                    &mut len,
+                );
+                if len > 0 {
+                    let mut buf = vec![0u8; len as usize];
+                    if windows::Win32::Security::GetTokenInformation(
+                        token,
+                        windows::Win32::Security::TokenUser,
+                        Some(buf.as_mut_ptr() as *mut _),
+                        len,
+                        &mut len,
+                    )
+                    .is_ok()
+                    {
+                        let tu = &*(buf.as_ptr() as *const windows::Win32::Security::TOKEN_USER);
+                        let mut sid = windows::core::PWSTR::null();
+                        if windows::Win32::Security::Authorization::ConvertSidToStringSidW(
+                            tu.User.Sid,
+                            &mut sid,
+                        )
+                        .is_ok()
+                        {
+                            user = sid.to_string().unwrap_or_default();
+                            let _ = windows::Win32::System::Memory::LocalFree(Some(
+                                windows::Win32::Foundation::HLOCAL(sid.0 as *mut _),
+                            ));
+                        }
+                    }
+                }
+                let _ = windows::Win32::Foundation::CloseHandle(token);
+            }
+        }
+        // S-1-5-18 is LOCAL SYSTEM; anything else here is a real user.
+        let who = if user == "S-1-5-18" {
+            "LOCAL SYSTEM".to_string()
+        } else {
+            format!("user {user}")
+        };
+        format!("session {session}, {who}")
+    }
+
     impl WgcCapture {
         /// Start capturing the primary monitor onto `device`.
         ///
         /// `hdr` picks FP16 scRGB over BGRA8, matching what `capture.rs` asks
         /// duplication for, so the downstream tone-map applies identically.
         pub unsafe fn new(device: &ID3D11Device, hdr: bool) -> Result<Self, String> {
+            // Report the verdict and the context it was reached in, then carry
+            // on regardless: `IsSupported` saying no has never been the same
+            // thing as the API refusing to work, and taking its word for it is
+            // what left a game with no capture path at all.
             if !supported() {
-                return Err("Windows.Graphics.Capture is not supported on this build".into());
+                crate::logging::log(&format!(
+                    "WGC: IsSupported() says no in this context ({}) — trying anyway",
+                    process_context()
+                ));
             }
             let monitor: HMONITOR =
                 MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);

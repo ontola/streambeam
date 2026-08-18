@@ -428,9 +428,15 @@ fn build_encoder(
         match crate::capture::DesktopEncoder::new(fps, max_encode_dim, wanted_codec, wants_hdr) {
             Ok(enc) => {
                 let (w, h) = enc.dimensions();
+                // The security context goes in the same line as the capture
+                // announcement because it decides which capture paths exist at
+                // all: WGC is refused to a SYSTEM worker and granted to the
+                // same binary run by a user, and for a month nothing in the
+                // log said which one was running.
                 crate::logging::log(&format!(
-                    "desktop capture ready — {w}x{h} @ {fps}fps ({})",
-                    enc.codec().wire_name()
+                    "desktop capture ready — {w}x{h} @ {fps}fps ({}) — running as {}",
+                    enc.codec().wire_name(),
+                    crate::wgc::process_context()
                 ));
                 return Ok(Box::new(enc));
             }

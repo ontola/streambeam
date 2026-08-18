@@ -714,8 +714,16 @@ impl Pipeline {
                     // Recreation itself can fail outright while the display
                     // is off (no output to enumerate) — that's the same
                     // condition, not a new error; keep backing off instead
-                    // of propagating it as a hard stream error.
-                    Err(_) => {}
+                    // of propagating it as a hard stream error. Say why on the
+                    // first few, though: swallowing this error meant the log
+                    // could not distinguish "recreated fine, lost access
+                    // again" from "could not even rebuild the duplication",
+                    // which are different bugs with the same symptom.
+                    Err(e) => {
+                        if self.consecutive_access_lost <= 3 {
+                            crate::logging::log(&format!("duplication recreate failed: {e}"));
+                        }
+                    }
                 }
                 // Recreation has failed enough times to rule out a transient
                 // loss. WGC composites through a different path and keeps
