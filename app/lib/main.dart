@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 
 import 'beam_page.dart';
 import 'hdr_probe.dart';
+import 'hdr_status.dart';
 import 'decode_watchdog.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
@@ -986,6 +987,20 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   /// encodes AV1 for clients that can actually play it.
   bool? _desktopAv1;
 
+  /// Ask the EDR layer whether HDR is really reaching the screen. Null on any
+  /// error: a diagnostic must never be able to take a stream down.
+  Future<HdrStatus?> _probeHdrStatus() async {
+    try {
+      return HdrStatus.fromMap(
+        await _desktopVideoChannel.invokeMethod<Map<Object?, Object?>>(
+          'hdrStatus',
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<bool> _desktopCanAv1() async {
     final cached = _desktopAv1;
     if (cached != null) return cached;
@@ -1735,6 +1750,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
         probeDecodeHealth: _probeDecodeHealth,
+        probeHdrStatus: _desktopHdr ? _probeHdrStatus : null,
         hostPlatform: _watchedHostPlatform,
         onStop: () => unawaited(_stopDesktopPlayback()),
         streamMode: _streamMode,

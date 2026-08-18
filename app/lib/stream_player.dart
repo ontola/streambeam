@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'decode_watchdog.dart';
+import 'hdr_status.dart';
 import 'gamepad_forwarder.dart';
 import 'src/rust/api.dart';
 import 'vk_keys.dart';
@@ -196,6 +197,7 @@ class StreamPlayerScreen extends StatefulWidget {
     this.upscaleActive = false,
     this.onToggleUpscale,
     this.probeDecodeHealth,
+    this.probeHdrStatus,
     this.hostPlatform = '',
     super.key,
   });
@@ -249,6 +251,12 @@ class StreamPlayerScreen extends StatefulWidget {
   /// tell the difference — see [DecodeWatchdog]. Null on platforms that don't
   /// implement it yet (Windows, Android), which simply disables the check.
   final Future<DecodeHealth?> Function()? probeDecodeHealth;
+
+  /// Asks the native EDR layer whether HDR frames are reaching the screen, and
+  /// what headroom the display granted. Null when the stream isn't HDR — the
+  /// menu then says nothing about HDR at all, rather than something reassuring
+  /// and untrue.
+  final Future<HdrStatus?> Function()? probeHdrStatus;
 
   @override
   State<StreamPlayerScreen> createState() => _StreamPlayerScreenState();
@@ -320,6 +328,11 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   /// (or unmonitored).
   String? _decodeWarning;
   bool _decodeProbeInFlight = false;
+  bool _hdrProbeInFlight = false;
+
+  /// The EDR layer's own account of the HDR picture, null when not streaming
+  /// HDR or before the first report arrives.
+  String? _hdrLine;
   final _watchClock = Stopwatch();
   DateTime? _streamStartedAt;
   DateTime? _lastVideoFrameAt;
@@ -472,6 +485,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _videoTimedOut = false;
     _videoStalled = false;
     _decodeWarning = null;
+    _hdrLine = null;
     _decodeWatchdog.reset();
     _watchClock
       ..reset()
@@ -511,6 +525,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         setState(() => _videoStalled = true);
       }
       unawaited(_pollDecodeHealth());
+      unawaited(_pollHdrStatus());
     });
   }
 
@@ -536,6 +551,24 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     }
   }
 
+  /// Ask the EDR layer what it is really doing. Same contract as the decode
+  /// probe: silent on any error, and never able to affect playback.
+  Future<void> _pollHdrStatus() async {
+    final probe = widget.probeHdrStatus;
+    if (probe == null || _hdrProbeInFlight) return;
+    _hdrProbeInFlight = true;
+    try {
+      final status = await probe();
+      if (!mounted || status == null) return;
+      final line = hdrStatusLine(status);
+      if (line != _hdrLine) setState(() => _hdrLine = line);
+    } catch (_) {
+      // No HDR layer on this platform.
+    } finally {
+      _hdrProbeInFlight = false;
+    }
+  }
+
   void _endVideoWatch() {
     _videoPoll?.cancel();
     _videoPoll = null;
@@ -546,6 +579,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _videoTimedOut = false;
     _videoStalled = false;
     _decodeWarning = null;
+    _hdrLine = null;
     _decodeWatchdog.reset();
     _watchClock.stop();
   }
@@ -939,6 +973,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
           selectPlaybackDisplay(id: id);
           widget.onDisplayChanged();
         },
+        hdrStatus: _hdrLine,
         upscaleSupported: widget.upscaleSupported,
         upscaleActive: widget.upscaleActive,
         onToggleUpscale: widget.onToggleUpscale,
@@ -2036,6 +2071,7 @@ class _StreamMenu extends StatelessWidget {
     required this.displays,
     required this.selectedDisplayId,
     required this.onDisplayChanged,
+    this.hdrStatus,
     required this.upscaleSupported,
     required this.upscaleActive,
     required this.onToggleUpscale,
@@ -2077,6 +2113,8 @@ class _StreamMenu extends StatelessWidget {
   final List<PlaybackDisplay> displays;
   final int? selectedDisplayId;
   final ValueChanged<int> onDisplayChanged;
+  /// One line from the EDR layer, or null when this stream isn't HDR.
+  final String? hdrStatus;
   final bool upscaleSupported;
   final bool upscaleActive;
   final VoidCallback? onToggleUpscale;
@@ -2429,6 +2467,31 @@ class _StreamMenu extends StatelessWidget {
                         onTap: onSleepHost,
                       ),
                       Divider(height: metrics.sectionGap),
+                      // HDR is the one feature nobody can judge by
+                      // looking: a PQ stream granted no EDR headroom is merely
+                      // dim, which is indistinguishable from a dim scene. So
+                      // the display layer reports what it measured.
+                      if (hdrStatus != null) ...[
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            0,
+                            metrics.sectionGap,
+                            0,
+                            metrics.labelGap,
+                          ),
+                          child: Text('HDR', style: theme.textTheme.titleSmall),
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.hdr_on),
+                          title: Text(
+                            hdrStatus!,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          dense: compact,
+                          contentPadding: tilePadding,
+                        ),
+                        Divider(height: metrics.sectionGap),
+                      ],
                       if (upscaleSupported) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(

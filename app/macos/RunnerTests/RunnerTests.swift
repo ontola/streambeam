@@ -1,6 +1,7 @@
 import AVFoundation
 import Cocoa
 import FlutterMacOS
+import Metal
 import XCTest
 
 @testable import streambeam
@@ -247,6 +248,253 @@ class StreamBeamVideoDecodeTests: XCTestCase {
     XCTAssertGreaterThan(
       Int(maxValue) - Int(minValue), 8,
       "decoded frame is a flat fill (min \(minValue), max \(maxValue)) — a blank picture")
+  }
+}
+
+/// The EDR display path (docs/HDR.md stage 4), checked without a screen.
+///
+/// Every other link in the HDR chain has an objective check: the host's output
+/// is read back with `ffprobe`, the decoder by `testDecodesHDR10ToTenBitPixels`.
+/// The step between them — turning the decoder's 10-bit YCbCr into the PQ code
+/// values handed to the compositor — had none, because it only ever ran into a
+/// `CAMetalLayer` drawable, so the sole way to judge it was to look at it. On a
+/// feature whose entire failure mode is "the picture looks wrong", eyes are the
+/// worst available instrument, and this project has already paid a day for
+/// that. `encodeConversion(of:into:)` exists so the same shader can render into
+/// an ordinary texture and have its numbers read.
+final class StreamBeamHdrRenderTests: XCTestCase {
+  private func fixture(_ name: String) throws -> Data {
+    let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    return try Data(contentsOf: dir.appendingPathComponent("Fixtures/\(name)"))
+  }
+
+  private func makeView() throws -> StreamBeamHdrView {
+    let view = StreamBeamHdrView(frame: NSRect(x: 0, y: 0, width: 16, height: 16))
+    if let failure = view.setupFailure {
+      throw XCTSkip("HDR view unavailable on this machine: \(failure)")
+    }
+    return view
+  }
+
+  /// A uniform frame in the decoder's own output format ('x420'). Uniform on
+  /// purpose: the shader samples with a linear filter, so a patterned frame
+  /// would let neighbouring chroma bleed into whichever pixel the assertion
+  /// reads. With one colour everywhere, every output pixel must equal the
+  /// reference exactly, and interpolation cannot hide a mistake.
+  private func makeTenBitFrame(y: UInt16, cb: UInt16, cr: UInt16, size: Int = 64) throws
+    -> CVPixelBuffer
+  {
+    var buffer: CVPixelBuffer?
+    let status = CVPixelBufferCreate(
+      kCFAllocatorDefault, size, size, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+      [kCVPixelBufferMetalCompatibilityKey: true] as CFDictionary, &buffer)
+    let pixels = try XCTUnwrap(buffer, "CVPixelBufferCreate failed (\(status))")
+    CVPixelBufferLockBaseAddress(pixels, [])
+    defer { CVPixelBufferUnlockBaseAddress(pixels, []) }
+
+    // 'x420' keeps each 10-bit sample in the *most* significant bits of a
+    // 16-bit word. That is the whole reason reading the planes as `r16Unorm` /
+    // `rg16Unorm` lands on code/1023 in the shader instead of code/65535 — a
+    // 64x error, i.e. a black picture. `testDecodedFrameIsMSBAligned` holds
+    // this assumption against a frame VideoToolbox actually produced.
+    let lumaBase = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(pixels, 0))
+    let lumaStride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+    for row in 0..<size {
+      let line = (lumaBase + row * lumaStride).assumingMemoryBound(to: UInt16.self)
+      for col in 0..<size { line[col] = y << 6 }
+    }
+    let chromaBase = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(pixels, 1))
+    let chromaStride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1)
+    for row in 0..<(size / 2) {
+      let line = (chromaBase + row * chromaStride).assumingMemoryBound(to: UInt16.self)
+      for col in 0..<(size / 2) {
+        line[col * 2] = cb << 6
+        line[col * 2 + 1] = cr << 6
+      }
+    }
+    return pixels
+  }
+
+  /// Run one frame through the real shader and read the RGB code values back.
+  private func render(_ buffer: CVPixelBuffer, with view: StreamBeamHdrView, size: Int = 8) throws
+    -> [(r: Double, g: Double, b: Double)]
+  {
+    let device = try XCTUnwrap(view.renderDevice)
+    let desc = MTLTextureDescriptor.texture2DDescriptor(
+      pixelFormat: .rgb10a2Unorm, width: size, height: size, mipmapped: false)
+    desc.usage = [.renderTarget, .shaderRead]
+    desc.storageMode = .shared
+    let target = try XCTUnwrap(device.makeTexture(descriptor: desc))
+    let cmd = try XCTUnwrap(
+      view.encodeConversion(of: buffer, into: target),
+      "the HDR view refused to encode a conversion — \(view.lastDrawFailure ?? "no reason recorded")")
+    cmd.commit()
+    cmd.waitUntilCompleted()
+
+    var words = [UInt32](repeating: 0, count: size * size)
+    words.withUnsafeMutableBytes { raw in
+      target.getBytes(
+        raw.baseAddress!, bytesPerRow: size * 4,
+        from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+    }
+    // rgb10a2Unorm packs R in the low 10 bits, then G, then B, then 2 bits of
+    // alpha.
+    return words.map {
+      (
+        r: Double($0 & 0x3FF) / 1023.0,
+        g: Double(($0 >> 10) & 0x3FF) / 1023.0,
+        b: Double(($0 >> 20) & 0x3FF) / 1023.0
+      )
+    }
+  }
+
+  /// What the shader *should* produce, derived from the BT.2020 luma
+  /// coefficients rather than copied from the shader's rounded constants — a
+  /// reference that restates the code proves only that the code is consistent
+  /// with itself.
+  private func reference(y: UInt16, cb: UInt16, cr: UInt16) -> (r: Double, g: Double, b: Double) {
+    let kr = 0.2627, kb = 0.0593
+    let kg = 1 - kr - kb
+    // Limited ("video") range: luma spans 64...940, so 876 code values map to
+    // 0...1; chroma spans 64...960 centred on 512, so its 896 code values map
+    // to -0.5...0.5 — the range the matrix below is written for. Halving that
+    // denominator (448) desaturates by exactly 2x, which grey test patches
+    // cannot catch: neutral chroma sits at the centre, where the scale factor
+    // cancels. Only a coloured patch sees it.
+    let yv = (Double(y) - 64) / 876
+    let cbv = (Double(cb) - 512) / 896
+    let crv = (Double(cr) - 512) / 896
+    func clamp(_ v: Double) -> Double { min(max(v, 0), 1) }
+    return (
+      r: clamp(yv + 2 * (1 - kr) * crv),
+      g: clamp(yv - (2 * (1 - kb) * kb / kg) * cbv - (2 * (1 - kr) * kr / kg) * crv),
+      b: clamp(yv + 2 * (1 - kb) * cbv)
+    )
+  }
+
+  /// The conversion itself: known 10-bit YCbCr in, known PQ code values out.
+  ///
+  /// This is what catches the failures that look identical from the outside —
+  /// planes read at the wrong scale, limited range not expanded (grey blacks
+  /// and clipped whites), the matrix transposed, or the output channels packed
+  /// in the wrong order. All of them decode frames and present them happily.
+  func testShaderConvertsKnownColours() throws {
+    let view = try makeView()
+    // Black, PQ peak white, mid grey, and one colour with real chroma in it —
+    // chosen to stay inside [0,1] so a clamp can't mask a matrix error.
+    let cases: [(name: String, y: UInt16, cb: UInt16, cr: UInt16)] = [
+      ("video black", 64, 512, 512),
+      ("PQ peak white", 940, 512, 512),
+      ("mid grey", 502, 512, 512),
+      ("warm mid-tone", 400, 450, 600),
+    ]
+    for c in cases {
+      let pixels = try render(try makeTenBitFrame(y: c.y, cb: c.cb, cr: c.cr), with: view)
+      let want = reference(y: c.y, cb: c.cb, cr: c.cr)
+      // 10-bit output quantises at 1/1023, and reading MSB-aligned samples as
+      // 16-bit unorm scales by 65535/65472 — a 0.1% stretch that the matrix
+      // can amplify to ~0.3% on the blue axis. Anything past this is a bug,
+      // not arithmetic.
+      let tolerance = 0.006
+      for (i, got) in pixels.enumerated() where i % 17 == 0 {
+        XCTAssertEqual(
+          got.r, want.r, accuracy: tolerance, "\(c.name): red is wrong (pixel \(i))")
+        XCTAssertEqual(
+          got.g, want.g, accuracy: tolerance, "\(c.name): green is wrong (pixel \(i))")
+        XCTAssertEqual(
+          got.b, want.b, accuracy: tolerance, "\(c.name): blue is wrong (pixel \(i))")
+      }
+    }
+  }
+
+  /// Limited range must actually be expanded. Called out separately because
+  /// skipping it is the single most likely way to reproduce the washed-out
+  /// picture HDR passthrough exists to fix: blacks lift off zero and whites
+  /// stop short, which is precisely how the old SDR tone-map failed.
+  func testLimitedRangeIsExpanded() throws {
+    let view = try makeView()
+    let black = try render(try makeTenBitFrame(y: 64, cb: 512, cr: 512), with: view)[0]
+    let white = try render(try makeTenBitFrame(y: 940, cb: 512, cr: 512), with: view)[0]
+    XCTAssertLessThan(
+      black.r, 0.004, "video black (Y=64) must reach 0, not a lifted \(black.r) — washed out")
+    XCTAssertGreaterThan(
+      white.r, 0.996, "video white (Y=940) must reach 1, not a dull \(white.r)")
+  }
+
+  private func decodeHdrFixture() throws -> (video: StreamBeamVideo, pixels: CVPixelBuffer) {
+    let video = StreamBeamVideo(registry: StubTextureRegistry())
+    XCTAssertTrue(
+      video.configure(
+        codecConfig: try fixture("av1_2160p_hdr10.av1c"), codec: "av01",
+        width: 3840, height: 2160, hdr10: true),
+      video.lastSetupFailure ?? "HDR10 decoder setup failed")
+    video.decode(frame: try fixture("av1_2160p_hdr10.keyframe"))
+    var buffer: CVPixelBuffer?
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, buffer == nil {
+      buffer = video.copyPixelBuffer()?.takeRetainedValue()
+      if buffer == nil { usleep(20_000) }
+    }
+    return (video, try XCTUnwrap(buffer, "HDR10 frame never decoded"))
+  }
+
+  /// Holds the shader's central assumption against reality: VideoToolbox really
+  /// does hand back 10-bit samples left-aligned in 16-bit words. If it ever
+  /// stopped, `makeTenBitFrame` would keep testing a fiction while the live
+  /// picture went 64x too dark.
+  func testDecodedFrameIsMSBAligned() throws {
+    guard StreamBeamVideo.canDecodeAV1() else {
+      throw XCTSkip("no hardware AV1 decode on this machine")
+    }
+    let (video, pixels) = try decodeHdrFixture()
+    defer { video.dispose() }
+    CVPixelBufferLockBaseAddress(pixels, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+
+    let base = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(pixels, 0))
+    let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+    let width = CVPixelBufferGetWidthOfPlane(pixels, 0)
+    var lowBitsSet = 0
+    var outOfRange = 0
+    for row in Swift.stride(from: 0, to: CVPixelBufferGetHeightOfPlane(pixels, 0), by: 16) {
+      let line = (base + row * stride).assumingMemoryBound(to: UInt16.self)
+      for col in Swift.stride(from: 0, to: width, by: 16) {
+        if line[col] & 0x3F != 0 { lowBitsSet += 1 }
+        let code = line[col] >> 6
+        if code < 64 || code > 940 { outOfRange += 1 }
+      }
+    }
+    XCTAssertEqual(
+      lowBitsSet, 0,
+      "10-bit luma is no longer left-aligned in its 16-bit word — the shader's scaling is now wrong")
+    XCTAssertEqual(
+      outOfRange, 0,
+      "luma escaped the 64...940 limited range, so this frame isn't video-range after all")
+  }
+
+  /// End to end for the client half: a real HDR10 keyframe from the host,
+  /// decoded and pushed through the display shader, has to come out as a
+  /// picture — not black, and not a flat fill.
+  func testDecodedHDRFrameRendersAPicture() throws {
+    guard StreamBeamVideo.canDecodeAV1() else {
+      throw XCTSkip("no hardware AV1 decode on this machine")
+    }
+    let view = try makeView()
+    let (video, pixels) = try decodeHdrFixture()
+    defer { video.dispose() }
+
+    let rendered = try render(pixels, with: view, size: 64)
+    let luma = rendered.map { 0.2627 * $0.r + 0.6780 * $0.g + 0.0593 * $0.b }
+    let brightest = luma.max() ?? 0
+    let darkest = luma.min() ?? 0
+    XCTAssertGreaterThan(
+      brightest, 0.05,
+      "the whole frame rendered black — decoded pixels reached the shader and nothing came out")
+    XCTAssertGreaterThan(
+      brightest - darkest, 0.02,
+      "the frame rendered as a flat fill (\(darkest)...\(brightest)) — a picture would vary")
+    XCTAssertEqual(
+      view.drawFailures, 0, "the view reported: \(view.lastDrawFailure ?? "")")
   }
 }
 

@@ -43,6 +43,10 @@ class StreamBeamHdrView: NSView {
   private var targetSize = CGSize.zero
   private(set) var framesPresented = 0
   private(set) var setupFailure: String?
+  /// The GPU this view renders on, so an offscreen check can allocate its
+  /// target on the same device — a texture from another one would crash on
+  /// use rather than fail a comparison.
+  var renderDevice: MTLDevice? { device }
 
   override init(frame frameRect: NSRect) {
     device = MTLCreateSystemDefaultDevice()
@@ -171,8 +175,11 @@ class StreamBeamHdrView: NSView {
     // and the screen is black" with no explanation is the single most expensive
     // failure shape in this project.
     guard let buffer else { return }
-    guard let pipeline, let queue, let textureCache else {
-      noteDrawFailure("view not initialised: \(setupFailure ?? "unknown")")
+    // Checked before asking for a drawable: a view that failed to set up has
+    // no working layer either, and "nextDrawable returned nil" would bury the
+    // real reason under a symptom.
+    if let setupFailure {
+      noteDrawFailure("view not initialised: \(setupFailure)")
       return
     }
     guard size.width > 0, size.height > 0 else {
@@ -183,36 +190,14 @@ class StreamBeamHdrView: NSView {
       noteDrawFailure("nextDrawable returned nil")
       return
     }
-
-    let width = CVPixelBufferGetWidth(buffer)
-    let height = CVPixelBufferGetHeight(buffer)
-    guard
-      let luma = makeTexture(buffer, cache: textureCache, plane: 0, format: .r16Unorm,
-        width: width, height: height),
-      let chroma = makeTexture(buffer, cache: textureCache, plane: 1, format: .rg16Unorm,
-        width: width / 2, height: height / 2)
-    else { return }
-
-    let pass = MTLRenderPassDescriptor()
-    pass.colorAttachments[0].texture = drawable.texture
-    pass.colorAttachments[0].loadAction = .clear
-    pass.colorAttachments[0].storeAction = .store
-    pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-    guard let cmd = queue.makeCommandBuffer(),
-      let encoder = cmd.makeRenderCommandEncoder(descriptor: pass)
-    else { return }
-    encoder.setRenderPipelineState(pipeline)
-    encoder.setFragmentTexture(CVMetalTextureGetTexture(luma), index: 0)
-    encoder.setFragmentTexture(CVMetalTextureGetTexture(chroma), index: 1)
-    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-    encoder.endEncoding()
+    guard let cmd = encodeConversion(of: buffer, into: drawable.texture) else { return }
     cmd.present(drawable)
     cmd.commit()
-    // The CVMetalTexture wrappers must outlive the GPU work.
-    withExtendedLifetime((luma, chroma)) {}
     framesPresented += 1
     if framesPresented == 1 {
-      let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
+      let width = CVPixelBufferGetWidth(buffer)
+      let height = CVPixelBufferGetHeight(buffer)
+      let headroom = liveHeadroom()
       NSLog(
         "%@",
         "StreamBeam: first HDR frame presented — \(width)x\(height), "
@@ -233,10 +218,71 @@ class StreamBeamHdrView: NSView {
     }
   }
 
-  private var drawFailures = 0
+  /// Encode the YCbCr → R'G'B' conversion for one frame into `target`, handing
+  /// back the command buffer so the caller decides what happens to it: present
+  /// it to a drawable on screen, or wait on it and read the pixels back.
+  ///
+  /// Split out of `draw()` so the conversion can be checked offscreen. While it
+  /// only ever rendered into a `CAMetalLayer` drawable no test could reach the
+  /// shader at all — and a wrong matrix, mis-scaled planes or the wrong
+  /// limited-range offsets each look like exactly the washed-out picture this
+  /// feature exists to remove.
+  func encodeConversion(of buffer: CVPixelBuffer, into target: MTLTexture) -> MTLCommandBuffer? {
+    guard let pipeline, let queue, let textureCache else {
+      noteDrawFailure("view not initialised: \(setupFailure ?? "unknown")")
+      return nil
+    }
+    let width = CVPixelBufferGetWidth(buffer)
+    let height = CVPixelBufferGetHeight(buffer)
+    guard
+      let luma = makeTexture(buffer, cache: textureCache, plane: 0, format: .r16Unorm,
+        width: width, height: height),
+      let chroma = makeTexture(buffer, cache: textureCache, plane: 1, format: .rg16Unorm,
+        width: width / 2, height: height / 2)
+    else {
+      noteDrawFailure("could not wrap the frame's planes as Metal textures")
+      return nil
+    }
+
+    let pass = MTLRenderPassDescriptor()
+    pass.colorAttachments[0].texture = target
+    pass.colorAttachments[0].loadAction = .clear
+    pass.colorAttachments[0].storeAction = .store
+    pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+    guard let cmd = queue.makeCommandBuffer(),
+      let encoder = cmd.makeRenderCommandEncoder(descriptor: pass)
+    else {
+      noteDrawFailure("could not encode a render pass")
+      return nil
+    }
+    encoder.setRenderPipelineState(pipeline)
+    encoder.setFragmentTexture(CVMetalTextureGetTexture(luma), index: 0)
+    encoder.setFragmentTexture(CVMetalTextureGetTexture(chroma), index: 1)
+    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    encoder.endEncoding()
+    // The CVMetalTexture wrappers must outlive the *GPU* work, not just the
+    // encoding of it — holding them to the end of this function would let them
+    // go while the frame is still in flight.
+    cmd.addCompletedHandler { _ in withExtendedLifetime((luma, chroma)) {} }
+    return cmd
+  }
+
+  /// EDR headroom the display is granting right now, as a multiple of SDR
+  /// white. 1.0 means none: PQ encodes absolute luminance, so the picture goes
+  /// dark and nothing upstream is at fault. macOS only raises this once EDR
+  /// content is actually on screen, so it reads low until frames flow.
+  func liveHeadroom() -> Double {
+    Double(
+      window?.screen?.maximumExtendedDynamicRangeColorComponentValue
+        ?? NSScreen.main?.maximumExtendedDynamicRangeColorComponentValue ?? 1.0)
+  }
+
+  private(set) var drawFailures = 0
+  private(set) var lastDrawFailure: String?
 
   private func noteDrawFailure(_ reason: String) {
     drawFailures += 1
+    lastDrawFailure = reason
     if drawFailures <= 3 || drawFailures % 240 == 0 {
       NSLog("%@", "StreamBeam HDR view: not drawing — \(reason) (#\(drawFailures))")
     }

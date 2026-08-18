@@ -382,6 +382,11 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
         result([
           "present": view != nil,
           "frames": view?.framesPresented ?? 0,
+          // The number that separates real HDR from a PQ stream being crushed
+          // into SDR. Nothing upstream can observe it.
+          "headroom": view?.liveHeadroom() ?? 1.0,
+          "drawFailures": view?.drawFailures ?? 0,
+          "lastDrawFailure": view?.lastDrawFailure ?? "",
           "setupFailure": view?.setupFailure ?? "",
         ])
       case "health":

@@ -84,6 +84,15 @@ platform view owning a `CAMetalLayer` with
 outside Flutter's compositor. Prototype this *before* committing to the rest —
 if HDR can't reach the screen, stages 1–3 buy nothing.
 
+Built (`StreamBeamHdrView`) and now verified by numbers rather than by eye:
+`encodeConversion(of:into:)` renders the same shader into an ordinary texture,
+so `StreamBeamHdrRenderTests` can read the PQ code values back. What that
+proves — the conversion, the limited-range expansion, the plane scaling, that
+a real decoded keyframe comes out as a picture — and what it can't: whether
+the *display* grants EDR headroom, which is a property of the screen and the
+power mode, not of this code. For that, the sidebar reports live headroom
+during a stream (see "Verifying it works" below).
+
 ## Risks
 
 - **Flutter + EDR is unproven here.** Stage 4 may force a platform view, which
@@ -107,3 +116,25 @@ if HDR can't reach the screen, stages 1–3 buy nothing.
   passthrough pipeline: the shader falls back to a plain blit, so SDR content
   lands in a PQ-signalled stream. Rebuilding the pipeline on that transition is
   the real fix.
+
+## Verifying it works
+
+Three separate questions, and conflating them is what made HDR hard to judge:
+
+1. **Does the host send HDR10?** `devclient --av1 --hdr --dump` then `ffprobe`:
+   expect `pix_fmt=yuv420p10le`, `color_transfer=smpte2084`,
+   `color_primaries=bt2020`. Requires the Windows desktop to be in HDR mode —
+   the host refuses to switch otherwise, by design.
+2. **Does the client decode and convert it correctly?** `xcodebuild test
+   -only-testing:RunnerTests` — `StreamBeamVideoDecodeTests` covers the decode,
+   `StreamBeamHdrRenderTests` the shader. No host, no network, no eyes.
+3. **Does the screen actually show it?** This is the only part that needs a
+   live stream, because it depends on the display. Launch with
+   `flutter run -d macos --dart-define=STREAMBEAM_HDR=true` (passthrough is
+   opt-in), connect, and open the sidebar: the HDR row reports
+   frames drawn and the headroom granted. Above ~1.5x means real EDR is in
+   play. **1.0 means none**, and the usual cause is Low Power Mode, which
+   disables EDR on Apple displays — measured on the same MacBook Pro the same
+   day: 3.68x on mains, 1.0 in Low Power Mode. A game is not required and is
+   the worst thing to test with; the Windows desktop in HDR mode showing any
+   HDR content is enough.
