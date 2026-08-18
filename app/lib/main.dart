@@ -297,6 +297,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   SavedHostInfo? _savedHostInfo;
   List<DiscoveredHost> _lanHosts = [];
   DiscoveredHost? _pendingLanHost;
+  /// Alternate endpoints for `_pendingLanHost`'s identity, handed to the
+  /// playback path so a non-answering endpoint fails over instead of erroring.
+  List<DiscoveredHost> _pendingLanFailover = const [];
   String? _pendingLanAddr;
   bool _discoveryBusy = false;
   String? _discoveryError;
@@ -335,6 +338,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   // `_reconnectForNewCaps` uses `_beginSession`, which desktop doesn't).
   DiscoveredHost? _lastDesktopHost;
   String? _lastDesktopAddr;
+  /// Endpoints for the same identity still worth trying if the current one
+  /// doesn't answer — one machine can run several host processes (see
+  /// `_HostListEntry.alternates`), and only some of them may be reachable.
+  List<DiscoveredHost> _desktopFailoverQueue = const [];
   String? _lastDesktopPayload;
   // MetalFX upscaling (macOS): on by default; the native side reports back
   // whether it's actually available on this machine.
@@ -464,10 +471,24 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     return true;
   }
 
+  /// Identity key for grouping: the 32-byte host pubkey when present,
+  /// otherwise the name. Two advertisements sharing a pubkey are the same
+  /// machine — they read one `host_identity.pkcs8` from one data directory.
+  static String _identityKey(List<int> pubkey, String name) =>
+      pubkey.length == 32
+      ? pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+      : 'name:$name';
+
   List<_HostListEntry> _hostEntries() {
     final entries = <_HostListEntry>[];
-    final matchedLan = <int>{};
     final localHostPubkey = hostPublicKey();
+
+    // One group per identity, preserving discovery order within a group so the
+    // first-seen endpoint stays the primary.
+    final groups = <String, List<DiscoveredHost>>{};
+    for (final h in _lanHosts) {
+      groups.putIfAbsent(_identityKey(h.hostPubkey, h.name), () => []).add(h);
+    }
 
     final saved = _savedHostInfo;
     final savedIsLocal =
@@ -475,48 +496,51 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         saved.hostPubkey.length == 32 &&
         localHostPubkey.length == 32 &&
         _pubkeysEqual(saved.hostPubkey, localHostPubkey);
+
+    String? savedKey;
     if (saved != null && !savedIsLocal) {
-      DiscoveredHost? lanMatch;
-      int? lanIndex;
-      for (var i = 0; i < _lanHosts.length; i++) {
-        final h = _lanHosts[i];
-        if (h.name == saved.name ||
-            (saved.hostPubkey.length == 32 &&
-                h.hostPubkey.length == 32 &&
-                _pubkeysEqual(saved.hostPubkey, h.hostPubkey))) {
-          lanMatch = h;
-          lanIndex = i;
-          break;
-        }
+      // Match the saved record to a live group by identity first, name second
+      // — a renamed host keeps its key, and a rebuilt host keeps its name.
+      savedKey = _identityKey(saved.hostPubkey, saved.name);
+      if (!groups.containsKey(savedKey)) {
+        final byName = groups.entries
+            .where((e) => e.value.any((h) => h.name == saved.name))
+            .map((e) => e.key)
+            .firstOrNull;
+        savedKey = byName;
       }
-      if (lanIndex != null) matchedLan.add(lanIndex);
+      final group = savedKey == null ? null : groups[savedKey];
+      final primary = group?.first;
       entries.add(
         _HostListEntry(
           name: saved.name,
-          addrs: lanMatch?.addrs ?? saved.addrs,
-          port: lanMatch?.port ?? saved.port,
+          addrs: primary?.addrs ?? saved.addrs,
+          port: primary?.port ?? saved.port,
           hostPubkey: saved.hostPubkey.isNotEmpty
               ? saved.hostPubkey
-              : (lanMatch?.hostPubkey ?? const []),
-          online: lanMatch != null,
+              : (primary?.hostPubkey ?? const []),
+          online: primary != null,
           isSaved: true,
-          discovered: lanMatch,
+          discovered: primary,
+          alternates: group == null ? const [] : group.skip(1).toList(),
         ),
       );
     }
 
-    for (var i = 0; i < _lanHosts.length; i++) {
-      if (matchedLan.contains(i)) continue;
-      final h = _lanHosts[i];
+    for (final entry in groups.entries) {
+      if (entry.key == savedKey) continue;
+      final group = entry.value;
+      final primary = group.first;
       entries.add(
         _HostListEntry(
-          name: h.name,
-          addrs: h.addrs,
-          port: h.port,
-          hostPubkey: h.hostPubkey,
+          name: primary.name,
+          addrs: primary.addrs,
+          port: primary.port,
+          hostPubkey: primary.hostPubkey,
           online: true,
           isSaved: false,
-          discovered: h,
+          discovered: primary,
+          alternates: group.skip(1).toList(),
         ),
       );
     }
@@ -532,7 +556,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
     final discovered = entry.discovered;
     if (discovered != null) {
-      await _connectLanHost(discovered);
+      await _connectLanHost(discovered, failover: entry.alternates);
       return;
     }
     if (entry.isSaved) {
@@ -969,13 +993,27 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     );
   }
 
+  /// Whether an error means "this endpoint never answered", as opposed to a
+  /// session that started and then failed. Only the former is worth retrying
+  /// elsewhere — retrying a decode or capture failure on another port would
+  /// just fail the same way, slower.
+  static bool _looksUnreachable(String error) {
+    final e = error.toLowerCase();
+    return e.contains('no response from the host') ||
+        e.contains('timed out') ||
+        e.contains('connection refused') ||
+        e.contains('unreachable');
+  }
+
   /// Watch a discovered/saved host by its pinned key (no QR needed; the host
   /// prompts to approve on first contact).
   Future<void> _startDesktopPlaybackKnown(
     DiscoveredHost host,
-    String addr,
-  ) async {
+    String addr, {
+    List<DiscoveredHost> failover = const [],
+  }) async {
     await _stopDesktopPlayback();
+    _desktopFailoverQueue = failover;
     _lastDesktopHost = host;
     _lastDesktopAddr = addr;
     _lastDesktopPayload = null;
@@ -1071,6 +1109,24 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       },
       onError: (e) {
         if (attempt != _desktopPlaybackAttempt) return;
+        // One machine can advertise several host processes and only some of
+        // them answer — the packaged service may be firewalled while a
+        // hand-started build works, or vice versa. Try this identity's other
+        // endpoints before telling the user their PC is unreachable, since
+        // from their side it plainly isn't.
+        final next = _desktopFailoverQueue.firstOrNull;
+        if (next != null && _looksUnreachable(e.toString())) {
+          final rest = _desktopFailoverQueue.skip(1).toList();
+          final addr = _bestLanAddr(next);
+          if (addr != null) {
+            debugPrint(
+              'StreamBeam: ${_lastDesktopAddr ?? "endpoint"} did not answer, '
+              'trying $addr',
+            );
+            unawaited(_startDesktopPlaybackKnown(next, addr, failover: rest));
+            return;
+          }
+        }
         _reportError(_humanizeError(e.toString()));
         unawaited(_stopDesktopPlayback());
       },
@@ -1176,10 +1232,16 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       // Desktop watch: connect to the tapped host by its pinned key.
       final lanHost = _pendingLanHost;
       final lanAddr = _pendingLanAddr;
+      final lanFailover = _pendingLanFailover;
       _pendingLanHost = null;
       _pendingLanAddr = null;
+      _pendingLanFailover = const [];
       if (lanHost != null && lanAddr != null) {
-        await _startDesktopPlaybackKnown(lanHost, lanAddr);
+        await _startDesktopPlaybackKnown(
+          lanHost,
+          lanAddr,
+          failover: lanFailover,
+        );
       } else {
         _setStatus('Paste or scan the host\'s link to watch on this device.');
       }
@@ -1337,6 +1399,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     final lanAddr = _pendingLanAddr;
     _pendingLanHost = null;
     _pendingLanAddr = null;
+    // The Android surface path has no endpoint failover (it connects through
+    // `playDiscoveredHost`, not the desktop stream); just don't leave the
+    // queue set for whatever session comes next.
+    _pendingLanFailover = const [];
     try {
       if (!_sessionAlive(sessionId)) return;
       setState(() {
@@ -1479,7 +1545,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _connectLanHost(DiscoveredHost host) async {
+  Future<void> _connectLanHost(
+    DiscoveredHost host, {
+    List<DiscoveredHost> failover = const [],
+  }) async {
     if (_busy) return;
     if (host.hostPubkey.length != 32) {
       _reportError(
@@ -1494,6 +1563,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     }
     _pendingLanHost = host;
     _pendingLanAddr = addr;
+    _pendingLanFailover = failover;
     await _beginSession(reconnect: false);
   }
 
@@ -1908,6 +1978,7 @@ class _HostListEntry {
     required this.online,
     required this.isSaved,
     this.discovered,
+    this.alternates = const [],
   });
 
   final String name;
@@ -1917,6 +1988,18 @@ class _HostListEntry {
   final bool online;
   final bool isSaved;
   final DiscoveredHost? discovered;
+
+  /// Other endpoints advertising this *same identity* — one machine running
+  /// more than one host process (the packaged service plus a hand-started dev
+  /// build, say) advertises once per process. They share a `host_identity`
+  /// keypair, so they are one device with several ways in, not several
+  /// devices; showing a tile each was confusing and made it easy to pick the
+  /// one that happens not to work.
+  final List<DiscoveredHost> alternates;
+
+  /// Every endpoint for this identity, the primary first. Used to fail over
+  /// when the first one doesn't answer.
+  List<DiscoveredHost> get allEndpoints => [?discovered, ...alternates];
 
   /// Host platform from mDNS (`macos`/`windows`/`android`/`linux`/`ios`);
   /// empty for old hosts and for saved hosts that aren't currently online.
