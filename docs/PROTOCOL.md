@@ -1,7 +1,7 @@
 # StreamBeam protocol v3
 
 Everything runs over a single QUIC connection (client-initiated), mutual TLS with
-pinned Ed25519 keys. `PROTO_VERSION = 5`.
+pinned Ed25519 keys. `PROTO_VERSION = 6`.
 
 ## Identity & transport security
 
@@ -153,6 +153,14 @@ codec is AV1; otherwise it tone-maps to SDR as before. When passthrough is
 active the colour description travels in the AV1 sequence header (primaries 9,
 transfer 16, matrix 9) rather than out of band, so a decoder that ignores this
 flag still sees what it was given. See docs/HDR.md.
+
+v6 (2026-08-18) adds `InputEvent::SecureAttention` — Ctrl+Alt+Del. It is a
+distinct event rather than three `Key` events because the secure attention
+sequence cannot be synthesised with `SendInput` at all: the kernel recognises
+it specifically so that injected input can't forge the login screen. Only
+`SendSAS` (`sas.dll`) raises it, and only from a caller running as SYSTEM — in
+practice the secure-desktop service worker. A host without that service logs
+why it did nothing rather than appearing to succeed.
 
 Framing is `postcard`, which is not self-describing, so a new field is a
 breaking change: `Hello` carries `proto_version` and the host rejects anything

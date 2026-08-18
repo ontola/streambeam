@@ -117,6 +117,15 @@ void sendMouseButton({required int button, required bool down}) => StreambeamFfi
 void sendKey({required int vk, required bool down}) =>
     StreambeamFfi.instance.api.crateApiSendKey(vk: vk, down: down);
 
+/// Ask the host to raise Ctrl+Alt+Del (Windows secure attention sequence).
+///
+/// Not sendable as three key events: the kernel recognises SAS specifically so
+/// that synthesised input cannot forge it. Only the host's secure-desktop
+/// service worker can raise it, so this quietly does nothing on a host without
+/// that service — the host logs why.
+void sendSecureAttention() =>
+    StreambeamFfi.instance.api.crateApiSendSecureAttention();
+
 void sendGamepadPlug({required int pad, required bool connected}) =>
     StreambeamFfi.instance.api.crateApiSendGamepadPlug(
       pad: pad,

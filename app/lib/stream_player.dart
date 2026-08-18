@@ -196,6 +196,7 @@ class StreamPlayerScreen extends StatefulWidget {
     this.upscaleActive = false,
     this.onToggleUpscale,
     this.probeDecodeHealth,
+    this.hostPlatform = '',
     super.key,
   });
 
@@ -235,6 +236,10 @@ class StreamPlayerScreen extends StatefulWidget {
   final bool upscaleSupported;
   final bool upscaleActive;
   final VoidCallback? onToggleUpscale;
+
+  /// Host OS from mDNS (`windows`/`macos`/`android`/…), empty for hosts that
+  /// predate the `os` TXT key. Gates OS-specific actions like Ctrl+Alt+Del.
+  final String hostPlatform;
 
   /// Reads the platform decoder's counters, when the platform provides them.
   ///
@@ -945,6 +950,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         onStop: _handleStop,
         onKeyboard: _openKeyboard,
         onSleepHost: _handleSleepHost,
+        hostIsWindows: widget.hostPlatform == 'windows',
       ),
     );
   }
@@ -2038,6 +2044,7 @@ class _StreamMenu extends StatelessWidget {
     required this.onStop,
     required this.onKeyboard,
     required this.onSleepHost,
+    required this.hostIsWindows,
   });
 
   final _LiveDiagnostics diagnostics;
@@ -2078,6 +2085,10 @@ class _StreamMenu extends StatelessWidget {
 
   /// Ask the host machine to go to sleep (ends the session by design).
   final VoidCallback onSleepHost;
+
+  /// Ctrl+Alt+Del is a Windows concept; hiding it elsewhere keeps the menu
+  /// honest rather than offering an action that can't do anything.
+  final bool hostIsWindows;
   final VoidCallback onStop;
   final VoidCallback onKeyboard;
 
@@ -2397,6 +2408,23 @@ class _StreamMenu extends StatelessWidget {
                         contentPadding: tilePadding,
                       ),
                       const Divider(height: 1),
+                      // Windows only, and only meaningful when the host runs
+                      // the secure-desktop service — Ctrl+Alt+Del cannot be
+                      // synthesised from key events, so this is a distinct
+                      // request the host raises via SendSAS.
+                      if (hostIsWindows)
+                        ListTile(
+                          leading: const Icon(Icons.password_outlined),
+                          title: const Text('Send Ctrl+Alt+Del'),
+                          subtitle: Text(
+                            'For the lock or login screen',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          dense: compact,
+                          contentPadding: tilePadding,
+                          onTap: () => sendSecureAttention(),
+                        ),
+                      if (hostIsWindows) const Divider(height: 1),
                       ListTile(
                         leading: const Icon(Icons.bedtime_outlined),
                         title: const Text('Put PC to sleep'),

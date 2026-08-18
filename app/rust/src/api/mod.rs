@@ -257,6 +257,17 @@ pub fn send_key(vk: u16, down: bool) {
     crate::input::send(streambeam_proto::input::InputEvent::Key { vk, down });
 }
 
+/// Ask the host to raise Ctrl+Alt+Del (Windows secure attention sequence).
+///
+/// Not sendable as three key events: the kernel recognises SAS specifically so
+/// that synthesised input cannot forge it. Only the host's secure-desktop
+/// service worker can raise it, so this quietly does nothing on a host without
+/// that service — the host logs why.
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_secure_attention() {
+    crate::input::send(streambeam_proto::input::InputEvent::SecureAttention);
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn send_gamepad_plug(pad: u8, connected: bool) {
     crate::input::send(streambeam_proto::input::InputEvent::GamepadPlug {

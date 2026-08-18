@@ -11,7 +11,7 @@ pub mod input;
 pub mod media;
 pub mod pair;
 
-pub const PROTO_VERSION: u8 = 5;
+pub const PROTO_VERSION: u8 = 6;
 
 /// ALPN identifier for the QUIC connection.
 pub const ALPN: &[u8] = b"streambeam/1";

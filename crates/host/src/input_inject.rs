@@ -110,6 +110,7 @@ fn describe(event: &InputEvent) -> (diag::Kind, String) {
             format!("clipboard text ({} bytes)", text.len()),
         ),
         InputEvent::GamepadState { pad, .. } => (Kind::Gamepad, format!("gamepad {pad} state")),
+        InputEvent::SecureAttention => (Kind::Key, "Ctrl+Alt+Del (SAS)".to_string()),
         InputEvent::GamepadPlug { pad, connected } => (
             Kind::Gamepad,
             format!(
@@ -280,6 +281,7 @@ fn apply_macos(event: InputEvent) {
         InputEvent::TouchFrame { .. }
         | InputEvent::GamepadPlug { .. }
         | InputEvent::GamepadState { .. }
+        | InputEvent::SecureAttention
         | InputEvent::ClipboardText { .. } => {}
     }
 }
@@ -475,10 +477,54 @@ fn inject_windows(event: InputEvent) {
             InputEvent::GamepadPlug { .. } | InputEvent::GamepadState { .. } => {
                 crate::gamepad_inject::apply(event);
             }
+            InputEvent::SecureAttention => {
+                send_sas();
+            }
             InputEvent::ClipboardText { .. } => {}
             InputEvent::TouchFrame { .. } => {}
             _ => {}
         }
+    }
+}
+
+/// Raise Ctrl+Alt+Del.
+///
+/// `SendInput` categorically cannot do this — the secure attention sequence is
+/// recognised by the kernel precisely so that no synthesised input can forge
+/// it, which is what stops a program faking the login screen. `SendSAS` is the
+/// only way, it lives in `sas.dll`, and it works only for a caller running as
+/// SYSTEM (or with the `SoftwareSASGeneration` policy allowing services). That
+/// is the secure-desktop service worker; from the ordinary in-session host this
+/// is expected to fail, so it says so rather than appearing to work.
+///
+/// Loaded dynamically rather than linked: `sas.dll` is present on desktop
+/// Windows but this binary also has to run on machines where nothing about the
+/// secure desktop is in play, and a missing import would stop it starting.
+#[cfg(windows)]
+fn send_sas() {
+    // `libloading` rather than raw LoadLibrary: this crate already loads
+    // nvEncodeAPI64.dll that way (see nvenc.rs), and it keeps `windows-sys`'s
+    // feature list from growing for one call.
+    type SendSasFn = unsafe extern "system" fn(i32);
+    let result = unsafe {
+        libloading::Library::new("sas.dll").and_then(|lib| {
+            let f: libloading::Symbol<SendSasFn> = lib.get(b"SendSAS")?;
+            // FALSE = "as services", the documented value for a SYSTEM caller.
+            f(0);
+            Ok(())
+        })
+    };
+    match result {
+        Ok(()) => crate::logging::log(&format!(
+            "input: sent Ctrl+Alt+Del (SendSAS){}",
+            if crate::desktop_win::secure_desktop_worker() {
+                ""
+            } else {
+                " — from the in-session host, which Windows normally refuses; \
+                 enable the secure-desktop service for this to work"
+            }
+        )),
+        Err(e) => crate::logging::log(&format!("input: Ctrl+Alt+Del failed — {e}")),
     }
 }
 

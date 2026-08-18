@@ -62,6 +62,15 @@ pub enum InputEvent {
         pad: u8,
         connected: bool,
     },
+    /// Ctrl+Alt+Del on Windows — the "secure attention sequence".
+    ///
+    /// A separate event rather than three `Key`s because SAS cannot be
+    /// synthesised with `SendInput` at all; that is the entire point of it.
+    /// Only `SendSAS` from `sas.dll` can raise it, and only from a process
+    /// running as SYSTEM (or with the `SoftwareSASGeneration` policy set) —
+    /// i.e. the secure-desktop service worker. Sending it as key events would
+    /// look like it worked and do nothing.
+    SecureAttention,
 }
 
 #[cfg(test)]

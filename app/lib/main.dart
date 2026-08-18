@@ -113,6 +113,25 @@ class _TrayClickHandler with TrayListener {
     unawaited(windowManager.show());
     unawaited(windowManager.focus());
   }
+
+  /// Windows shows the context menu on right-click rather than opening it for
+  /// us, so ask for it explicitly. Without this, right-clicking the icon did
+  /// nothing at all.
+  @override
+  void onTrayIconRightMouseUp() {
+    unawaited(trayManager.popUpContextMenu());
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    switch (menuItem.key) {
+      case 'show':
+        unawaited(windowManager.show());
+        unawaited(windowManager.focus());
+      case 'quit':
+        unawaited(windowManager.destroy());
+    }
+  }
 }
 
 final _trayClickHandler = _TrayClickHandler();
@@ -187,9 +206,27 @@ void showErrorToast(String message) {
 }
 
 Future<void> _initTray() async {
-  await trayManager.setIcon('assets/tray_icon.ico');
-  await trayManager.setToolTip('StreamBeam');
-  _trayClickHandler.register();
+  // Best-effort: a tray failure must not stop the app from starting, and
+  // saying so beats an icon that silently never appears.
+  try {
+    await trayManager.setIcon('assets/tray_icon.ico');
+    await trayManager.setToolTip('StreamBeam');
+    // A tray icon with no menu is close to useless — right-click did nothing,
+    // so there was no way to show or quit the app from it.
+    await trayManager.setContextMenu(
+      Menu(
+        items: [
+          MenuItem(key: 'show', label: 'Show StreamBeam'),
+          MenuItem.separator(),
+          MenuItem(key: 'quit', label: 'Quit'),
+        ],
+      ),
+    );
+    _trayClickHandler.register();
+    debugPrint('StreamBeam: tray icon ready');
+  } catch (e) {
+    debugPrint('StreamBeam: tray icon unavailable ($e)');
+  }
 }
 
 Future<void> main() async {
@@ -1657,6 +1694,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
         probeDecodeHealth: _probeDecodeHealth,
+        hostPlatform: _lastDesktopHost?.platform ?? '',
         onStop: () => unawaited(_stopDesktopPlayback()),
         streamMode: _streamMode,
         // Same semantics as Android's `_changeStreamMode`/`_commitCustom-
