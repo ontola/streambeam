@@ -95,13 +95,6 @@ class StreamBeamHdrView: NSView {
     // first, 2026-08-18) treats the symptom — it tells macOS what to assume
     // while still leaving the mapping to macOS.
     metalLayer.framebufferOnly = true
-    // Hidden until the display's EDR headroom settles. macOS only grants
-    // headroom once EDR content is actually on screen, so the first frames are
-    // necessarily mapped for a display state that is still moving — measured
-    // 1.42 -> 4.00 across ~20 frames. Showing them means watching the picture
-    // wash out and then correct itself a second later, which is exactly what
-    // was reported. Better to show black briefly than to show wrong.
-    metalLayer.opacity = 0
     metalLayer.isOpaque = true
     layer = metalLayer
 
@@ -286,7 +279,6 @@ class StreamBeamHdrView: NSView {
     // nothing upstream changing at all. Log the ramp so it can be correlated
     // with what the eye sees instead of guessed at.
     let headroomNow = liveHeadroom()
-    revealWhenSettled(headroomNow)
     if abs(headroomNow - lastLoggedHeadroom) > 0.05 {
       lastLoggedHeadroom = headroomNow
       NSLog(
@@ -359,11 +351,7 @@ class StreamBeamHdrView: NSView {
     encoder.setRenderPipelineState(pipeline)
     encoder.setFragmentTexture(CVMetalTextureGetTexture(luma), index: 0)
     encoder.setFragmentTexture(CVMetalTextureGetTexture(chroma), index: 1)
-    // Read live rather than cached: macOS ramps this over the first second of
-    // EDR content (measured 1.42 -> 4.00 across frames 22-42), and the roll-off
-    // has to track it or the highlights are mapped for a display state that no
-    // longer exists.
-    var room = Float(max(headroom ?? liveHeadroom(), 1.0))
+    var room = Float(max(headroom ?? mappingHeadroom(), 1.0))
     encoder.setFragmentBytes(&room, length: MemoryLayout<Float>.size, index: 0)
     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     encoder.endEncoding()
@@ -372,6 +360,33 @@ class StreamBeamHdrView: NSView {
     // go while the frame is still in flight.
     cmd.addCompletedHandler { _ in withExtendedLifetime((luma, chroma)) {} }
     return cmd
+  }
+
+  /// The headroom the highlight roll-off maps into — deliberately *not* the
+  /// live value.
+  ///
+  /// Tracking the live one was the obvious design and it is wrong. macOS moves
+  /// granted headroom continuously: measured on one session, 1.0 at the first
+  /// frame, ramping past 4.9 by frame 169, and back to 1.09 a minute later. A
+  /// roll-off that follows that remaps the picture the whole time, which is
+  /// seen as the image washing out and correcting itself — reported twice, and
+  /// not fixed by hiding the first second, because it was never a startup
+  /// transient.
+  ///
+  /// So map into a *static* property of the display instead. The result is
+  /// deterministic: identical frames render identically, whatever the panel is
+  /// doing. The cost is that highlights above the currently-granted headroom
+  /// are the compositor's problem, which is the right trade — a stable picture
+  /// with occasionally clipped speculars beats one that breathes.
+  ///
+  /// Capped at 4x: the potential headroom here is 16, and mapping into all of
+  /// it would leave ordinary content sitting far below what the display can
+  /// show whenever the panel is actually granting less.
+  private func mappingHeadroom() -> Double {
+    let potential =
+      window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue
+      ?? NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+    return min(max(Double(potential), 1.0), 4.0)
   }
 
   /// EDR headroom the display is granting right now, as a multiple of SDR
@@ -387,57 +402,20 @@ class StreamBeamHdrView: NSView {
   /// Last headroom value reported, so only real changes are logged.
   private var lastLoggedHeadroom: Double = 0
 
-  /// Headroom-settling state for the reveal (see `metalLayer.opacity = 0`).
-  private var revealed = false
-  private var headroomAtLastChange: Double = 0
-  private var lastHeadroomChange: CFTimeInterval = 0
-
-  /// Show the picture once the display has stopped changing underneath it.
-  ///
-  /// The hard frame cap is not optional. A reveal condition that never fires
-  /// is a black screen, which is this project's most expensive failure mode
-  /// and has already been shipped twice; a stuck ramp must degrade to "shown,
-  /// possibly mis-mapped", never to "hidden forever".
-  private func revealWhenSettled(_ headroom: Double) {
-    guard !revealed else { return }
-    let now = CACurrentMediaTime()
-    if abs(headroom - headroomAtLastChange) > 0.02 {
-      headroomAtLastChange = headroom
-      lastHeadroomChange = now
-    }
-    let settled = lastHeadroomChange > 0 && now - lastHeadroomChange > 0.4
-    let tooLong = framesPresented > 240
-    guard settled || tooLong else { return }
-    revealed = true
-    NSLog(
-      "%@",
-      "StreamBeam: showing HDR picture — headroom \(headroom) after "
-        + "\(framesPresented) frames\(tooLong ? " (gave up waiting for it to settle)" : "")")
-    DispatchQueue.main.async { [weak self] in
-      // No implicit animation: a half-second cross-fade of a live video layer
-      // is worse than either state.
-      CATransaction.begin()
-      CATransaction.setDisableActions(true)
-      self?.metalLayer.opacity = 1
-      CATransaction.commit()
-    }
-  }
-
   /// What the incoming picture is actually *made of*, in absolute nits.
   ///
-  /// The single number this feature kept lacking. "Washed out" and "too dim"
-  /// are both consistent with a correct pipeline carrying content at the wrong
+  /// The number this feature kept lacking. "Washed out" and "too dim" are both
+  /// consistent with a correct pipeline carrying content at the wrong
   /// luminance, and nothing on either side reported it — so three separate
-  /// theories about the display got tested before anyone checked the signal.
-  /// Windows composites its desktop at the SDR white level it reports (228
-  /// nits on the host measured here), so that is what a white window should
-  /// read as.
+  /// theories about the display were tested before anyone checked the signal.
+  /// It is what showed HITMAN's menu peaking at 113 nits, which is why the
+  /// reference white is 100 and not BT.2408's 203.
   private(set) var contentMedianNits: Double = 0
   private(set) var contentPeakNits: Double = 0
   private var framesSinceMeasure = 0
 
   /// Sample the decoded luma plane and convert PQ code values to nits.
-  /// Strided hard and run rarely — this is a diagnostic, not a per-frame cost.
+  /// Strided hard and run rarely — a diagnostic, not a per-frame cost.
   private func measureContent(_ buffer: CVPixelBuffer) {
     guard CVPixelBufferGetPixelFormatType(buffer)
       == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
