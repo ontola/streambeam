@@ -1120,6 +1120,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         // the decoder with UNKNOWN_ERROR.
                         if (widget.inputSupported)
                           _StreamInputLayer(
+                            gameMode: widget.streamMode == StreamMode.game,
                             key: const ValueKey('stream-input'),
                             videoRect: videoRect,
                             videoSize: videoSize,
@@ -1466,6 +1467,7 @@ class _StreamInputLayer extends StatefulWidget {
     required this.hostAcceptsTouch,
     required this.multiTouchSession,
     required this.onMultiTouchSessionChanged,
+    required this.gameMode,
     required this.child,
   });
 
@@ -1479,6 +1481,11 @@ class _StreamInputLayer extends StatefulWidget {
   final bool hostAcceptsTouch;
   final bool multiTouchSession;
   final ValueChanged<bool> onMultiTouchSessionChanged;
+
+  /// Whether this session is for a game. Only then does clicking the picture
+  /// take the mouse — locking the pointer while someone is using a remote
+  /// desktop would be obnoxious.
+  final bool gameMode;
   final Widget child;
 
   @override
@@ -1486,6 +1493,12 @@ class _StreamInputLayer extends StatefulWidget {
 }
 
 class _StreamInputLayerState extends State<_StreamInputLayer> {
+  @override
+  void initState() {
+    super.initState();
+    _listenForMouseDeltas();
+  }
+
   static const _tapSlop = 12.0;
   static const _pinchSlop = 16.0;
   static const _tapTimeout = Duration(milliseconds: 280);
@@ -1542,6 +1555,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _cancelRelFlush();
     _flushRel();
     if (_mouseButtons != 0) _syncMouseButtons(0);
+    // Never leave the pointer locked to a stream that has gone away.
+    if (_mouseCaptured) unawaited(_setMouseCaptured(false));
     super.dispose();
   }
 
@@ -1645,6 +1660,42 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     });
   }
 
+  /// Relative-mouse capture for games (macOS). Absolute positions are right
+  /// for a desktop and useless for a game: games read raw motion for the
+  /// camera, so an absolute position reads as a teleport and the view never
+  /// turns. The native side frees the cursor from the mouse and feeds deltas
+  /// back here.
+  static const _mouseChannel = MethodChannel('streambeam/mouse');
+  bool _mouseCaptured = false;
+
+  Future<void> _setMouseCaptured(bool on) async {
+    try {
+      final ok =
+          await _mouseChannel.invokeMethod<bool>('capture', {'on': on}) ?? false;
+      if (mounted) setState(() => _mouseCaptured = on && ok);
+    } catch (_) {
+      // Platform without capture support: leave absolute mode alone.
+    }
+  }
+
+  void _listenForMouseDeltas() {
+    _mouseChannel.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'delta':
+          if (!widget.mouseControlEnabled) return null;
+          final args = (call.arguments as Map?) ?? const {};
+          final dx = (args['dx'] as num?)?.toInt() ?? 0;
+          final dy = (args['dy'] as num?)?.toInt() ?? 0;
+          if (dx != 0 || dy != 0) sendMouseMove(dx: dx, dy: dy);
+          return null;
+        case 'released':
+          if (mounted) setState(() => _mouseCaptured = false);
+          return null;
+      }
+      return null;
+    });
+  }
+
   void _flushRel() {
     final dx = _relAccumX.round().clamp(-32768, 32767);
     final dy = _relAccumY.round().clamp(-32768, 32767);
@@ -1695,6 +1746,14 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onMouseDown(PointerDownEvent event) {
+    // Click the picture to take the mouse, the way any game does it. Only for
+    // game sessions, and only where the platform can actually free the cursor
+    // from the mouse; a remote desktop keeps absolute positioning, which is
+    // what it wants. Cmd+Esc gives it back (handled natively, so it works even
+    // though the host is receiving every other key).
+    if (widget.gameMode && widget.mouseControlEnabled && !_mouseCaptured) {
+      unawaited(_setMouseCaptured(true));
+    }
     if (!widget.mouseControlEnabled) return;
     final local = _videoLocal(event.localPosition);
     if (local == null) return; // clicks on the letterbox stay local
@@ -1705,6 +1764,12 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   void _onMouseMove(PointerMoveEvent event) {
     if (!widget.mouseControlEnabled) {
       _syncMouseButtons(0);
+      return;
+    }
+    // While captured the host's own pointer is authoritative; sending absolute
+    // positions too would drag it back to wherever the local cursor is frozen.
+    if (_mouseCaptured) {
+      _syncMouseButtons(event.buttons);
       return;
     }
     // Mid-drag the pointer may leave the video; clamp so drags keep tracking.

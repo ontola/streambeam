@@ -84,7 +84,19 @@ class StreamBeamHdrView: NSView {
     // doesn't have to convert them; the compositor does that, correctly, for
     // whatever panel this is.
     if #available(macOS 10.14.3, *) {
-      metalLayer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
+      let space = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
+      metalLayer.colorspace = space
+      // Verified rather than assumed: `CGColorSpace(name:)` returns nil for a
+      // space this OS doesn't know, `colorspace` silently stays unset, and the
+      // compositor then reads our *linear* values as gamma-encoded. Linear
+      // 0.73 read as gamma is ~0.5 — mid-grey — which is indistinguishable
+      // from every other cause of a washed-out picture chased today.
+      NSLog(
+        "%@",
+        "StreamBeam HDR layer: colorspace \(space == nil ? "FAILED to create" : "ok"), "
+          + "assigned \(metalLayer.colorspace == nil ? "nil" : "yes"), "
+          + "pixelFormat \(metalLayer.pixelFormat.rawValue), "
+          + "EDR \(metalLayer.wantsExtendedDynamicRangeContent)")
     } else {
       setupFailure = "HDR display needs macOS 10.14.3 or newer"
       return

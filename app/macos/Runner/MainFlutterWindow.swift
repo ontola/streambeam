@@ -39,6 +39,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     setUpVideoChannel(flutterViewController)
     setUpDiscoveryChannel(flutterViewController)
     setUpHdrProbe(flutterViewController)
+    setUpMouseCapture(flutterViewController)
     setUpDeviceChannel(flutterViewController)
     setUpScreencastChannel(flutterViewController)
     startCaptureDemandPolling()
@@ -313,6 +314,80 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       default:
         result(FlutterMethodNotImplemented)
       }
+    }
+  }
+
+  private var mouseMonitor: Any?
+  private var mouseChannel: FlutterMethodChannel?
+
+  /// Relative-mouse capture, for games.
+  ///
+  /// The desktop client normally sends absolute positions, which is right for
+  /// a desktop and useless for a game: games read *raw* motion for the camera,
+  /// so an absolute position reads as a teleport and the view will not turn.
+  /// Reported against HITMAN — two cursors on screen and a camera that would
+  /// not rotate — which is exactly what absolute input looks like to a game
+  /// that draws its own pointer.
+  ///
+  /// Deltas alone are not enough either: without decoupling the cursor from
+  /// the mouse, motion stops at the screen edge, so the camera would stick
+  /// whenever the pointer ran out of desk. `CGAssociateMouseAndMouseCursor-
+  /// Position(0)` frees the mouse from the cursor, and the cursor is hidden
+  /// because the host draws the only one that matters now.
+  private func setUpMouseCapture(_ controller: FlutterViewController) {
+    let registrar = controller.registrar(forPlugin: "StreamBeamMouse")
+    let channel = FlutterMethodChannel(
+      name: "streambeam/mouse", binaryMessenger: registrar.messenger)
+    mouseChannel = channel
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else { return }
+      switch call.method {
+      case "capture":
+        let on = (call.arguments as? [String: Any])?["on"] as? Bool ?? false
+        self.setMouseCaptured(on)
+        result(on && self.mouseMonitor != nil)
+      case "captured":
+        result(self.mouseMonitor != nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private func setMouseCaptured(_ on: Bool) {
+    if on {
+      guard mouseMonitor == nil else { return }
+      CGAssociateMouseAndMouseCursorPosition(0)
+      NSCursor.hide()
+      mouseMonitor = NSEvent.addLocalMonitorForEvents(
+        matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .keyDown]
+      ) { [weak self] event in
+        guard let self = self else { return event }
+        // Cmd+Escape releases. A capture with no way out but quitting the app
+        // is a trap, and Escape alone can't be it — games need Escape.
+        if event.type == .keyDown, event.keyCode == 53,
+          event.modifierFlags.contains(.command)
+        {
+          self.setMouseCaptured(false)
+          self.mouseChannel?.invokeMethod("released", arguments: nil)
+          return nil
+        }
+        if event.type == .keyDown { return event }
+        let dx = Int(event.deltaX.rounded())
+        let dy = Int(event.deltaY.rounded())
+        if dx != 0 || dy != 0 {
+          self.mouseChannel?.invokeMethod("delta", arguments: ["dx": dx, "dy": dy])
+        }
+        return event
+      }
+      NSLog("%@", "StreamBeam: mouse captured (Cmd+Esc to release)")
+    } else {
+      guard let monitor = mouseMonitor else { return }
+      NSEvent.removeMonitor(monitor)
+      mouseMonitor = nil
+      CGAssociateMouseAndMouseCursorPosition(1)
+      NSCursor.unhide()
+      NSLog("%@", "StreamBeam: mouse released")
     }
   }
 
