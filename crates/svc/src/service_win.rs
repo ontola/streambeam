@@ -227,7 +227,19 @@ pub fn uninstall() -> Res {
 
 pub fn start() -> Res {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-    let service = manager.open_service(SERVICE_NAME, ServiceAccess::START)?;
+    let service = manager.open_service(
+        SERVICE_NAME,
+        ServiceAccess::START | ServiceAccess::QUERY_STATUS,
+    )?;
+    // Starting an already-running service returns ERROR_SERVICE_ALREADY_RUNNING,
+    // which the crate surfaces as "IO error in winapi call" — a message that
+    // reads like a fault when the state is exactly what the user wanted.
+    if let Ok(status) = service.query_status()
+        && status.current_state == ServiceState::Running
+    {
+        println!("{SERVICE_NAME} is already running");
+        return Ok(());
+    }
     service.start(&[] as &[&OsStr])?;
     println!("started {SERVICE_NAME}");
     Ok(())
