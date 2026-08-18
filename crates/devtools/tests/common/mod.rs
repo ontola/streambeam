@@ -11,12 +11,31 @@ pub fn bin(name: &str) -> String {
 }
 
 fn host_bin() -> String {
-    std::env::var("CARGO_BIN_EXE_streambeam-host").unwrap_or_else(|_| {
-        format!(
-            "{}/../../target/debug/streambeam-host",
-            env!("CARGO_MANIFEST_DIR")
-        )
-    })
+    // `streambeam-host` lives in a different crate, so cargo doesn't expose a
+    // `CARGO_BIN_EXE_streambeam-host` for it here (that's only set for bins in
+    // *this* package, like fakehost/devclient) and `cargo test --workspace`
+    // doesn't necessarily build another crate's binary. Since this integration
+    // test shells out to it, build it on demand when missing so a plain
+    // `cargo test` is self-contained (see AGENTS.md).
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_streambeam-host") {
+        return path;
+    }
+    let path = format!(
+        "{}/../../target/debug/streambeam-host",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    if !Path::new(&path).exists() {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["build", "-p", "streambeam-host"])
+            .status()
+            .expect("build streambeam-host");
+        assert!(
+            status.success(),
+            "failed to build streambeam-host for e2e test"
+        );
+    }
+    path
 }
 
 pub fn wait_for_payload(reader: &mut BufReader<impl std::io::Read>) -> String {
