@@ -71,7 +71,24 @@ struct Opt {
     token_ttl: u64,
 }
 
+/// `IDXGIOutput5::DuplicateOutput1` requires the calling process to be
+/// per-monitor DPI aware; without it the call can fail outright
+/// (`DXGI_ERROR_UNSUPPORTED`). Nothing declared awareness for this binary — the
+/// Flutter app gets it from its runner manifest, but the CLI host and the
+/// service worker had none, so capture depended on whatever the process
+/// happened to inherit. Set it explicitly, before any graphics work.
+#[cfg(windows)]
+fn set_dpi_awareness() {
+    use windows::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    };
+    // Fails harmlessly if awareness was already set (e.g. by a manifest).
+    let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+}
+
 fn main() {
+    #[cfg(windows)]
+    set_dpi_awareness();
     logging::install_panic_hook();
     tracing_subscriber::fmt()
         .with_env_filter(

@@ -1314,10 +1314,36 @@ unsafe fn create_duplication(
     } else {
         DEFAULT_SDR_WHITE_NITS
     };
-    let duplication = ctx(
-        output5.DuplicateOutput1(device, 0, &[format]),
-        "DuplicateOutput1",
-    )?;
+    // Fall back through formats rather than off a cliff. `DuplicateOutput1`
+    // with an FP16 format list can fail with DXGI_ERROR_UNSUPPORTED
+    // (0x887A0004) even where plain 8-bit duplication works — seen on the
+    // SYSTEM service worker against an HDR desktop while the identical binary
+    // succeeded in the user session. Before this, that single failure meant
+    // the host streamed the *bundled demo clip*: a picture, so it looked like
+    // it worked, just of the wrong thing.
+    let duplication = match output5.DuplicateOutput1(device, 0, &[format]) {
+        Ok(dup) => dup,
+        Err(e) if hdr => {
+            crate::logging::log(&format!(
+                "DuplicateOutput1 refused FP16 scRGB ({e}) — retrying 8-bit;                  HDR will be tone-mapped by Windows instead of in-shader"
+            ));
+            match output5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]) {
+                Ok(dup) => dup,
+                Err(e2) => {
+                    crate::logging::log(&format!(
+                        "DuplicateOutput1 refused 8-bit too ({e2}) — falling back to                          DuplicateOutput"
+                    ));
+                    ctx(output1.DuplicateOutput(device), "DuplicateOutput")?
+                }
+            }
+        }
+        Err(e) => {
+            crate::logging::log(&format!(
+                "DuplicateOutput1 failed ({e}) — falling back to DuplicateOutput"
+            ));
+            ctx(output1.DuplicateOutput(device), "DuplicateOutput")?
+        }
+    };
     let desc = duplication.GetDesc();
 
     Ok((

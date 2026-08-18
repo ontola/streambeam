@@ -60,6 +60,8 @@ windows = { version = "0.61", features = [
     "Win32_NetworkManagement_IpHelper",
     # Desktop switching for the secure-desktop worker (desktop_win.rs).
     "Win32_System_StationsAndDesktops",
+    # Per-monitor DPI awareness, required by DuplicateOutput1 (main.rs).
+    "Win32_UI_HiDpi",
     # Elevated (runas) service enable/disable for the app toggle (secure_desktop.rs).
     # ShellExecuteExW's SHELLEXECUTEINFOW carries an hkeyClass, so the W variant
     # is gated behind Win32_System_Registry in the windows crate.
