@@ -1120,7 +1120,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         // the decoder with UNKNOWN_ERROR.
                         if (widget.inputSupported)
                           _StreamInputLayer(
-                            gameMode: widget.streamMode == StreamMode.game,
                             key: const ValueKey('stream-input'),
                             videoRect: videoRect,
                             videoSize: videoSize,
@@ -1467,7 +1466,6 @@ class _StreamInputLayer extends StatefulWidget {
     required this.hostAcceptsTouch,
     required this.multiTouchSession,
     required this.onMultiTouchSessionChanged,
-    required this.gameMode,
     required this.child,
   });
 
@@ -1482,10 +1480,6 @@ class _StreamInputLayer extends StatefulWidget {
   final bool multiTouchSession;
   final ValueChanged<bool> onMultiTouchSessionChanged;
 
-  /// Whether this session is for a game. Only then does clicking the picture
-  /// take the mouse — locking the pointer while someone is using a remote
-  /// desktop would be obnoxious.
-  final bool gameMode;
   final Widget child;
 
   @override
@@ -1543,6 +1537,9 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.mode != widget.mode) {
       _resetMouseState();
+    }
+    if (!widget.mouseControlEnabled && _mouseCaptured) {
+      unawaited(_setMouseCaptured(false));
     }
     if (!widget.mouseControlEnabled && _mouseButtons != 0) {
       _syncMouseButtons(0);
@@ -1671,7 +1668,12 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   Future<void> _setMouseCaptured(bool on) async {
     try {
       final ok =
-          await _mouseChannel.invokeMethod<bool>('capture', {'on': on}) ?? false;
+          await _mouseChannel.invokeMethod<bool>('capture', {'on': on}) ??
+          false;
+      if (on && ok && (!mounted || !widget.mouseControlEnabled)) {
+        await _mouseChannel.invokeMethod<bool>('capture', {'on': false});
+        return;
+      }
       if (mounted) setState(() => _mouseCaptured = on && ok);
     } catch (_) {
       // Platform without capture support: leave absolute mode alone.
@@ -1746,14 +1748,6 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _onMouseDown(PointerDownEvent event) {
-    // Click the picture to take the mouse, the way any game does it. Only for
-    // game sessions, and only where the platform can actually free the cursor
-    // from the mouse; a remote desktop keeps absolute positioning, which is
-    // what it wants. Cmd+Esc gives it back (handled natively, so it works even
-    // though the host is receiving every other key).
-    if (widget.gameMode && widget.mouseControlEnabled && !_mouseCaptured) {
-      unawaited(_setMouseCaptured(true));
-    }
     if (!widget.mouseControlEnabled) return;
     final local = _videoLocal(event.localPosition);
     if (local == null) return; // clicks on the letterbox stay local
@@ -2067,7 +2061,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
 
   @override
   Widget build(BuildContext context) {
-    return Listener(
+    final input = Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMove,
@@ -2081,6 +2075,34 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       // local OS cursor *is* the remote cursor (native-res, zero-latency).
       // Don't hide it.
       child: widget.child,
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        input,
+        if (Platform.isMacOS && widget.mouseControlEnabled)
+          Positioned(
+            bottom: 16,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: _mouseCaptured
+                  ? const IgnorePointer(
+                      child: Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Text('Mouse captured · Cmd+Esc to release'),
+                        ),
+                      ),
+                    )
+                  : FilledButton.tonalIcon(
+                      onPressed: () => _setMouseCaptured(true),
+                      icon: const Icon(Icons.mouse_outlined),
+                      label: const Text('Capture mouse for game'),
+                    ),
+            ),
+          ),
+      ],
     );
   }
 }
