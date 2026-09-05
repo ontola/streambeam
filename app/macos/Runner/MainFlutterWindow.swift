@@ -48,6 +48,8 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
   }
 
   deinit {
+    NotificationCenter.default.removeObserver(self)
+    setMouseCaptured(false)
     captureDemandTimer?.invalidate()
     clearViewerNotification()
   }
@@ -339,6 +341,12 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     let channel = FlutterMethodChannel(
       name: "streambeam/mouse", binaryMessenger: registrar.messenger)
     mouseChannel = channel
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(releaseMouseOnFocusLoss),
+      name: NSWindow.didResignKeyNotification, object: self)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(releaseMouseOnFocusLoss),
+      name: NSApplication.didResignActiveNotification, object: NSApp)
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { return }
       switch call.method {
@@ -354,8 +362,16 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     }
   }
 
+  @objc private func releaseMouseOnFocusLoss(_ notification: Notification) {
+    guard mouseMonitor != nil else { return }
+    setMouseCaptured(false)
+    mouseChannel?.invokeMethod("released", arguments: nil)
+  }
+
   private func setMouseCaptured(_ on: Bool) {
     if on {
+      // A queued Flutter request must not capture after Cmd+Tab has left us.
+      guard NSApp.isActive, isKeyWindow else { return }
       guard mouseMonitor == nil else { return }
       CGAssociateMouseAndMouseCursorPosition(0)
       NSCursor.hide()
