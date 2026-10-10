@@ -212,3 +212,25 @@ Phone wireless debugging is unavailable again (last IP/port
 192.168.0.167:43033 refused; no phone in ADB/mDNS). Asked user to re-enable it.
 **Phone still has the preceding 4K/120 build; installing this newer APK and
 retesting the attached controller remain pending.**
+
+### Phone update installed (2026-10-10, 23:16)
+
+Wireless ADB returned at `192.168.0.167:36959`. Installed the newer `9aceef5`
+ARM64 release APK successfully (Android lastUpdateTime 23:16:03), launched it,
+and opened saved Mancave. Screenshot confirms the GameNight picture at
+1920×1080. The GameSir G8 is present as Android controller 1; Windows XInput
+slot 0 attached at 23:16:25.301. The captured state remains neutral: physical
+button/stick values have not yet been verified in this retest.
+
+Startup paused and included a zero-output second plus keyframe requests.
+Afterward, 68 one-second windows from 23:16:31 through 23:17:38 averaged
+59.93 decoded fps (54.9–60.9), no FEC abandonment, one gap recovery and three
+skipped frames. Host processing settled around 3 ms/frame. This is a short
+mostly static desktop run; input-to-photon latency and smooth gameplay remain
+open. Asked the user to play with the physical controller and open/dismiss
+the side menu; no response yet at documentation time.
+
+Evidence: `/tmp/streambeam-phone-1080-live.log`,
+`/tmp/streambeam-phone-1080-frame.png`, `/tmp/streambeam-xinput-1080.log`,
+`/tmp/streambeam-host-1080-sample.log`. The earlier wireless-debugging blocker
+is resolved; this build is now installed on both phone and tablet.
