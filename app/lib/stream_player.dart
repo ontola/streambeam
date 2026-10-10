@@ -35,10 +35,8 @@ enum MenuSide { left, right }
 /// ratio. So resolution is the real quality lever; fps mostly trades latency
 /// and total bandwidth, not per-frame detail.
 enum StreamMode {
-  /// Default. Caps resolution below native to keep encode/decode cost (and
-  /// therefore latency) low, while allowing fps up to the decoder-safe
-  /// ceiling — the responsiveness/frame-rate half of the trade-off matters
-  /// more than resolution for interactive/game use.
+  /// Default. Android starts at up to 1080p/60 to reduce encode, Wi-Fi and
+  /// decode load. Desktop viewers retain up to 4K at their refresh rate.
   game,
 
   /// Native resolution (maximizes bits-per-frame — see the class doc), fps
@@ -82,8 +80,8 @@ enum StreamMode {
   static const int maxRequestDim = 3840;
 
   /// Apply this mode's caps to the device's real (width, height, fps).
-  /// `dataSaver` only ever tightens the device's reported size; `game`,
-  /// `quality` and `custom` normalize to [maxRequestDim] instead — see
+  /// `dataSaver` and Android `game` only tighten the device's reported size;
+  /// desktop `game`, `quality` and `custom` normalize to [maxRequestDim] — see
   /// `normalizeToRequestCeiling` below.
   /// `custom` ignores the preset logic entirely and uses `customSettings`
   /// instead (required whenever `this == StreamMode.custom`).
@@ -92,6 +90,7 @@ enum StreamMode {
     int deviceHeight,
     int deviceFps, {
     CustomStreamSettings? customSettings,
+    bool isAndroid = false,
   }) {
     int capLongestSide(int side, int maxLongest) {
       if (deviceWidth <= 0 || deviceHeight <= 0) return side;
@@ -120,9 +119,16 @@ enum StreamMode {
 
     switch (this) {
       case StreamMode.game:
-        // Native/4K resolution *and* full refresh-rate fps: modern hardware
-        // encoders handle 4K well, and the fps half is what game feel needs
-        // — deviceFps already runs to the viewer's refresh rate (120 cap).
+        // Uneven pacing and slow-feeling input were observed at 4K/120 on
+        // the phone over Wi-Fi. Start Android at 1080p/60; Quality and Custom
+        // still expose the higher resolutions/frame rates explicitly.
+        if (isAndroid) {
+          return (
+            capLongestSide(deviceWidth, 1920),
+            capLongestSide(deviceHeight, 1920),
+            deviceFps.clamp(1, 60),
+          );
+        }
         final (gw, gh) = normalizeToRequestCeiling(deviceWidth, deviceHeight);
         return (gw, gh, deviceFps);
       case StreamMode.quality:

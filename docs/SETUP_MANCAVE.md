@@ -182,3 +182,33 @@ Flutter analysis clean; focused Flutter tests include menu/controller and
 pairing recovery regressions. Temporary evidence includes
 `/tmp/streambeam-phone-hybrid-live.log`, `/tmp/streambeam-xinput-final.log`,
 `/tmp/streambeam-order-tests.log`, and `/tmp/streambeam-all-final-tests.log`.
+
+### Frame-drop/input-lag follow-up (2026-10-10, 23:10–23:11)
+
+The user's next report was many frame drops and slow input: the 4K/120 phone
+session is not accepted as working smoothly. Host logs also show genuine
+packet loss and occasional RTT spikes to 133 ms, beyond encode/decode cost.
+
+New Android build defaults Game to up to 1920 longest-side / 60 fps. The host
+preserves its capture aspect, yielding 1920×1080 on Mancave. Quality/Custom
+still allow higher settings. Decoder output polls no longer sleep, and a
+receive batch takes only already-queued packets instead of waiting another
+2 ms for every future shard. The first-packet wait is bounded to 2 ms so
+pending decoded frames can reach the surface even between network arrivals.
+
+Built ARM64 release APK and installed on Tab S9+; analysis clean, 37 focused
+Flutter tests passed. Visible GameNight picture confirmed. The 32 settled
+one-second windows averaged 59.84 fps, minimum 53.9, maximum 60.9. There was
+one gap-driven keyframe recovery and four skipped frames, no FEC abandonment.
+Host encoder wait was about 3 ms/frame. Evidence:
+`/tmp/streambeam-tablet-latency-live.log`,
+`/tmp/streambeam-tablet-latency-frame.png`,
+`/tmp/streambeam-latency-apk.log`, `/tmp/streambeam-latency-tests.log`.
+This mostly static desktop test does not establish smooth gameplay or
+controller input-to-photon latency. No physical controller test was performed
+on the tablet. The stream had ended by 23:11:27.
+
+Phone wireless debugging is unavailable again (last IP/port
+192.168.0.167:43033 refused; no phone in ADB/mDNS). Asked user to re-enable it.
+**Phone still has the preceding 4K/120 build; installing this newer APK and
+retesting the attached controller remain pending.**

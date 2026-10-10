@@ -1549,6 +1549,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       rawHeight,
       rawFps,
       customSettings: _customSettings,
+      isAndroid: Platform.isAndroid,
     );
   }
 

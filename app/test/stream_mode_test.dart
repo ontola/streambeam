@@ -29,6 +29,34 @@ void main() {
     expect(fps, 120);
   });
 
+  test('Android game starts at a lighter, orientation-independent 60 fps', () {
+    for (final size in [(1200, 2670), (2670, 1200), (1600, 2560)]) {
+      final (w, h, fps) = StreamMode.game.apply(
+        size.$1,
+        size.$2,
+        120,
+        isAndroid: true,
+      );
+      expect(w > h ? w : h, 1920);
+      expect(fps, 60);
+    }
+    expect(StreamMode.game.apply(1280, 720, 30, isAndroid: true), (
+      1280,
+      720,
+      30,
+    ));
+    expect(
+      StreamMode.custom.apply(
+        1920,
+        1080,
+        120,
+        isAndroid: true,
+        customSettings: const CustomStreamSettings(maxFps: 120),
+      ),
+      (3840, 2160, 120),
+    );
+  });
+
   test('custom slider changes the request instead of pinning to the clamp', () {
     // The regression: with a 10240-wide base, every scale above ~37% exceeded
     // the host's own 3840 clamp and produced an identical stream.

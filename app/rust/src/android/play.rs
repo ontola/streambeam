@@ -1,7 +1,9 @@
 //! Decode Annex-B H.264 access units to an Android Surface via MediaCodec.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::ptr::NonNull;
+use std::task::Poll;
 use std::time::Duration;
 
 use ndk::media::media_codec::{
@@ -23,16 +25,10 @@ use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
 use crate::api::StreamStats;
 use crate::store::client_identity_path;
 
-// Used for MediaCodec dequeue_input_buffer/dequeue_output_buffer calls made
-// synchronously on the same thread that also drives the network read loop
-// (`play_session_blocking`). A "no buffer ready yet" dequeue burns the full
-// timeout doing nothing — at 30ms that alone can exceed a real-time frame
-// budget (33ms at 30fps) per call, and there are multiple such calls per
-// loop iteration. Once the client falls even slightly behind, this caps how
-// fast it can ever catch back up, turning a transient stall into a
-// permanent backlog. Keep this near-instant; a real "nothing is ready" case
-// just means we go around the loop again immediately.
-const TIMEOUT: Duration = Duration::from_micros(2_000);
+// Input can briefly wait for decoder capacity. Output polling never waits:
+// it shares the network/decoder thread, so a 2 ms timeout at both drain
+// sites consumed up to half a 120 fps frame interval doing no work.
+const INPUT_TIMEOUT: Duration = Duration::from_millis(2);
 const BUFFER_FLAG_KEY_FRAME: u32 = 1;
 
 #[derive(Copy, Clone, Debug)]
@@ -531,36 +527,39 @@ fn play_session_blocking(
     let mut last_output = std::time::Instant::now();
     let mut ordered = streambeam_core::FrameOrder::default();
     let order_clock = std::time::Instant::now();
+    let mut last_datagram = std::time::Instant::now();
 
     while stats.video_frames < target {
         let mut rendered_this_turn = drain_output(&mut codec)?;
 
-        // One `block_on` call for the whole batch, not one per datagram —
-        // at the tighter poll rate this loop now runs at (see `TIMEOUT`),
-        // calling `block_on` per-datagram (up to 64 times/iteration) added
-        // real, measurable overhead entering the async runtime thousands of
-        // times a second, showing up as sustained high CPU use and starving
-        // other tasks on the same runtime (e.g. the input-forwarding task).
+        // Wait briefly for the first packet so idle video still releases
+        // decoder outputs promptly. Then drain only packets already queued:
+        // restarting a 2 ms timeout for every shard waited for future frames
+        // and audio packets instead of presenting the frame we already had.
         let batch_result = runtime.block_on(async {
-            let first = tokio::time::timeout(Duration::from_secs(5), session.conn.read_datagram())
-                .await
-                .map_err(|_| "Timed out waiting for video from host.".to_string())?
-                .map_err(|e| format!("Stream read failed: {e}"))?;
-
-            // Greedily grab anything ALREADY sitting in the receive queue too
-            // (a near-zero wait; genuinely new arrivals won't show up in time).
-            // More than one datagram back-to-back means decode/render fell
-            // behind real time since the last iteration — plain FIFO processing
-            // of an ever-growing backlog is exactly how you end up watching
-            // content from a minute ago with no way to ever catch up.
-            let mut batch = vec![first];
-            while let Ok(Ok(next)) =
-                tokio::time::timeout(Duration::from_millis(2), session.conn.read_datagram()).await
-            {
-                batch.push(next);
-                if batch.len() >= 64 {
-                    break; // safety valve against an unbounded drain loop
-                }
+            let first =
+                match tokio::time::timeout(Duration::from_millis(2), session.conn.read_datagram())
+                    .await
+                {
+                    Ok(result) => Some(result.map_err(|e| format!("Stream read failed: {e}"))?),
+                    Err(_) => None,
+                };
+            let mut batch = Vec::with_capacity(64);
+            if let Some(first) = first {
+                batch.push(first);
+                std::future::poll_fn(|cx| {
+                    while batch.len() < 64 {
+                        match std::pin::pin!(session.conn.read_datagram()).poll(cx) {
+                            Poll::Ready(Ok(next)) => batch.push(next),
+                            Poll::Ready(Err(e)) => {
+                                return Poll::Ready(Err(format!("Stream read failed: {e}")));
+                            }
+                            Poll::Pending => break,
+                        }
+                    }
+                    Poll::Ready(Ok(()))
+                })
+                .await?;
             }
             Ok::<_, String>(batch)
         });
@@ -569,11 +568,21 @@ fn play_session_blocking(
             Err(_) if crate::playback::remote_stop_requested() => break,
             Err(e) => return Err(e),
         };
+        if batch.is_empty() {
+            if crate::playback::remote_stop_requested() {
+                break;
+            }
+            if last_datagram.elapsed() >= Duration::from_secs(5) {
+                return Err("Timed out waiting for video from host.".into());
+            }
+        } else {
+            last_datagram = std::time::Instant::now();
+        }
         crate::playback::note_network_rtt(session.conn.stats().path.rtt);
         // A single access unit is FEC-sharded into many ~1200-byte datagrams
         // (see MAX_SHARD_PAYLOAD) — a 15 KB P-frame is a dozen-plus shards
-        // that legitimately arrive back-to-back within this batch's 2ms
-        // drain window. So `batch.len() > 1` is almost always true and isn't
+        // that legitimately arrive back-to-back within one ready
+        // batch. So `batch.len() > 1` is almost always true and isn't
         // a backlog signal at all; the real signal is how many *complete
         // frames* this batch reassembled.
         diag.datagrams += batch.len() as u64;
@@ -617,7 +626,7 @@ fn play_session_blocking(
 
         // On a fast, low-latency LAN at high fps (this is meant to sustain
         // up to 60fps — ~16.7ms/frame), several frames legitimately
-        // finishing in the same ~2ms drain window is common — especially
+        // finishing in the same ready batch is common — especially
         // right after a host-side NVENC session recreate (see
         // `IDR_RESYNC_THRESHOLD`'s comment), which briefly stalls then
         // flushes a small burst once it resumes. Treating that as "behind"
@@ -766,7 +775,7 @@ fn feed_sample(
     pts_us: u64,
     flags: u32,
 ) -> Result<u32, String> {
-    // `TIMEOUT` is intentionally short (see its doc comment) so a single
+    // `INPUT_TIMEOUT` is intentionally short (see its doc comment) so a single
     // dequeue attempt no longer stalls the whole loop — but that also means
     // "no input buffer free yet" is now a routine, momentary condition
     // instead of the rare case it was at the old 30ms timeout. Retry a
@@ -778,7 +787,7 @@ fn feed_sample(
     let deadline = std::time::Instant::now() + Duration::from_millis(250);
     while std::time::Instant::now() < deadline {
         match codec
-            .dequeue_input_buffer(TIMEOUT)
+            .dequeue_input_buffer(INPUT_TIMEOUT)
             .map_err(|e| codec_err("dequeue input", e))?
         {
             DequeuedInputBufferResult::Buffer(buf) => {
@@ -815,7 +824,7 @@ fn drain_output(codec: &MediaCodec) -> Result<u32, String> {
     let mut rendered = 0u32;
     loop {
         match codec
-            .dequeue_output_buffer(TIMEOUT)
+            .dequeue_output_buffer(Duration::ZERO)
             .map_err(|e| codec_err("dequeue output", e))?
         {
             DequeuedOutputBufferInfoResult::Buffer(out) => {
