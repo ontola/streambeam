@@ -12,9 +12,10 @@ use ndk::native_window::NativeWindow;
 use streambeam_core::{
     ClientSession, FrameReassembler, LossReport, SavedHost, access_unit_is_keyframe,
     access_unit_to_avcc_sample, access_unit_without_sei, av1_access_unit_is_keyframe,
-    av1_access_unit_without_redundant_headers, av1_extract_sequence_header, avcc_from_sps_pps,
-    connect_as_identity, connect_known, extract_avc_decoder_config, idr_sample_avcc,
-    nal_with_start_code, request_idr, request_invalidate_ref_frames, save_saved_host,
+    av1_access_unit_without_redundant_headers, av1_extract_sequence_header,
+    av1c_from_sequence_header, avcc_from_sps_pps, connect_as_identity, connect_known,
+    extract_avc_decoder_config, idr_sample_avcc, nal_with_start_code, request_idr,
+    request_invalidate_ref_frames, save_saved_host,
 };
 use streambeam_proto::control::VideoCaps;
 use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
@@ -40,7 +41,7 @@ enum FeedMode {
     AnnexB,
     /// `csd-0` holds avcC; input buffers are length-prefixed AVCC.
     Avcc,
-    /// `csd-0` holds the sequence header OBU; input buffers are the raw OBU
+    /// `csd-0` holds an AV1CodecConfigurationRecord; input buffers are the raw OBU
     /// stream our encoder already produces — no repackaging needed (unlike
     /// H.264's AVCC path), AV1 has no length-prefixed wire format both this
     /// pipeline and MediaCodec agree on needing.
@@ -163,11 +164,15 @@ fn start_decoder_av1(
     height: i32,
     sequence_header: &[u8],
 ) -> Result<(MediaCodec, FeedMode), String> {
+    // MediaCodec's documented AV1 csd-0 contract is av1C, not a bare
+    // sequence-header OBU.
+    let av1c = av1c_from_sequence_header(sequence_header)
+        .ok_or("Host video config has an invalid AV1 sequence header.")?;
     try_configure_decoder(window, "video/av01", width, height, |fmt| {
-        fmt.set_buffer("csd-0", sequence_header);
+        fmt.set_buffer("csd-0", &av1c);
     })
     .map(|codec| {
-        log::info!("streambeam decoder configured for AV1 with sequence-header csd-0");
+        log::info!("streambeam decoder configured for AV1 with av1C csd-0");
         (codec, FeedMode::Av1)
     })
     .map_err(|e| {
@@ -521,11 +526,14 @@ fn play_session_blocking(
     // without this, a host that's merely a bit slow (not catastrophically
     // behind) oscillates between huge keyframe bursts and near-stalls instead
     // of settling down.
-    const IDR_REQUEST_COOLDOWN: Duration = Duration::from_secs(3);
+    const IDR_REQUEST_COOLDOWN: Duration = Duration::from_millis(500);
     let mut last_idr_request: Option<std::time::Instant> = None;
+    let mut last_output = std::time::Instant::now();
+    let mut ordered = streambeam_core::FrameOrder::default();
+    let order_clock = std::time::Instant::now();
 
     while stats.video_frames < target {
-        diag.rendered += drain_output(&mut codec)?;
+        let mut rendered_this_turn = drain_output(&mut codec)?;
 
         // One `block_on` call for the whole batch, not one per datagram —
         // at the tighter poll rate this loop now runs at (see `TIMEOUT`),
@@ -570,7 +578,7 @@ fn play_session_blocking(
         // frames* this batch reassembled.
         diag.datagrams += batch.len() as u64;
         diag.max_batch = diag.max_batch.max(batch.len() as u32);
-        let mut completions: Vec<(bool, Vec<u8>)> = Vec::new();
+
         for datagram in batch.iter() {
             diag.bytes += datagram.len() as u64;
             crate::playback::note_bytes_received(datagram.len() as u64);
@@ -585,7 +593,7 @@ fn play_session_blocking(
             }
 
             match asm.push_datagram(datagram) {
-                Ok(Some((_id, frame))) => {
+                Ok(Some((id, frame))) => {
                     // H.264-only cleanup (drops SEI NALs some decoders
                     // reject); AV1's own redundant-header stripping happens
                     // in `encode_frame` instead, since it needs `feed_mode`
@@ -598,7 +606,7 @@ fn play_session_blocking(
                         continue;
                     }
                     let keyframe = is_keyframe(feed_mode, &frame);
-                    completions.push((keyframe, frame));
+                    ordered.push(id, (keyframe, frame));
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -624,6 +632,7 @@ fn play_session_blocking(
         // banded intra flash every cooldown tick. A quarter-second of real
         // backlog is where skipping starts beating decoding (same threshold
         // as the desktop loop in `api/mod.rs`).
+        let completions = ordered.drain(order_clock.elapsed());
         let behind = completions.len() > usize::from(session.fps / 4).max(10);
         // Batch-scoped skip-mode, exited by the first keyframe so the
         // P-frames delivered right behind a recovery keyframe (same large
@@ -633,7 +642,14 @@ fn play_session_blocking(
         // one-frame-per-IDR "0fps slideshow" this fixes.
         let mut resync = awaiting_keyframe || behind;
 
-        for (is_keyframe, frame) in completions {
+        for (gap, (is_keyframe, frame)) in completions {
+            if gap && !is_keyframe {
+                // Feeding a P-frame after a whole-frame loss poisons the DPB.
+                // FEC's abandonment report cannot see a frame with zero shards.
+                awaiting_keyframe = true;
+                resync = true;
+                consecutive_skipped = IDR_RESYNC_THRESHOLD;
+            }
             // Always decode a keyframe (it resets the reference chain and is
             // worth showing even a little late). Otherwise, while behind, skip
             // every non-keyframe completion in this batch — including the
@@ -666,13 +682,17 @@ fn play_session_blocking(
                 0
             };
             let t_feed = std::time::Instant::now();
-            feed_sample(&mut codec, &sample, pts_us, flags)?;
+            rendered_this_turn += feed_sample(&mut codec, &sample, pts_us, flags)?;
             diag.feed_us += t_feed.elapsed().as_micros() as u64;
             diag.fed += 1;
             pts_us += pts_step_us;
             stats.video_frames = asm.stats().frames_complete;
-            diag.rendered += drain_output(&mut codec)?;
+            rendered_this_turn += drain_output(&mut codec)?;
             consecutive_skipped = 0;
+        }
+        diag.rendered += rendered_this_turn;
+        if rendered_this_turn > 0 {
+            last_output = std::time::Instant::now();
         }
         diag.maybe_log(asm.stats(), &session.conn);
 
@@ -697,36 +717,39 @@ fn play_session_blocking(
             return Ok(stats);
         }
 
-        if consecutive_skipped >= IDR_RESYNC_THRESHOLD {
-            consecutive_skipped = 0;
-            let cooled_down = last_idr_request
-                .map(|t| t.elapsed() >= IDR_REQUEST_COOLDOWN)
-                .unwrap_or(true);
-            if cooled_down {
+        let cooled_down = last_idr_request
+            .map(|t| t.elapsed() >= IDR_REQUEST_COOLDOWN)
+            .unwrap_or(true);
+        if cooled_down {
+            let loss = asm.take_loss_report();
+            let decoder_stalled =
+                last_output.elapsed() >= Duration::from_millis(750) && stats.video_frames > 0;
+            if decoder_stalled || consecutive_skipped >= IDR_RESYNC_THRESHOLD {
                 last_idr_request = Some(std::time::Instant::now());
-                // Prefer the cheaper, surgical RFI recovery when the
-                // reassembler still has a recent-enough reference to
-                // invalidate around; fall back to a full keyframe request
-                // otherwise (no report at all, or NeedIdr).
-                match asm.take_loss_report() {
-                    Some(LossReport::Invalidate {
+                consecutive_skipped = 0;
+                log::info!(
+                    "streambeam recovering decoder with a fresh keyframe (stalled={decoder_stalled})"
+                );
+                if let Err(e) = runtime.block_on(request_idr(&mut session)) {
+                    log::warn!("streambeam recovery request_idr failed: {e}");
+                }
+            } else if let Some(report) = loss {
+                last_idr_request = Some(std::time::Instant::now());
+                // Loss recovery must run even when decode keeps up with input.
+                // Previously it ran only inside the skipped-backlog branch.
+                match report {
+                    LossReport::Invalidate {
                         first_frame,
                         last_frame,
-                    }) => {
-                        if let Err(e) = runtime.block_on(request_invalidate_ref_frames(
+                    } => {
+                        let _ = runtime.block_on(request_invalidate_ref_frames(
                             &mut session,
                             first_frame,
                             last_frame,
-                        )) {
-                            log::warn!(
-                                "streambeam catch-up invalidate-ref-frames failed (continuing): {e}"
-                            );
-                        }
+                        ));
                     }
-                    Some(LossReport::NeedIdr) | None => {
-                        if let Err(e) = runtime.block_on(request_idr(&mut session)) {
-                            log::warn!("streambeam catch-up request_idr failed (continuing): {e}");
-                        }
+                    LossReport::NeedIdr => {
+                        let _ = runtime.block_on(request_idr(&mut session));
                     }
                 }
             }
@@ -737,14 +760,23 @@ fn play_session_blocking(
     Ok(stats)
 }
 
-fn feed_sample(codec: &mut MediaCodec, data: &[u8], pts_us: u64, flags: u32) -> Result<(), String> {
+fn feed_sample(
+    codec: &mut MediaCodec,
+    data: &[u8],
+    pts_us: u64,
+    flags: u32,
+) -> Result<u32, String> {
     // `TIMEOUT` is intentionally short (see its doc comment) so a single
     // dequeue attempt no longer stalls the whole loop — but that also means
     // "no input buffer free yet" is now a routine, momentary condition
     // instead of the rare case it was at the old 30ms timeout. Retry a
-    // handful of times (a few ms total) before treating it as a real error.
+    // bounded interval before treating it as a real error. Release completed
+    // outputs while waiting: otherwise a full output pool can prevent the
+    // decoder from returning an input buffer (seen on Xiaomi 15 startup).
     let mut input = None;
-    for _ in 0..10 {
+    let mut rendered = 0;
+    let deadline = std::time::Instant::now() + Duration::from_millis(250);
+    while std::time::Instant::now() < deadline {
         match codec
             .dequeue_input_buffer(TIMEOUT)
             .map_err(|e| codec_err("dequeue input", e))?
@@ -753,7 +785,9 @@ fn feed_sample(codec: &mut MediaCodec, data: &[u8], pts_us: u64, flags: u32) -> 
                 input = Some(buf);
                 break;
             }
-            DequeuedInputBufferResult::TryAgainLater => continue,
+            DequeuedInputBufferResult::TryAgainLater => {
+                rendered += drain_output(codec)?;
+            }
         }
     }
     let Some(mut input_buf) = input else {
@@ -773,11 +807,11 @@ fn feed_sample(codec: &mut MediaCodec, data: &[u8], pts_us: u64, flags: u32) -> 
     codec
         .queue_input_buffer(input_buf, 0, data.len(), pts_us, flags)
         .map_err(|e| codec_err("queue input", e))?;
-    Ok(())
+    Ok(rendered)
 }
 
 /// Returns how many output buffers were released to the surface (rendered).
-fn drain_output(codec: &mut MediaCodec) -> Result<u32, String> {
+fn drain_output(codec: &MediaCodec) -> Result<u32, String> {
     let mut rendered = 0u32;
     loop {
         match codec

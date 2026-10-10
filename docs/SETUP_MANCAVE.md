@@ -11,7 +11,7 @@
   `/home/joep/dev/streambeam-setup-20261010` (WSL). The original dirty checkout
   at `/home/joep/dev/streambeam` was not overwritten.
 - The optimized worker's SHA-256 is
-  `8efa9fb915ee0867123f855d98ab4d4408b634d1ee92857b2f6ac34541cb6d5b`.
+  `8fcca62302a7ab60e24f2f81e89e8ddfca3bfb5baaa0ab7e151d1b0ad1751e14`.
   Verified against the running service's worker path after staging.
 
 ## Changes and observed behavior
@@ -79,7 +79,7 @@ replace the original dirty WSL checkout.
 
 ## Validation and evidence
 
-- Rust workspace: 114 tests passed, 1 ignored (the manual long soak).
+- Rust workspace: 119 tests passed, 1 ignored (the manual long soak).
 - Native Windows optimized host build passed; capture change exercised on
   Mancave's RTX 5070 Ti, not just checked on macOS.
 - Flutter analysis passed; 33 focused tests passed (stream modes, decoder
@@ -96,3 +96,75 @@ replace the original dirty WSL checkout.
 
 Long-session gaming, controller/rumble, lock-screen handover and end-to-end
 audio latency were not covered by these checks.
+
+## Android and controller follow-up
+
+Both the Samsung Tab S9+ (SM-X810) and Xiaomi 15 (24129PN74G) were installed
+through wireless ADB and paired normally with Mancave, preserving their app
+identity. The temporary host used the existing service data directory; the
+normal automatic service was restored afterward. Pairing output files were
+removed rather than retained in diagnostics.
+
+The tablet's original black picture was caused by stripping NVENC's essential
+AV1 FRAME_HEADER OBU from its split FRAME_HEADER + TILE_GROUP output. The
+client now keeps it, and configures MediaCodec with the documented av1C
+record. The tablet displayed the actual 4K desktop at approximately 116–123
+rendered fps. This confirms decode/display, not subjective audio quality.
+
+First-contact cards now distinguish nearby from saved devices. An explicit
+pairing rejection offers Scan QR / Paste pairing link recovery; an unrelated
+network close no longer guesses that authentication failed. The host finishes
+and waits for delivery of its rejection before dropping the connection.
+A real-host rejection test and two dialog tests cover the failure path.
+The service still has no approval/QR UI of its own; fully frictionless
+service-mode onboarding remains unfinished.
+
+Mancave controller support was installed using VIIPER 0.8.2 and the signed
+usbip-win2 0.9.8.1 installer. Files live in
+`C:\Users\joepm\StreamBeamController`; the current user's Startup shortcut
+`StreamBeam Controller.lnk` starts VIIPER with both its control API (3242) and
+USB transport (3241) bound to **127.0.0.1**. The installer returned success
+but recorded that a restart is recommended; no restart was performed.
+Windows successfully attached an Xbox 360 controller without restarting.
+
+The phone's GameSir G8 is attached to the phone; the phone-to-PC connection
+is wireless. Its side menu previously destroyed GamepadForwarder and unplugged
+the Windows controller. The widget now stays mounted, sends neutral state
+while input is paused, tracks button releases, and resumes without replugging.
+A regression test checks that exact transition. Android's internal Xiaomi
+uinput device is filtered out, and D-pad vertical direction is corrected.
+The host also discards a cached VIIPER bus after the last device is removed,
+so reconnecting does not loop on a deleted bus.
+
+Android video now uses hybrid platform-view composition to retain the native
+video consumer across orientation changes. Native logs confirmed a size
+change without surface destruction during a portrait-to-landscape rotation.
+Android loss recovery also runs outside the backlog branch and requests a
+fresh keyframe if input arrives but the decoder stops producing pictures.
+Release logging initializes at Info before FRB can install per-packet Trace.
+The video sender refreshes its path packet-size limit per frame and recovers
+from a mid-frame MTU reduction instead of silently stopping only video.
+
+The user confirmed phone picture and input, then reported choppy/unreliable
+playback. Logs exposed wire-frame discontinuities while FEC still reported
+zero abandoned frames: entirely absent frames and out-of-order completions
+were being fed into an AV1 reference chain. Android now restores frame order
+with a bounded 30 ms wait (no added wait for in-order traffic), discards late
+frames, and waits for a keyframe after a real gap. Three deterministic tests
+cover reordering, whole-frame loss, and sequence rollover.
+
+**Acceptance still open:** wireless debugging on the Xiaomi disconnected
+before this last ordering fix could be installed. The latest APK is built
+and installed on the tablet; the phone still has the preceding build. The
+phone needs wireless debugging re-enabled, then installation and an actual
+menu/rotation/controller/audio test plus a sustained gaming run. Do not call
+this setup stable yet. The previous phone runs recovered intermittently but
+showed corruption/freezes. Windows XInput confirmed one attached controller
+in the filtered build; a live recording of physical stick/button values is
+still pending. Rumble is not implemented.
+
+Latest validation: 119 Rust workspace tests passed, one manual soak ignored;
+Flutter analysis clean; focused Flutter tests include menu/controller and
+pairing recovery regressions. Temporary evidence includes
+`/tmp/streambeam-phone-hybrid-live.log`, `/tmp/streambeam-xinput-final.log`,
+`/tmp/streambeam-order-tests.log`, and `/tmp/streambeam-all-final-tests.log`.

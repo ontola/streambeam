@@ -2,6 +2,7 @@ package io.streambeam.streambeam
 
 import android.content.Context
 import android.graphics.SurfaceTexture
+import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import io.flutter.plugin.common.BinaryMessenger
@@ -31,16 +32,17 @@ class StreamPlatformView(
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        Log.i("StreamBeamSurface", "available ${width}x${height}")
         notifySurfaceReady(Surface(surface))
     }
 
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-        if (width > 0 && height > 0) {
-            notifySurfaceReady(Surface(surface))
-        }
+        // Size changes keep the same buffer queue and native window.
+        Log.i("StreamBeamSurface", "resized ${width}x${height}")
     }
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        Log.i("StreamBeamSurface", "destroyed")
         lastWindowPtr = 0L
         return true
     }
@@ -48,7 +50,11 @@ class StreamPlatformView(
     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
 
     private fun notifySurfaceReady(surface: Surface) {
-        val ptr = NativeStream.nativeWindowFromSurface(surface)
+        val ptr = try {
+            NativeStream.nativeWindowFromSurface(surface)
+        } finally {
+            surface.release()
+        }
         if (ptr == lastWindowPtr) return
         lastWindowPtr = ptr
         channel.invokeMethod("surfaceReady", ptr)

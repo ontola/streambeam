@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -17,6 +18,7 @@ import 'beam_page.dart';
 import 'hdr_probe.dart';
 import 'hdr_status.dart';
 import 'decode_watchdog.dart';
+import 'pairing_help.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 import 'stream_player.dart';
@@ -358,6 +360,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   static const _clipboardPollInterval = Duration(milliseconds: 750);
 
   final _payloadCtrl = TextEditingController();
+  final Set<String> _needsPairing = {};
   bool _busy = false;
   bool _showVideo = false;
   bool _reconnectPending = false;
@@ -368,6 +371,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   SavedHostInfo? _savedHostInfo;
   List<DiscoveredHost> _lanHosts = [];
   DiscoveredHost? _pendingLanHost;
+
   /// Alternate endpoints for `_pendingLanHost`'s identity, handed to the
   /// playback path so a non-answering endpoint fails over instead of erroring.
   List<DiscoveredHost> _pendingLanFailover = const [];
@@ -395,6 +399,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   // the native Runner turns them into a Flutter texture.
   static const _desktopVideoChannel = MethodChannel('streambeam/video_desktop');
   int? _desktopTextureId;
+
   /// The stream is HDR10, so frames render on the native EDR layer instead of
   /// the Flutter texture — Flutter's compositor is SDR and would flatten the
   /// PQ signal (docs/HDR.md).
@@ -414,6 +419,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   String _watchedHostPlatform = '';
   DiscoveredHost? _lastDesktopHost;
   String? _lastDesktopAddr;
+
   /// Endpoints for the same identity still worth trying if the current one
   /// doesn't answer — one machine can run several host processes (see
   /// `_HostListEntry.alternates`), and only some of them may be reachable.
@@ -498,7 +504,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           'to start on that end. Check the host\'s logs.';
     }
     if (lower.contains('stream closed')) {
-      return 'The host closed the connection. If this device is not paired yet, scan the host QR or use Paste & play with its sbm1: code.';
+      return 'The connection ended before streaming could start. Try connecting again.';
     }
     // Rust's describe_connect_failure (core/src/session.rs) already produces
     // a specific, actionable message per failure kind (timeout vs reset vs
@@ -603,6 +609,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               : (primary?.hostPubkey ?? const []),
           online: primary != null,
           isSaved: true,
+          needsPairing: _needsPairing.contains(savedKey),
           discovered: primary,
           alternates: group == null ? const [] : group.skip(1).toList(),
         ),
@@ -621,6 +628,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           hostPubkey: primary.hostPubkey,
           online: true,
           isSaved: false,
+          needsPairing: _needsPairing.contains(entry.key),
           discovered: primary,
           alternates: group.skip(1).toList(),
         ),
@@ -630,10 +638,64 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     return entries;
   }
 
-  Future<void> _connectHostEntry(_HostListEntry entry) async {
+  Future<void> _showPairingHelp(_HostListEntry entry) async {
+    final action = await showDialog<PairingAction>(
+      context: context,
+      builder: (_) => PairingHelp(
+        hostName: entry.name,
+        canScan: Platform.isAndroid,
+        needsCode: entry.needsPairing,
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case PairingAction.requestAccess:
+        await _connectHostEntry(entry, skipSetup: true);
+      case PairingAction.scan:
+        if (!_qrPreviewOpen) await _toggleQrPreview();
+      case PairingAction.paste:
+        await _pasteFromClipboard();
+      case null:
+        break;
+    }
+  }
+
+  void _handleConnectionError(Object error, DiscoveredHost? host) {
+    final message = error.toString();
+    // Only an explicit host rejection proves pairing is needed. A network
+    // close can have many other causes and must not be called a pairing error.
+    if (host != null &&
+        message.toLowerCase().contains('pair rejected') &&
+        message.toLowerCase().contains('pairing requires')) {
+      setState(
+        () => _needsPairing.add(_identityKey(host.hostPubkey, host.name)),
+      );
+      final entry = _hostEntries()
+          .where(
+            (h) =>
+                _identityKey(h.hostPubkey, h.name) ==
+                _identityKey(host.hostPubkey, host.name),
+          )
+          .firstOrNull;
+      if (entry != null) {
+        unawaited(_showPairingHelp(entry));
+        return;
+      }
+    }
+    _reportError(message);
+  }
+
+  Future<void> _connectHostEntry(
+    _HostListEntry entry, {
+    bool skipSetup = false,
+  }) async {
     if (_busy) return;
     if (!entry.online) {
       _reportError('${entry.name} is offline.');
+      return;
+    }
+    if (!skipSetup && (!entry.isSaved || entry.needsPairing)) {
+      await _showPairingHelp(entry);
       return;
     }
     final discovered = entry.discovered;
@@ -977,6 +1039,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _payloadCtrl.text = normalized;
       await saveHostFromPayload(payload: normalized);
       _refreshSavedHost();
+      final saved = _savedHostInfo;
+      if (saved != null) {
+        _needsPairing.remove(_identityKey(saved.hostPubkey, saved.name));
+      }
       if (!mounted) return;
       if (!Platform.isAndroid) {
         await _startDesktopPlayback(normalized);
@@ -1226,7 +1292,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           _desktopVideoChannel.invokeMethod('frame', {'data': ev.data});
         }
       },
-      onError: (e) {
+      onError: (e) async {
         if (attempt != _desktopPlaybackAttempt) return;
         // One machine can advertise several host processes and only some of
         // them answer — the packaged service may be firewalled while a
@@ -1278,8 +1344,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
           });
           return;
         }
-        _reportError(_humanizeError(e.toString()));
-        unawaited(_stopDesktopPlayback());
+        final host = _lastDesktopHost;
+        await _stopDesktopPlayback();
+        if (mounted) _handleConnectionError(e, host);
       },
       onDone: () {
         if (attempt == _desktopPlaybackAttempt) {
@@ -1605,12 +1672,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     } catch (e) {
       if (!_sessionAlive(sessionId)) return;
-      showErrorToast(_humanizeError(e.toString()));
       setState(() {
         _status = null;
         _statusIsError = false;
         _teardownVideo();
       });
+      _handleConnectionError(e, lanHost);
     } finally {
       _cancelSurfaceTimeout();
       if (_sessionAlive(sessionId)) {
@@ -1855,10 +1922,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         aspectRatio: _streamAspectRatio,
         streamWidth: _streamWidth,
         streamHeight: _streamHeight,
-        video: const AndroidView(
-          viewType: 'streambeam/video',
-          layoutDirection: TextDirection.ltr,
-        ),
+        video: const AndroidStreamView(),
         hostAcceptsTouch: playbackHostAcceptsTouch(),
         hostPlatform: _watchedHostPlatform,
         onStop: _stopStreaming,
@@ -2050,7 +2114,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                                 Text(
                                   _status ?? 'Connecting…',
                                   textAlign: TextAlign.center,
-                                  style: Theme.of(context).textTheme.titleMedium,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
                                 ),
                                 const SizedBox(height: 24),
                                 FilledButton.tonalIcon(
@@ -2148,6 +2214,7 @@ class _HostListEntry {
     required this.hostPubkey,
     required this.online,
     required this.isSaved,
+    this.needsPairing = false,
     this.discovered,
     this.alternates = const [],
   });
@@ -2158,6 +2225,7 @@ class _HostListEntry {
   final List<int> hostPubkey;
   final bool online;
   final bool isSaved;
+  final bool needsPairing;
   final DiscoveredHost? discovered;
 
   /// Other endpoints advertising this *same identity* — one machine running
@@ -2274,7 +2342,13 @@ class _DevicesSection extends StatelessWidget {
             return DeviceTile(
               icon: h.platformIcon,
               title: h.name,
-              subtitle: h.addressLabel,
+              subtitle: h.online
+                  ? h.needsPairing
+                        ? 'Pair this device to start streaming'
+                        : h.isSaved
+                        ? 'Tap to start streaming'
+                        : 'Set up a connection'
+                  : h.addressLabel,
               active: h.online,
               onTap: canTap ? () => onHostTap!(h) : null,
               trailing: Row(
@@ -2287,7 +2361,11 @@ class _DevicesSection extends StatelessWidget {
                     // Wake-on-LAN packet at a machine that was awake all along
                     // (2026-08-18). Say we're still looking instead.
                     label: h.online
-                        ? 'Online'
+                        ? h.needsPairing
+                              ? 'Pair device'
+                              : h.isSaved
+                              ? 'Saved'
+                              : 'Nearby'
                         : discovering
                         ? 'Checking…'
                         : 'Offline',
@@ -2313,9 +2391,15 @@ class _DevicesSection extends StatelessWidget {
                     )
                   else if (canTap)
                     IconButton(
-                      icon: const Icon(Icons.play_circle_fill),
+                      icon: Icon(
+                        h.isSaved && !h.needsPairing
+                            ? Icons.play_circle_fill
+                            : Icons.add_link,
+                      ),
                       color: theme.colorScheme.primary,
-                      tooltip: 'Watch ${h.name}',
+                      tooltip: h.isSaved && !h.needsPairing
+                          ? 'Watch ${h.name}'
+                          : 'Set up ${h.name}',
                       onPressed: busy ? null : () => onHostTap!(h),
                     ),
                 ],
@@ -2392,3 +2476,28 @@ class _EmptyDevices extends StatelessWidget {
   }
 }
 
+/// Hybrid composition keeps MediaCodec's TextureView on the activity window.
+/// A texture-backed platform view can replace its consumer during rotation.
+class AndroidStreamView extends StatelessWidget {
+  const AndroidStreamView({super.key});
+
+  @override
+  Widget build(BuildContext context) => PlatformViewLink(
+    viewType: 'streambeam/video',
+    surfaceFactory: (context, controller) => AndroidViewSurface(
+      controller: controller as AndroidViewController,
+      gestureRecognizers: const {},
+      hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+    ),
+    onCreatePlatformView: (params) {
+      return PlatformViewsService.initExpensiveAndroidView(
+          id: params.id,
+          viewType: 'streambeam/video',
+          layoutDirection: TextDirection.ltr,
+          onFocus: () => params.onFocusChanged(true),
+        )
+        ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+        ..create();
+    },
+  );
+}

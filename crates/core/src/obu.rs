@@ -445,15 +445,16 @@ pub fn av1c_from_sequence_header(seq_header_obu: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Drop OBU_FRAME_HEADER / OBU_REDUNDANT_FRAME_HEADER units that duplicate a
-/// preceding OBU_FRAME's header — mirrors `annex_b::access_unit_without_sei`
+/// Drop explicitly redundant frame headers — mirrors `annex_b::access_unit_without_sei`
 /// stripping SEI: some decoders choke on the redundant copy some encoders
 /// emit for error resilience, which this pipeline's own FEC already covers.
 pub fn access_unit_without_redundant_headers(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     for obu in split_obus(data) {
-        if obu.obu_type == OBU_TYPE_FRAME_HEADER || obu.obu_type == OBU_TYPE_REDUNDANT_FRAME_HEADER
-        {
+        // NVENC also emits the split FH + TG form, with no combined FRAME
+        // OBU at all. Its FH is essential: stripping it silently leaves the
+        // decoder with tile pixels and no instructions for decoding them.
+        if obu.obu_type == OBU_TYPE_REDUNDANT_FRAME_HEADER {
             continue;
         }
         append_obu(&mut out, obu.obu_type, obu.payload);
@@ -525,6 +526,21 @@ mod tests {
             obus.iter()
                 .all(|o| o.obu_type != OBU_TYPE_REDUNDANT_FRAME_HEADER)
         );
+    }
+
+    #[test]
+    fn keeps_nvenc_split_frame_header_and_tiles() {
+        // Live NVENC uses TD, SH, FH, TG for keyframes and TD, FH, TG
+        // for inter frames. FH (type 3) is not RFH (type 7).
+        for keyframe in [false, true] {
+            let mut tu = obu(2, &[]);
+            if keyframe {
+                tu.extend(obu(OBU_TYPE_SEQUENCE_HEADER, &[1, 2]));
+            }
+            tu.extend(obu(OBU_TYPE_FRAME_HEADER, &[3, 4]));
+            tu.extend(obu(4, &[5, 6, 7]));
+            assert_eq!(access_unit_without_redundant_headers(&tu), tu);
+        }
     }
 
     #[test]

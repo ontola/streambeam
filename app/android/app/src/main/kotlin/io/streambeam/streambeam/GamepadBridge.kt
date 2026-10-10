@@ -34,7 +34,7 @@ class GamepadBridge(
         AxisSpec(MotionEvent.AXIS_RX, "rightStickX"),
         AxisSpec(MotionEvent.AXIS_RY, "rightStickY", invert = true),
         AxisSpec(MotionEvent.AXIS_HAT_X, "dpadX"),
-        AxisSpec(MotionEvent.AXIS_HAT_Y, "dpadY", invert = true),
+        AxisSpec(MotionEvent.AXIS_HAT_Y, "dpadY"),
         AxisSpec(MotionEvent.AXIS_LTRIGGER, "leftTrigger"),
         AxisSpec(MotionEvent.AXIS_RTRIGGER, "rightTrigger"),
         AxisSpec(MotionEvent.AXIS_BRAKE, "leftTrigger"),
@@ -143,6 +143,7 @@ class GamepadBridge(
     }
 
     private fun isGamepad(device: InputDevice): Boolean {
+        if (device.isVirtual || (!device.isExternal && device.controllerNumber == 0)) return false
         val sources = device.sources
         return (sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
             (sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK

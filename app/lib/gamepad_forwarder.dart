@@ -25,9 +25,16 @@ class XInputButtons {
 
 /// Forwards a phone-paired gamepad to the PC host as XInput state.
 class GamepadForwarder extends StatefulWidget {
-  const GamepadForwarder({required this.enabled, super.key});
+  const GamepadForwarder({
+    required this.enabled,
+    this.paused = false,
+    super.key,
+  });
 
   final bool enabled;
+
+  /// Keep the virtual controller attached while menus temporarily own input.
+  final bool paused;
 
   @override
   State<GamepadForwarder> createState() => _GamepadForwarderState();
@@ -56,6 +63,9 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
       _start();
     } else if (!widget.enabled && oldWidget.enabled) {
       _stop();
+    }
+    if (widget.enabled && widget.paused != oldWidget.paused) {
+      _sendHeartbeats();
     }
   }
 
@@ -141,8 +151,9 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
 
   void _sendState(String gamepadId) {
     final slot = _deviceToSlot[gamepadId];
-    final state = _states[gamepadId];
-    if (slot == null || state == null) return;
+    final current = _states[gamepadId];
+    if (slot == null || current == null) return;
+    final state = widget.paused ? _LocalGamepadState() : current;
     sendGamepadState(
       pad: slot,
       buttons: state.buttons,
@@ -201,7 +212,8 @@ class _LocalGamepadState {
       case 'rightTrigger':
         rt = value.clamp(0, 1);
       case 'dpadX':
-        buttons = (buttons & ~(XInputButtons.dpadLeft | XInputButtons.dpadRight));
+        buttons =
+            (buttons & ~(XInputButtons.dpadLeft | XInputButtons.dpadRight));
         if (value < -0.5) {
           buttons |= XInputButtons.dpadLeft;
         } else if (value > 0.5) {
@@ -225,20 +237,20 @@ class _LocalGamepadState {
   int get ryShort => (ry * 32767).round().clamp(-32768, 32767);
 
   int _buttonBit(String name) => switch (name) {
-        'a' => XInputButtons.a,
-        'b' => XInputButtons.b,
-        'x' => XInputButtons.x,
-        'y' => XInputButtons.y,
-        'leftBumper' => XInputButtons.leftShoulder,
-        'rightBumper' => XInputButtons.rightShoulder,
-        'back' => XInputButtons.back,
-        'start' => XInputButtons.start,
-        'leftStick' => XInputButtons.leftStick,
-        'rightStick' => XInputButtons.rightStick,
-        'dpadUp' => XInputButtons.dpadUp,
-        'dpadDown' => XInputButtons.dpadDown,
-        'dpadLeft' => XInputButtons.dpadLeft,
-        'dpadRight' => XInputButtons.dpadRight,
-        _ => 0,
-      };
+    'a' => XInputButtons.a,
+    'b' => XInputButtons.b,
+    'x' => XInputButtons.x,
+    'y' => XInputButtons.y,
+    'leftBumper' => XInputButtons.leftShoulder,
+    'rightBumper' => XInputButtons.rightShoulder,
+    'back' => XInputButtons.back,
+    'start' => XInputButtons.start,
+    'leftStick' => XInputButtons.leftStick,
+    'rightStick' => XInputButtons.rightStick,
+    'dpadUp' => XInputButtons.dpadUp,
+    'dpadDown' => XInputButtons.dpadDown,
+    'dpadLeft' => XInputButtons.dpadLeft,
+    'dpadRight' => XInputButtons.dpadRight,
+    _ => 0,
+  };
 }

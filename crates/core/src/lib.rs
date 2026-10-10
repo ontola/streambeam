@@ -2,6 +2,7 @@
 
 pub mod annex_b;
 pub mod frame_gate;
+pub mod frame_order;
 pub mod obu;
 pub mod reassemble;
 pub mod saved_host;
@@ -14,6 +15,7 @@ pub use annex_b::{
     split_access_units, split_nal_units,
 };
 pub use frame_gate::{Decision, FrameGate};
+pub use frame_order::FrameOrder;
 pub use obu::{
     Av1SeqInfo, access_unit_is_keyframe as av1_access_unit_is_keyframe,
     access_unit_without_redundant_headers as av1_access_unit_without_redundant_headers,

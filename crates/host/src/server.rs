@@ -738,6 +738,14 @@ type SharedEncoderCell = AsyncMutex<Option<CachedEncoder>>;
 const MAX_CLIENT_ENCODE_DIM: u32 = 3840;
 const MAX_CLIENT_FPS: u32 = 120;
 
+/// Deliver the reason before dropping the connection. write_msg only queues
+/// bytes; an immediate close can otherwise turn PairReject into "stream closed".
+async fn finish_rejection(send: &mut quinn::SendStream) {
+    if send.finish().is_ok() {
+        let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
+    }
+}
+
 async fn handle_client(
     incoming: quinn::Incoming,
     store: Arc<Mutex<PairingStore>>,
@@ -772,6 +780,7 @@ async fn handle_client(
             },
         )
         .await?;
+        finish_rejection(&mut send).await;
         return Ok(());
     }
 
@@ -791,6 +800,7 @@ async fn handle_client(
         HelloVerdict::Rejected(reason) => {
             log!("pair rejected for {client_name}: {reason}");
             write_msg(&mut send, &HostMsg::PairReject { reason }).await?;
+            finish_rejection(&mut send).await;
             return Ok(());
         }
         HelloVerdict::NeedsApproval { proof_verified } => {
@@ -810,6 +820,7 @@ async fn handle_client(
                     },
                 )
                 .await?;
+                finish_rejection(&mut send).await;
                 return Ok(());
             }
             let approved =
@@ -823,6 +834,7 @@ async fn handle_client(
                     },
                 )
                 .await?;
+                finish_rejection(&mut send).await;
                 return Ok(());
             }
 
@@ -1314,9 +1326,6 @@ async fn stream_video(
     // ever see 30 — this loop's own pacing interval never moved off the
     // CLI/env default in the first place, silently overriding request.
     let frame_interval = Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
-    let max_datagram = conn
-        .max_datagram_size()
-        .unwrap_or(1200 + streambeam_proto::media::MEDIA_HEADER_LEN);
     let mut frame_id: u16 = 0;
     // Wire `frame_id` → encoder-internal timestamp for each recently sent
     // frame, so a client `InvalidateRefFrames { first, last }` range can be
@@ -1525,6 +1534,9 @@ async fn stream_video(
             );
         }
 
+        // Path MTU can shrink after rotation/Wi-Fi roaming. A size cached at
+        // connect time can permanently stop video while audio keeps playing.
+        let max_datagram = conn.max_datagram_size().ok_or("datagrams unavailable")?;
         let t_shard = std::time::Instant::now();
         let shards = match encode_video_frame(
             frame_id,
@@ -1562,6 +1574,7 @@ async fn stream_video(
         // room to actually drain between chunks.
         const PACE_CHUNK: usize = 8;
         const PACE_DELAY: Duration = Duration::from_micros(200);
+        let mut mtu_changed = false;
         for (i, shard) in shards.into_iter().enumerate() {
             if i > 0 && i % PACE_CHUNK == 0 {
                 tokio::time::sleep(PACE_DELAY).await;
@@ -1570,9 +1583,25 @@ async fn stream_video(
             dg.extend_from_slice(&shard.payload);
             window_datagrams += 1;
             window_bytes += dg.len() as u64;
-            if conn.send_datagram_wait(dg.into()).await.is_err() {
-                return Ok(());
+            match conn.send_datagram_wait(dg.into()).await {
+                Ok(()) => {}
+                Err(quinn::SendDatagramError::TooLarge) => {
+                    log!(
+                        "video path MTU changed; restarting at a keyframe (limit {:?})",
+                        conn.max_datagram_size()
+                    );
+                    mtu_changed = true;
+                    break;
+                }
+                Err(e) => return Err(format!("video datagram send failed: {e}").into()),
             }
+        }
+        if mtu_changed {
+            // Never mix different FEC layouts under one frame ID; abandon this
+            // frame and restart the reference chain using the new path budget.
+            frame_id = frame_id.wrapping_add(1);
+            ctl.request_idr();
+            continue;
         }
         send_us += t_send.elapsed().as_micros();
         window_frame_count += 1;

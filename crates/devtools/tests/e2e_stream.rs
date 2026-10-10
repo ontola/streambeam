@@ -69,3 +69,31 @@ fn known_client_reconnect_without_qr() {
     let _ = host.kill();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn unpaired_client_receives_actionable_rejection() {
+    let dir = std::env::temp_dir().join(format!("streambeam-reject-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut host, payload) = spawn_host(&dir);
+    let info = streambeam_proto::pair::PairInfo::decode_payload(&payload).unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(streambeam_core::connect_known(
+        info.host_pubkey,
+        info.addrs[0],
+        "unpaired tablet",
+        &dir.join("client.pkcs8"),
+        streambeam_core::fallback_video_caps(),
+    ));
+    let _ = host.kill();
+    let _ = host.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    match result {
+        Ok(_) => panic!("an unpaired client must not stream"),
+        Err(error) => assert!(
+            error
+                .to_string()
+                .contains("pair rejected: pairing requires"),
+            "the host reason must survive connection teardown: {error}"
+        ),
+    }
+}

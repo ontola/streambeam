@@ -303,7 +303,6 @@ pub fn send_gamepad_state(
 pub fn init_app() {
     #[cfg(any(target_os = "windows", target_os = "android", target_os = "macos"))]
     streambeam_host::logging::install_panic_hook();
-    flutter_rust_bridge::setup_default_user_utils();
     #[cfg(target_os = "android")]
     {
         android_logger::init_once(
@@ -312,6 +311,9 @@ pub fn init_app() {
                 .with_tag("StreamBeam"),
         );
     }
+    // Install our bounded Android logger first. FRB's default installs Trace,
+    // which logs every QUIC frame and can starve live playback on the phone.
+    flutter_rust_bridge::setup_default_user_utils();
 }
 
 /// Call once at startup with the app documents directory (Android/iOS).

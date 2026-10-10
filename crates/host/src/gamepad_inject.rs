@@ -124,6 +124,8 @@ mod imp {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::warn!("VIIPER add xbox360 pad {pad} failed: {e}");
+                        // VIIPER removes empty buses; also recover after a server restart.
+                        self.bus_id = None;
                         return;
                     }
                 };
@@ -147,6 +149,13 @@ mod imp {
             } else if let Some(slot) = self.pads[idx].take() {
                 if let Some(client) = self.client.as_ref() {
                     let _ = client.bus_device_remove(slot.bus_id, Some(&slot.dev_id));
+                }
+                if self.pads.iter().all(Option::is_none) {
+                    // The final removal can delete the bus on the server.
+                    if let (Some(client), Some(bus_id)) = (self.client.as_ref(), self.bus_id.take())
+                    {
+                        let _ = client.bus_remove(Some(bus_id));
+                    }
                 }
                 tracing::info!("VIIPER virtual Xbox 360 pad {pad} disconnected");
             }

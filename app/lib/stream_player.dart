@@ -1191,9 +1191,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                               ),
                             ),
                           ),
-                        if (showStreamInput && widget.touchControls)
-                          // Android-only EventChannel; no native side elsewhere yet.
-                          GamepadForwarder(enabled: showStreamInput),
+                        if (widget.inputSupported && widget.touchControls)
+                          // Menus pause state, never unplug a controller from a game.
+                          GamepadForwarder(
+                            key: const ValueKey('stream-gamepad'),
+                            enabled: widget.isStreaming && _hasVideo,
+                            paused: !showStreamInput,
+                          ),
                         if (_showStatusOverlay)
                           ColoredBox(
                             color: Colors.black87,
@@ -2216,6 +2220,7 @@ class _StreamMenu extends StatelessWidget {
   final List<PlaybackDisplay> displays;
   final int? selectedDisplayId;
   final ValueChanged<int> onDisplayChanged;
+
   /// One line from the EDR layer, or null when this stream isn't HDR.
   final String? hdrStatus;
   final bool hdrSupported;
@@ -2403,11 +2408,11 @@ class _StreamMenu extends StatelessWidget {
                       ],
                       Padding(
                         padding: EdgeInsets.fromLTRB(
-                            0,
-                            metrics.sectionGap,
-                            0,
-                            metrics.labelGap,
-                          ),
+                          0,
+                          metrics.sectionGap,
+                          0,
+                          metrics.labelGap,
+                        ),
                         child: Text(
                           'Streaming mode',
                           style: theme.textTheme.titleSmall,
@@ -2606,7 +2611,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                         if (hdrStatus != null)
                           ListTile(
-                          leading: const Icon(Icons.hdr_on),
+                            leading: const Icon(Icons.hdr_on),
                             title: Text(
                               hdrStatus!,
                               style: theme.textTheme.bodySmall,
