@@ -1669,8 +1669,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       _rememberStreamSize(stats);
       _refreshSavedHost();
       setState(() {
-        _status =
-            'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
+        _status = null;
         _statusIsError = false;
         _teardownVideo();
       });
@@ -1713,8 +1712,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       if (!_sessionAlive(sessionId)) return;
       _rememberStreamSize(stats);
       setState(() {
-        _status =
-            'Stopped — ${stats.videoFrames} frames, ${stats.audioPackets} audio packets';
+        _status = null;
         _statusIsError = false;
         _teardownVideo();
       });
@@ -1840,7 +1838,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     setState(() {
       _teardownVideo();
       _busy = false;
-      _status = 'Stopped';
+      _status = null;
       _statusIsError = false;
     });
     unawaited(_syncScanner());
@@ -1983,7 +1981,21 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   // in a card behind the dimmed barrier just doubles up.
                   if (_status != null && !showConnectingOverlay) ...[
                     const SizedBox(height: 12),
-                    StatusNotice(message: _status!, isError: false),
+                    Semantics(
+                      liveRegion: true,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Text(
+                          _status!,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 16),
                   // Add a host by QR or pasted code.
