@@ -288,7 +288,9 @@ Future<void> main() async {
   }
   await StreambeamFfi.init();
   final dir = await streambeamDataDir();
-  setAppDataDir(dir: dir);
+  // The bridge schedules this on Rust’s worker pool. Storage must be ready
+  // before the home screen reads pairing data or starts the local host.
+  await setAppDataDir(dir: dir);
   await _applyDeviceName();
   if (Platform.isAndroid) {
     // Keep the system nav (back/home) visible; the fullscreen player goes
@@ -317,7 +319,7 @@ Future<void> _applyDeviceName() async {
     name = Platform.localHostname.replaceFirst(RegExp(r'\.local$'), '');
   }
   if (name != null && name.trim().isNotEmpty) {
-    setDeviceName(name: name.trim());
+    await setDeviceName(name: name.trim());
   }
 }
 
