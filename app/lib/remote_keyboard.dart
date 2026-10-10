@@ -44,32 +44,21 @@ class _RemoteKeyboardState extends State<RemoteKeyboard> {
     'Shift': 0xA0,
     'Win': 0x5B,
   };
-  static final _keys = <String, int>{
+  static const _specialKeys = {
     'Tab': 0x09,
     'Esc': 0x1B,
-    'Enter': 0x0D,
-    'Space': 0x20,
-    'Backspace': 0x08,
-    'Delete': 0x2E,
     '←': 0x25,
     '↑': 0x26,
-    '→': 0x27,
     '↓': 0x28,
-    'Home': 0x24,
-    'End': 0x23,
-    'Page up': 0x21,
-    'Page down': 0x22,
-    for (var i = 0; i < 26; i++) String.fromCharCode(0x41 + i): 0x41 + i,
-    for (var i = 0; i < 10; i++) '$i': 0x30 + i,
-    for (var i = 1; i <= 12; i++) 'F$i': 0x6F + i,
+    '→': 0x27,
+    '⌫': 0x08,
+    'Del': 0x2E,
+    'Enter': 0x0D,
   };
   final _selected = <int>{};
   final _textController = TextEditingController();
   final _focus = FocusNode();
   String _text = '';
-  String _key = 'Tab';
-  String? _sent;
-  bool _typing = false;
 
   @override
   void dispose() {
@@ -78,19 +67,33 @@ class _RemoteKeyboardState extends State<RemoteKeyboard> {
     super.dispose();
   }
 
-  void _send(String label, Iterable<int> modifiers, int key) {
+  void _clearLocalText() {
+    _text = '';
+    _textController.clear();
+  }
+
+  void _send(int key, {Iterable<int>? modifiers, bool shift = false}) {
+    final held = <int>{
+      ...modifiers ?? _modifiers.values.where(_selected.contains),
+      if (shift) 0xA0,
+    };
     if (key == 0x2E &&
-        modifiers.contains(0xA2) &&
-        modifiers.contains(0xA4) &&
+        held.contains(0xA2) &&
+        held.contains(0xA4) &&
         widget.onSecureAttention != null) {
       widget.onSecureAttention!();
     } else {
-      sendRemoteChord(widget.sendKey, modifiers, key);
+      sendRemoteChord(widget.sendKey, held, key);
     }
-    setState(() {
-      _sent = 'Sent $label';
-      _selected.clear();
-    });
+    setState(_selected.clear);
+  }
+
+  void _tapKey(int key, {Iterable<int>? modifiers}) {
+    _send(key, modifiers: modifiers);
+    // Navigation/shortcuts can change the remote selection or focused app.
+    // Old local text is no longer an editable mirror of that remote field.
+    _clearLocalText();
+    _focus.requestFocus();
   }
 
   void _onText(String value) {
@@ -100,185 +103,171 @@ class _RemoteKeyboardState extends State<RemoteKeyboard> {
         _text.codeUnitAt(prefix) == value.codeUnitAt(prefix)) {
       prefix++;
     }
+    final chord = _selected.isNotEmpty;
     for (var i = prefix; i < _text.length; i++) {
-      sendRemoteChord(widget.sendKey, const [], 0x08);
+      _send(0x08);
     }
     for (final rune in value.substring(prefix).runes) {
       final stroke = vkStrokeForCharacter(String.fromCharCode(rune));
-      if (stroke != null) {
-        sendRemoteChord(widget.sendKey, [if (stroke.shift) 0xA0], stroke.vk);
-      }
+      if (stroke == null) continue;
+      // IME capitalization must not turn Ctrl+C into Ctrl+Shift+C. Explicit
+      // Shift remains available as a modifier; ordinary typing keeps its case.
+      final shortcut = _selected.any((vk) => vk != 0xA0);
+      _send(stroke.vk, shift: stroke.shift && !shortcut);
     }
-    _text = value;
+    if (chord) {
+      _clearLocalText();
+    } else {
+      _text = value;
+    }
+  }
+
+  Widget _key(
+    String label,
+    VoidCallback onTap, {
+    bool selected = false,
+    String? tooltip,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    final button = TextButton(
+      style: TextButton.styleFrom(
+        minimumSize: const Size(44, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        foregroundColor: selected ? colors.onPrimary : colors.onSurface,
+        backgroundColor: selected ? colors.primary : Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      onPressed: onTap,
+      child: Text(label),
+    );
+    return Semantics(
+      selected: selected,
+      child: tooltip == null
+          ? button
+          : Tooltip(message: tooltip, child: button),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final chord = [
-      for (final entry in _modifiers.entries)
-        if (_selected.contains(entry.value)) entry.key,
-      _key,
-    ].join('+');
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      elevation: 8,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: SafeArea(
-        top: false,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+    final selected = _modifiers.entries
+        .where((m) => _selected.contains(m.value))
+        .map((m) => m.key)
+        .join('+');
+    return TextFieldTapRegion(
+      child: Material(
+        color: Theme.of(context).colorScheme.surface,
+        elevation: 8,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+        child: SafeArea(
+          top: false,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
+                    const SizedBox(width: 12),
                     Expanded(
-                      child: TextButton(
-                        onPressed: () {
-                          _focus.unfocus();
-                          setState(() => _typing = false);
-                        },
-                        child: Text(
-                          'Shortcuts',
-                          style: TextStyle(
-                            fontWeight: !_typing
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
+                      child: TextField(
+                        controller: _textController,
+                        focusNode: _focus,
+                        autofocus: true,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        textCapitalization: TextCapitalization.none,
+                        smartDashesType: SmartDashesType.disabled,
+                        smartQuotesType: SmartQuotesType.disabled,
+                        textInputAction: TextInputAction.done,
+                        decoration: InputDecoration(
+                          hintText: selected.isEmpty
+                              ? 'Type on PC'
+                              : '$selected + next key',
+                          border: InputBorder.none,
+                          isDense: true,
                         ),
+                        onChanged: _onText,
+                        onEditingComplete: () {},
+                        onSubmitted: (_) => _tapKey(0x0D),
                       ),
                     ),
-                    Expanded(
-                      child: TextButton(
-                        onPressed: () {
-                          setState(() => _typing = true);
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (mounted) _focus.requestFocus();
-                          });
-                        },
-                        child: Text(
-                          'Type text',
-                          style: TextStyle(
-                            fontWeight: _typing
-                                ? FontWeight.bold
-                                : FontWeight.normal,
+                    PopupMenuButton<(List<int>, int)>(
+                      tooltip: 'Quick shortcuts',
+                      requestFocus: false,
+                      icon: const Icon(Icons.bolt),
+                      onSelected: (value) =>
+                          _tapKey(value.$2, modifiers: value.$1),
+                      itemBuilder: (_) => [
+                        for (final item in const [
+                          ('Copy', 'Ctrl+C', [0xA2], 0x43),
+                          ('Paste', 'Ctrl+V', [0xA2], 0x56),
+                          ('Select all', 'Ctrl+A', [0xA2], 0x41),
+                          ('Undo', 'Ctrl+Z', [0xA2], 0x5A),
+                          (
+                            'Task manager',
+                            'Ctrl+Shift+Esc',
+                            [0xA2, 0xA0],
+                            0x1B,
                           ),
-                        ),
-                      ),
+                          ('Show desktop', 'Win+D', [0x5B], 0x44),
+                        ])
+                          PopupMenuItem(
+                            value: (item.$3, item.$4),
+                            child: Text('${item.$1}  ·  ${item.$2}'),
+                          ),
+                      ],
+                    ),
+                    PopupMenuButton<int>(
+                      tooltip: 'More keys',
+                      requestFocus: false,
+                      icon: const Icon(Icons.more_horiz),
+                      onSelected: _tapKey,
+                      itemBuilder: (_) => [
+                        for (final key in const {
+                          'Home': 0x24,
+                          'End': 0x23,
+                          'Page up': 0x21,
+                          'Page down': 0x22,
+                        }.entries)
+                          PopupMenuItem(value: key.value, child: Text(key.key)),
+                        for (var i = 1; i <= 12; i++)
+                          PopupMenuItem(value: 0x6F + i, child: Text('F$i')),
+                      ],
                     ),
                     IconButton(
                       tooltip: 'Close keyboard',
                       onPressed: widget.onClose,
-                      icon: const Icon(Icons.close),
+                      icon: const Icon(Icons.keyboard_hide_outlined),
                     ),
                   ],
                 ),
-                if (_typing)
-                  TextField(
-                    controller: _textController,
-                    focusNode: _focus,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: const InputDecoration(
-                      hintText: 'Type to send keys to PC…',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onChanged: _onText,
-                    onSubmitted: (_) {
-                      sendRemoteChord(widget.sendKey, const [], 0x0D);
-                      widget.onClose();
-                    },
-                  )
-                else ...[
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      spacing: 8,
-                      children: [
-                        for (final shortcut in const [
-                          ('Alt+Tab', [0xA4], 0x09),
-                          ('Ctrl+C', [0xA2], 0x43),
-                          ('Ctrl+V', [0xA2], 0x56),
-                          ('Ctrl+Z', [0xA2], 0x5A),
-                          ('Ctrl+Shift+Esc', [0xA2, 0xA0], 0x1B),
-                          ('Win+D', [0x5B], 0x44),
-                        ])
-                          ActionChip(
-                            label: Text(shortcut.$1),
-                            onPressed: () =>
-                                _send(shortcut.$1, shortcut.$2, shortcut.$3),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                  child: Row(
                     children: [
                       for (final modifier in _modifiers.entries)
-                        FilterChip(
-                          label: Text(modifier.key),
-                          selected: _selected.contains(modifier.value),
-                          onSelected: (on) => setState(() {
-                            on
-                                ? _selected.add(modifier.value)
-                                : _selected.remove(modifier.value);
-                            _sent = null;
-                          }),
+                        _key(modifier.key, () {
+                          _clearLocalText();
+                          setState(() {
+                            if (!_selected.remove(modifier.value)) {
+                              _selected.add(modifier.value);
+                            }
+                          });
+                          _focus.requestFocus();
+                        }, selected: _selected.contains(modifier.value)),
+                      const SizedBox(width: 6),
+                      _key('Alt+Tab', () => _tapKey(0x09, modifiers: [0xA4])),
+                      for (final key in _specialKeys.entries)
+                        _key(
+                          key.key,
+                          () => _tapKey(key.value),
+                          tooltip: key.key == '⌫' ? 'Backspace' : null,
                         ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _key,
-                          isExpanded: true,
-                          menuMaxHeight: 280,
-                          decoration: const InputDecoration(
-                            labelText: 'Key',
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          items: [
-                            for (final key in _keys.keys)
-                              DropdownMenuItem(value: key, child: Text(key)),
-                          ],
-                          onChanged: (key) => setState(() {
-                            _key = key!;
-                            _sent = null;
-                          }),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton(
-                        onPressed: () => _send(
-                          chord,
-                          _modifiers.values.where(_selected.contains).toList(),
-                          _keys[_key]!,
-                        ),
-                        child: const Text('Send'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Semantics(
-                    liveRegion: true,
-                    child: Text(
-                      _sent ??
-                          (chord == 'Ctrl+Alt+Delete' &&
-                                  widget.onSecureAttention != null
-                              ? '$chord · requires host secure-desktop service'
-                              : '$chord · modifiers release after sending'),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ],
+                ),
               ],
             ),
           ),

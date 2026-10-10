@@ -1369,17 +1369,22 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         if (_keyboardOpen) ...[
                           GestureDetector(
                             onTap: _closeKeyboard,
-                            child: Container(color: Colors.black54),
+                            child: Container(color: Colors.transparent),
                           ),
-                          Align(
-                            alignment: Alignment.bottomCenter,
-                            child: RemoteKeyboard(
-                              sendKey: sendKey,
-                              onClose: _closeKeyboard,
-                              onSecureAttention:
-                                  widget.hostPlatform == 'windows'
-                                  ? sendSecureAttention
-                                  : null,
+                          Padding(
+                            padding: EdgeInsets.only(
+                              bottom: MediaQuery.viewInsetsOf(context).bottom,
+                            ),
+                            child: Align(
+                              alignment: Alignment.bottomCenter,
+                              child: RemoteKeyboard(
+                                sendKey: sendKey,
+                                onClose: _closeKeyboard,
+                                onSecureAttention:
+                                    widget.hostPlatform == 'windows'
+                                    ? sendSecureAttention
+                                    : null,
+                              ),
                             ),
                           ),
                         ],
