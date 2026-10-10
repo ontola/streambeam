@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="StreamBeam">
+  <!-- Two flowing bands form an S. Flat fills keep the mark crisp at small sizes. -->
+  <g transform="translate(-258 -68) scale(.82)">
+    <path fill="#6366F1" d="M772 152V222C772 248 762 259 738 269L560 337C536 346 534 356 554 369L676 430L621 464C608 473 595 474 580 466L510 427C462 402 440 379 447 342C454 298 486 270 541 247L772 152Z"/>
+    <path fill="#22D3EE" d="M654 322C668 316 679 318 693 326L751 361C800 389 819 416 805 456C792 495 765 519 723 536L482 635V575C482 550 491 539 513 530L693 458C717 448 719 438 699 426L579 357L654 322Z"/>
+  </g>
+</svg>

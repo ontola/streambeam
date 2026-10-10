@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" type="image/svg+xml" href="/assets/streambeam-logo.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StreamBeam — your PC, on your phone, one scan</title>
 <meta name="description" content="StreamBeam beams your Windows desktop and games to your phone over your own Wi-Fi. Scan one QR code and you're playing. Open source, no accounts, no cloud.">
@@ -64,7 +65,7 @@
     display: flex; align-items: center; gap: 10px;
     font-weight: 700; letter-spacing: -0.01em; color: var(--ink); font-size: 1.05rem;
   }
-  .brand svg { display: block; }
+  .brand img { display: block; }
   nav.site { display: flex; gap: 22px; align-items: center; font-size: 0.92rem; }
   nav.site a { color: var(--muted); }
   nav.site a:hover { color: var(--ink); text-decoration: none; }
@@ -193,11 +194,7 @@
 <div class="wrap">
   <header class="site">
     <span class="brand" aria-label="StreamBeam">
-      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
-        <rect x="1.5" y="4" width="14" height="10" rx="2" fill="none" stroke="var(--beam)" stroke-width="2"/>
-        <rect x="16" y="12" width="8.5" height="13" rx="2" fill="var(--beam)"/>
-        <path d="M8 17 L15 21" stroke="var(--beam)" stroke-width="2" stroke-dasharray="2.5 3" stroke-linecap="round"/>
-      </svg>
+      <img src="/assets/streambeam-logo.svg" width="28" height="28" alt="">
       StreamBeam
     </span>
     <nav class="site">
