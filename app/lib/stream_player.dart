@@ -11,6 +11,7 @@ import 'hdr_status.dart';
 import 'gamepad_forwarder.dart';
 import 'src/rust/api.dart';
 import 'vk_keys.dart';
+import 'touch_cursor.dart';
 
 /// How single-finger drag maps to the remote mouse.
 enum PointerMode {
@@ -1125,9 +1126,10 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                         // is rendering can invalidate its Surface and abort
                         // the decoder with UNKNOWN_ERROR.
                         if (widget.inputSupported)
-                          _StreamInputLayer(
+                          StreamInputLayer(
                             key: const ValueKey('stream-input'),
                             videoRect: videoRect,
+                            transformController: _transformController,
                             videoSize: videoSize,
                             refWidth: _decodedWidth > 0
                                 ? _decodedWidth
@@ -1463,10 +1465,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
 /// Tracks pointers and maps single-finger touch to PC mouse when [mouseControlEnabled].
 /// Two or more fingers pass through to [InteractiveViewer] for pinch/pan (no mouse).
-class _StreamInputLayer extends StatefulWidget {
-  const _StreamInputLayer({
+@visibleForTesting
+class StreamInputLayer extends StatefulWidget {
+  const StreamInputLayer({
     super.key,
     required this.videoRect,
+    required this.transformController,
     required this.videoSize,
     required this.refWidth,
     required this.refHeight,
@@ -1480,6 +1484,7 @@ class _StreamInputLayer extends StatefulWidget {
   });
 
   final Rect videoRect;
+  final TransformationController transformController;
   final Size videoSize;
   final int refWidth;
   final int refHeight;
@@ -1493,10 +1498,10 @@ class _StreamInputLayer extends StatefulWidget {
   final Widget child;
 
   @override
-  State<_StreamInputLayer> createState() => _StreamInputLayerState();
+  State<StreamInputLayer> createState() => _StreamInputLayerState();
 }
 
-class _StreamInputLayerState extends State<_StreamInputLayer> {
+class _StreamInputLayerState extends State<StreamInputLayer> {
   @override
   void initState() {
     super.initState();
@@ -1507,6 +1512,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   static const _pinchSlop = 16.0;
   static const _tapTimeout = Duration(milliseconds: 280);
   static const _relFlushInterval = Duration(milliseconds: 8);
+
+  final _touchCursor = TouchCursor();
 
   final _activePointers = <int>{};
   final _pointers = <int, Offset>{};
@@ -1543,7 +1550,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       widget.multiTouchSession || _pendingTwoFinger || _pointers.length >= 2;
 
   @override
-  void didUpdateWidget(_StreamInputLayer oldWidget) {
+  void didUpdateWidget(StreamInputLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.mode != widget.mode) {
       _resetMouseState();
@@ -1564,6 +1571,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (_mouseButtons != 0) _syncMouseButtons(0);
     // Never leave the pointer locked to a stream that has gone away.
     if (_mouseCaptured) unawaited(_setMouseCaptured(false));
+    _touchCursor.dispose();
     super.dispose();
   }
 
@@ -1592,6 +1600,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   Offset? _videoLocal(Offset stackLocal, {bool clamp = false}) {
+    stackLocal = widget.transformController.toScene(stackLocal);
     if (widget.videoRect.contains(stackLocal)) {
       return stackLocal - widget.videoRect.topLeft;
     }
@@ -1617,6 +1626,26 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _refH,
     );
     sendMouseAbs(x: x, y: y, refW: _refW, refH: _refH);
+  }
+
+  void _sendTouchCursor(Offset normalized) {
+    final position = _touchCursor.place(normalized);
+    _sendAbs(
+      Offset(
+        position.dx * widget.videoSize.width,
+        position.dy * widget.videoSize.height,
+      ),
+    );
+  }
+
+  void _sendDirectTouch(Offset viewportPosition) {
+    final local = _videoLocal(viewportPosition, clamp: true)!;
+    _sendTouchCursor(
+      Offset(
+        local.dx / widget.videoSize.width,
+        local.dy / widget.videoSize.height,
+      ),
+    );
   }
 
   int _touchIdFor(int pointer) {
@@ -1652,8 +1681,9 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   }
 
   void _sendRel(Offset delta) {
-    final scaleX = _refW / widget.videoSize.width;
-    final scaleY = _refH / widget.videoSize.height;
+    final zoom = widget.transformController.value.getMaxScaleOnAxis();
+    final scaleX = _refW / widget.videoSize.width / zoom;
+    final scaleY = _refH / widget.videoSize.height / zoom;
     _relAccumX += delta.dx * scaleX;
     _relAccumY += delta.dy * scaleY;
     _scheduleRelFlush();
@@ -1714,7 +1744,8 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (dx == 0 && dy == 0) return;
     _relAccumX -= dx;
     _relAccumY -= dy;
-    sendMouseMove(dx: dx, dy: dy);
+    final position = _touchCursor.move(Offset(dx / _refW, dy / _refH));
+    _sendTouchCursor(position);
     if (_relAccumX.round() != 0 || _relAccumY.round() != 0) {
       _scheduleRelFlush();
     }
@@ -1761,6 +1792,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     if (!widget.mouseControlEnabled) return;
     final local = _videoLocal(event.localPosition);
     if (local == null) return; // clicks on the letterbox stay local
+    _touchCursor.hide();
     _sendAbs(local);
     _syncMouseButtons(event.buttons);
   }
@@ -1778,7 +1810,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     }
     // Mid-drag the pointer may leave the video; clamp so drags keep tracking.
     final local = _videoLocal(event.localPosition, clamp: _mouseButtons != 0);
-    if (local != null) _sendAbs(local);
+    if (local != null) {
+      _touchCursor.hide();
+      _sendAbs(local);
+    }
     _syncMouseButtons(event.buttons);
   }
 
@@ -1789,7 +1824,10 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
   void _onPointerHover(PointerHoverEvent event) {
     if (!_isMouse(event) || !widget.mouseControlEnabled) return;
     final local = _videoLocal(event.localPosition);
-    if (local != null) _sendAbs(local);
+    if (local != null) {
+      _touchCursor.hide();
+      _sendAbs(local);
+    }
   }
 
   /// Convert pixel deltas to wheel units (±120 per notch, PROTOCOL.md) and
@@ -1835,7 +1873,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       if (pos == null) return;
       _touchDragActive = true;
       if (widget.mode == PointerMode.direct) {
-        _sendAbs(_videoLocal(pos, clamp: true)!);
+        _sendDirectTouch(pos);
       }
       sendMouseButton(button: 0, down: true);
       HapticFeedback.mediumImpact();
@@ -1935,7 +1973,11 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
     _relAccumX = 0;
     _relAccumY = 0;
     if (widget.mode == PointerMode.direct) {
-      _sendAbs(_videoLocal(local, clamp: true)!);
+      _sendDirectTouch(local);
+    } else {
+      // Establish the same host position before any tap or drag, including
+      // after another application has repositioned its pointer.
+      _sendTouchCursor(_touchCursor.value ?? const Offset(0.5, 0.5));
     }
     _startLongPressTimer();
   }
@@ -1979,7 +2021,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       _longPressTimer = null;
     }
     if (widget.mode == PointerMode.direct) {
-      _sendAbs(_videoLocal(tracked, clamp: true)!);
+      _sendDirectTouch(tracked);
     } else {
       final last = _lastMovePos;
       if (last != null) {
@@ -2030,7 +2072,7 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
           travel < _tapSlop &&
           DateTime.now().difference(downAt) < _tapTimeout) {
         if (widget.mode == PointerMode.direct) {
-          _sendAbs(_videoLocal(origin, clamp: true)!);
+          _sendDirectTouch(origin);
         }
         sendMouseClick(button: 0);
       }
@@ -2080,16 +2122,45 @@ class _StreamInputLayerState extends State<_StreamInputLayer> {
       onPointerHover: _onPointerHover,
       onPointerSignal: _onPointerSignal,
       onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
-      // Client-side cursor: the host's DXGI capture never composites the
-      // pointer into the stream, and we send absolute positions — so the
-      // local OS cursor *is* the remote cursor (native-res, zero-latency).
-      // Don't hide it.
+      // Real mice keep their OS cursor. Touch has no OS cursor, so draw its
+      // absolute position separately above the native video surface.
       child: widget.child,
     );
     return Stack(
       fit: StackFit.expand,
       children: [
         input,
+        if (widget.mouseControlEnabled && !widget.hostAcceptsTouch)
+          IgnorePointer(
+            child: AnimatedBuilder(
+              animation: widget.transformController,
+              builder: (context, child) => ValueListenableBuilder<Offset?>(
+                valueListenable: _touchCursor,
+                builder: (context, position, child) {
+                  if (position == null) return const SizedBox.shrink();
+                  final scenePosition =
+                      widget.videoRect.topLeft +
+                      Offset(
+                        position.dx * widget.videoSize.width,
+                        position.dy * widget.videoSize.height,
+                      );
+                  final viewportPosition = MatrixUtils.transformPoint(
+                    widget.transformController.value,
+                    scenePosition,
+                  );
+                  return Stack(
+                    children: [
+                      Positioned(
+                        left: viewportPosition.dx - 1,
+                        top: viewportPosition.dy - 1,
+                        child: const TouchCursorView(),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
         if (Platform.isMacOS && widget.mouseControlEnabled)
           Positioned(
             bottom: 16,
