@@ -4,6 +4,11 @@ Low-latency screen streaming (Apollo/Moonlight-class) with a radically simpler U
 the host shows a QR, the other device scans it — or just taps it on the LAN — and
 you're watching. No web UI, no browser certificate warnings, no PIN dance.
 
+**[Download the Android preview (v0.1.0)](https://github.com/joepio/streambeam/releases/tag/v0.1.0).**
+ARM64, Android 8 or newer. Open the APK on your phone and install it over the
+existing preview; wireless debugging is not required. Desktop packages are not
+included yet. [Release process](docs/RELEASING.md) · [CI](https://github.com/joepio/streambeam/actions/workflows/ci.yml).
+
 **Symmetric apps.** One Flutter UI + one Rust core per platform. Every build can
 **Watch** (view another device's screen); platforms that can capture also **Beam**
 (send their own screen). Live per-platform status is in
