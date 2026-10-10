@@ -626,20 +626,18 @@ impl Pipeline {
         }
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
-        // Wait at most one frame interval for a *changed* desktop frame —
-        // the timeout path below re-encodes the previous frame, so this
-        // bound sets the encode cadence on a static screen. The old flat
-        // 100ms collapsed an idle desktop to ~10fps while NVENC's CBR
-        // controller still budgeted bytes for the negotiated fps (e.g.
-        // 120), so the frame that finally carried a change (a cursor move)
-        // got ~1/12th of its real byte budget and was visibly crushed —
-        // near-black gradients pumping between grey and black as quality
-        // then crept back on the static frames. Encoding duplicates at the
-        // real cadence keeps the rate controller's per-frame budget honest
-        // and lets VBV headroom accumulate for the frames that matter
-        // (duplicates cost a few hundred bytes each), and makes
-        // `gop_len = fps*3` actually mean ~3s of wall clock.
-        let timeout_ms = (1000 / self.fps.max(1)).max(1);
+        // stream_video already paces requests to the negotiated frame slots.
+        // Once a texture exists, waiting another full interval here adds
+        // capture delay on top of encode/send time (120fps measured ~89fps
+        // on Mancave). Sample the newest available texture at this slot.
+        // Re-encoding duplicates at the negotiated cadence keeps NVENC's
+        // per-frame CBR budget and wall-clock GOP interval consistent.
+        // Keep the initial bounded wait so startup can acquire real pixels.
+        let timeout_ms = if self.have_last {
+            0
+        } else {
+            (1000 / self.fps.max(1)).max(1)
+        };
         match self
             .duplication
             .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
@@ -849,9 +847,7 @@ impl Pipeline {
                         + 0.0593 * half_to_f32(*px.add(2))
                 } else {
                     let px = row.add(x as usize * 4);
-                    (0.2627 * *px.add(2) as f32
-                        + 0.6780 * *px.add(1) as f32
-                        + 0.0593 * *px as f32)
+                    (0.2627 * *px.add(2) as f32 + 0.6780 * *px.add(1) as f32 + 0.0593 * *px as f32)
                         / 255.0
                 };
                 if value > peak {

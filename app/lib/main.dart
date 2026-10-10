@@ -1342,7 +1342,14 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         }
       });
     }
-    await sub?.cancel();
+    try {
+      await sub?.cancel();
+    } catch (e) {
+      // Closing the QUIC connection can make FRB's stream cancellation
+      // finish with `closed`. Teardown must still release the decoder and
+      // return to the caller so a quality change can reconnect.
+      debugPrint('StreamBeam: stream closed during cancellation: $e');
+    }
     try {
       await _desktopVideoChannel.invokeMethod('dispose');
     } catch (_) {}
