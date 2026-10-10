@@ -19,6 +19,15 @@ class _Toolchain {
 }
 
 class Rustup {
+  static String activeToolchain(String manifestDir) =>
+      runCommand('rustup', ['show', 'active-toolchain'],
+              workingDirectory: manifestDir)
+          .stdout
+          .toString()
+          .trim()
+          .split(' ')
+          .first;
+
   List<String>? installedTargets(String toolchain) {
     final targets = _installedTargets(toolchain);
     return targets != null ? List.unmodifiable(targets) : null;
@@ -65,8 +74,9 @@ class Rustup {
     final res = runCommand("rustup", ['toolchain', 'list']);
 
     // To list all non-custom toolchains, we need to filter out lines that
-    // don't start with "stable", "beta", or "nightly".
-    Pattern nonCustom = RegExp(r"^(stable|beta|nightly)");
+    // are not channels or numbered releases (rust-toolchain.toml pins).
+    Pattern nonCustom =
+        RegExp(r"^(stable|beta|nightly|[0-9]+\.[0-9]+\.[0-9]+)");
     final lines = res.stdout
         .toString()
         .split('\n')

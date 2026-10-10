@@ -133,7 +133,10 @@ class RustBuilder {
   CargoBuildOptions? get _buildOptions =>
       environment.crateOptions.cargo[environment.configuration];
 
-  String get _toolchain => _buildOptions?.toolchain.name ?? 'stable';
+  // Respect rust-toolchain.toml (and RUSTUP_TOOLCHAIN) instead of silently
+  // switching a pinned project to whichever stable happens to be installed.
+  late final String _toolchain = _buildOptions?.toolchain.name ??
+      Rustup.activeToolchain(environment.manifestDir);
 
   /// Returns the path of directory containing build artifacts.
   Future<String> build() async {
