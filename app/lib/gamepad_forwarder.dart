@@ -28,6 +28,7 @@ class GamepadForwarder extends StatefulWidget {
   const GamepadForwarder({
     required this.enabled,
     this.paused = false,
+    this.onActivity,
     super.key,
   });
 
@@ -35,6 +36,9 @@ class GamepadForwarder extends StatefulWidget {
 
   /// Keep the virtual controller attached while menus temporarily own input.
   final bool paused;
+
+  /// Deliberate native input only, excluding heartbeats and idle stick drift.
+  final VoidCallback? onActivity;
 
   @override
   State<GamepadForwarder> createState() => _GamepadForwarderState();
@@ -110,6 +114,7 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
         if (name == null) return;
         _ensureConnected(gamepadId);
         _states[gamepadId]?.setButton(name, value >= 0.5);
+        if (!widget.paused && value >= 0.5) widget.onActivity?.call();
         _sendState(gamepadId);
       case 'axis':
         final name = raw['name'] as String?;
@@ -117,6 +122,7 @@ class _GamepadForwarderState extends State<GamepadForwarder> {
         if (name == null) return;
         _ensureConnected(gamepadId);
         _states[gamepadId]?.setAxis(name, value);
+        if (!widget.paused && value.abs() > 0.18) widget.onActivity?.call();
         _sendState(gamepadId);
     }
   }

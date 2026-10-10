@@ -301,6 +301,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   double _edgeGrabFor(double screenW) => (screenW * 0.14).clamp(64.0, 96.0);
 
   final _transformController = TransformationController();
+  final _controllerActivity = ValueNotifier<int>(0);
   late final AnimationController _hintController;
   late final Animation<double> _hintPeekAnim;
 
@@ -714,6 +715,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       );
     }
     _transformController.dispose();
+    _controllerActivity.dispose();
     _liveDiagListenable.dispose();
     _keyboardFocus.dispose();
     _keyboardCtrl.dispose();
@@ -1130,6 +1132,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             key: const ValueKey('stream-input'),
                             videoRect: videoRect,
                             transformController: _transformController,
+                            controllerActivity: _controllerActivity,
                             videoSize: videoSize,
                             refWidth: _decodedWidth > 0
                                 ? _decodedWidth
@@ -1205,6 +1208,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             key: const ValueKey('stream-gamepad'),
                             enabled: widget.isStreaming && _hasVideo,
                             paused: !showStreamInput,
+                            onActivity: () => _controllerActivity.value++,
                           ),
                         if (_showStatusOverlay)
                           ColoredBox(
@@ -1471,6 +1475,7 @@ class StreamInputLayer extends StatefulWidget {
     super.key,
     required this.videoRect,
     required this.transformController,
+    this.controllerActivity,
     required this.videoSize,
     required this.refWidth,
     required this.refHeight,
@@ -1485,6 +1490,7 @@ class StreamInputLayer extends StatefulWidget {
 
   final Rect videoRect;
   final TransformationController transformController;
+  final Listenable? controllerActivity;
   final Size videoSize;
   final int refWidth;
   final int refHeight;
@@ -1506,6 +1512,7 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
   void initState() {
     super.initState();
     _listenForMouseDeltas();
+    widget.controllerActivity?.addListener(_touchCursor.hide);
   }
 
   static const _tapSlop = 12.0;
@@ -1552,6 +1559,10 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
   @override
   void didUpdateWidget(StreamInputLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controllerActivity != widget.controllerActivity) {
+      oldWidget.controllerActivity?.removeListener(_touchCursor.hide);
+      widget.controllerActivity?.addListener(_touchCursor.hide);
+    }
     if (oldWidget.mode != widget.mode) {
       _resetMouseState();
     }
@@ -1571,6 +1582,7 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
     if (_mouseButtons != 0) _syncMouseButtons(0);
     // Never leave the pointer locked to a stream that has gone away.
     if (_mouseCaptured) unawaited(_setMouseCaptured(false));
+    widget.controllerActivity?.removeListener(_touchCursor.hide);
     _touchCursor.dispose();
     super.dispose();
   }
@@ -1585,6 +1597,7 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
     _cancelRelFlush();
     _flushRel();
     _activePointers.clear();
+    _touchCursor.setContactActive(false);
     _pointers.clear();
     _touchIds.clear();
     _singleOrigin = null;
@@ -1931,6 +1944,7 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
 
   void _removePointer(int pointer) {
     _activePointers.remove(pointer);
+    _touchCursor.setContactActive(_activePointers.isNotEmpty);
     _pointers.remove(pointer);
     _touchIds.remove(pointer);
   }
@@ -1966,6 +1980,7 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
 
     if (!_canSendMouse) return;
 
+    _touchCursor.setContactActive(true);
     _singleOrigin = local;
     _singleDownAt = DateTime.now();
     _singleTravel = 0;
@@ -1977,7 +1992,7 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
     } else {
       // Establish the same host position before any tap or drag, including
       // after another application has repositioned its pointer.
-      _sendTouchCursor(_touchCursor.value ?? const Offset(0.5, 0.5));
+      _sendTouchCursor(_touchCursor.position);
     }
     _startLongPressTimer();
   }
@@ -2137,12 +2152,13 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
               builder: (context, child) => ValueListenableBuilder<Offset?>(
                 valueListenable: _touchCursor,
                 builder: (context, position, child) {
-                  if (position == null) return const SizedBox.shrink();
+                  if (!_touchCursor.hasPosition) return const SizedBox.shrink();
+                  final cursorPosition = _touchCursor.position;
                   final scenePosition =
                       widget.videoRect.topLeft +
                       Offset(
-                        position.dx * widget.videoSize.width,
-                        position.dy * widget.videoSize.height,
+                        cursorPosition.dx * widget.videoSize.width,
+                        cursorPosition.dy * widget.videoSize.height,
                       );
                   final viewportPosition = MatrixUtils.transformPoint(
                     widget.transformController.value,
@@ -2153,7 +2169,13 @@ class _StreamInputLayerState extends State<StreamInputLayer> {
                       Positioned(
                         left: viewportPosition.dx - 1,
                         top: viewportPosition.dy - 1,
-                        child: const TouchCursorView(),
+                        child: AnimatedOpacity(
+                          opacity: position == null ? 0 : 1,
+                          duration: position == null
+                              ? const Duration(milliseconds: 180)
+                              : Duration.zero,
+                          child: const TouchCursorView(),
+                        ),
                       ),
                     ],
                   );

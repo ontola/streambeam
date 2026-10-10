@@ -47,18 +47,40 @@ void main() {
       await tester.pump();
     }
 
+    var activity = 0;
     Widget view(bool paused) => Directionality(
       textDirection: TextDirection.ltr,
-      child: GamepadForwarder(enabled: true, paused: paused),
+      child: GamepadForwarder(
+        enabled: true,
+        paused: paused,
+        onActivity: () => activity++,
+      ),
     );
     await tester.pumpWidget(view(false));
     await emit({'kind': 'connected', 'gamepadId': '10'});
+    await tester.pump(const Duration(milliseconds: 150));
+    await emit({
+      'kind': 'axis',
+      'gamepadId': '10',
+      'name': 'leftStickX',
+      'value': 0.05,
+    });
+    expect(activity, 0); // connection, heartbeats and stick drift stay quiet
+    await emit({
+      'kind': 'axis',
+      'gamepadId': '10',
+      'name': 'leftStickX',
+      'value': 0.6,
+    });
+    expect(activity, 1);
     await emit({'kind': 'button', 'gamepadId': '10', 'name': 'a', 'value': 1});
     expect(api.buttons.last, XInputButtons.a);
+    expect(activity, 2);
     await tester.pumpWidget(view(true));
     expect(api.buttons.last, 0);
     // Releases during the menu must still update local state.
     await emit({'kind': 'button', 'gamepadId': '10', 'name': 'a', 'value': 0});
+    expect(activity, 2);
     await tester.pumpWidget(view(false));
     expect(api.buttons.last, 0);
     await emit({'kind': 'button', 'gamepadId': '10', 'name': 'b', 'value': 1});
