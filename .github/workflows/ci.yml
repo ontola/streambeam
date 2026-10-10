@@ -3,88 +3,142 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  FLUTTER_VERSION: '3.44.7'
 
 jobs:
-  # Blocking: both Cargo workspaces (root, and app/rust — its own separate
-  # workspace, see the windows-check job's neighbor comment) are clean as of
-  # 2026-07-05. Formatting is pure whitespace, so this staying green is a
-  # cheap, high-confidence gate — a diff can't silently reintroduce a large
-  # unrelated reformat without this job catching it immediately.
   fmt:
-    name: cargo fmt --check
+    name: Rust formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt
-      - run: cargo fmt --check
-      - working-directory: app/rust
-        run: cargo fmt --check
+      - run: cargo fmt --all --check
+      - run: cargo fmt --manifest-path app/rust/Cargo.toml --all --check
 
-  # cargo test --workspace on Linux. streambeam-host builds and tests here
-  # too: its Windows-only capture/encode paths sit behind
-  # `[target.'cfg(windows)'.dependencies]` and mock impls of the
-  # capture/encode/inject traits, by design (see crates/host/Cargo.toml) —
-  # see the `windows-check` job below for the parts this can't cover.
   rust-test:
-    name: cargo test (ubuntu)
+    name: Rust tests and Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-
-  # streambeam-host's real Windows FFI (Direct3D/DXGI/Media Foundation/NVENC
-  # in crates/host/src/{capture,nvenc,scale}.rs) can only be type-checked on
-  # an actual Windows target — a native windows-latest runner, not the WSL
-  # bridge used for interactive dev-machine work. `cargo check`, not
-  # `build`/`test`: exercising the real capture/encode path needs a GPU and
-  # a live desktop session, which this runner doesn't have.
-  windows-check:
-    name: cargo check -p streambeam-host (windows)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p streambeam-host
-
-  # Advisory only: the workspace has real pre-existing clippy warnings in
-  # code this job doesn't own the cleanup of, so it doesn't gate merges —
-  # `continue-on-error` surfaces new warnings in the job summary without
-  # turning an unrelated PR red for pre-existing debt.
-  clippy:
-    name: cargo clippy (advisory)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace --locked
+      # Warnings remain visible; compilation failures are blocking.
+      - run: cargo clippy --workspace --all-targets --locked
 
-  # Static analysis only (per CLAUDE.md's documented verify step) — building
-  # the app needs the Android/Windows/macOS toolchains this runner doesn't
-  # have. Generated FRB bindings (app/rust/src/frb_generated.rs and the Dart
-  # side) are committed, not regenerated here.
-  flutter-analyze:
-    name: flutter analyze
+  windows-check:
+    name: Windows host and app bridge
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            app/rust
+      - run: cargo check --workspace --locked
+      - run: cargo check --manifest-path app/rust/Cargo.toml --locked
+
+  macos-check:
+    name: macOS host and app bridge
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            app/rust
+      - run: cargo check --workspace --locked
+      - run: cargo check --manifest-path app/rust/Cargo.toml --locked
+
+  flutter-test:
+    name: Flutter analysis and tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-      - working-directory: app
-        run: flutter pub get
-      - working-directory: app
-        run: flutter analyze --no-pub
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+
+  android-release:
+    name: Android release and scanner regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/rust
+      - name: Check tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version: \([^+]*\).*/\1/p' app/pubspec.yaml)
+          test "$GITHUB_REF_NAME" = "v$version"
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - run: flutter build apk --release --target-platform android-arm64
+        working-directory: app
+      - run: python3 scripts/check-android-scanner.py
+      # This artifact uses the runner's development signer. Published APKs are
+      # signed locally with the persistent preview key (see docs/RELEASING.md).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-ci
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-r8-reports
+          path: app/build/app/outputs/mapping/release/
+          retention-days: 14

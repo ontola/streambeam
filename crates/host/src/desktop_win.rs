@@ -25,9 +25,56 @@ pub fn secure_desktop_worker() -> bool {
 }
 
 use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
-    SetThreadDesktop,
+    CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, GetThreadDesktop,
+    GetUserObjectInformationW, HDESK, OpenInputDesktop, SetThreadDesktop, UOI_NAME,
 };
+
+/// Name the desktop this thread injects on, and the one actually receiving
+/// input. When they differ, `SendInput` still reports success — it queues the
+/// event onto the calling thread's desktop — and the input vanishes with no
+/// error anywhere. That silent shape has now cost two debugging sessions
+/// (2026-07-19, 2026-08-18), so it gets an answer rather than a theory.
+pub fn desktop_diagnosis() -> String {
+    unsafe {
+        let mine = windows::Win32::System::Threading::GetCurrentThreadId();
+        let thread_desk = GetThreadDesktop(mine).ok();
+        let input_desk =
+            OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_GENERIC_ALL).ok();
+        let out = format!(
+            "injecting on desktop {:?}, input desktop is {:?}",
+            thread_desk
+                .map(desktop_name)
+                .unwrap_or_else(|| "<none>".into()),
+            input_desk
+                .map(desktop_name)
+                .unwrap_or_else(|| "<cannot open>".into())
+        );
+        if let Some(d) = input_desk {
+            let _ = CloseDesktop(d);
+        }
+        out
+    }
+}
+
+fn desktop_name(desk: HDESK) -> String {
+    unsafe {
+        let mut buf = [0u16; 64];
+        let mut needed = 0u32;
+        if GetUserObjectInformationW(
+            windows::Win32::Foundation::HANDLE(desk.0),
+            UOI_NAME,
+            Some(buf.as_mut_ptr() as *mut _),
+            (buf.len() * 2) as u32,
+            Some(&mut needed),
+        )
+        .is_err()
+        {
+            return "<unnamed>".into();
+        }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..len])
+    }
+}
 
 // GENERIC_ALL — capture needs read, SendInput needs write; ask for both.
 const DESKTOP_GENERIC_ALL: DESKTOP_ACCESS_FLAGS = DESKTOP_ACCESS_FLAGS(0x1000_0000);

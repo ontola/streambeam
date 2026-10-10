@@ -103,8 +103,9 @@ mod imp {
     /// predicts whether WGC works here. Session 0 or a SYSTEM token is the
     /// interesting case; a normal interactive user is the case that works.
     pub fn process_context() -> String {
+        use windows::Win32::Security::TOKEN_QUERY;
         use windows::Win32::System::Threading::{
-            GetCurrentProcess, GetCurrentProcessId, OpenProcessToken, TOKEN_QUERY,
+            GetCurrentProcess, GetCurrentProcessId, OpenProcessToken,
         };
         let mut session: u32 = 0;
         unsafe {
@@ -145,7 +146,7 @@ mod imp {
                         .is_ok()
                         {
                             user = sid.to_string().unwrap_or_default();
-                            let _ = windows::Win32::System::Memory::LocalFree(Some(
+                            let _ = windows::Win32::Foundation::LocalFree(Some(
                                 windows::Win32::Foundation::HLOCAL(sid.0 as *mut _),
                             ));
                         }
