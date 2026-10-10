@@ -153,15 +153,29 @@ with a bounded 30 ms wait (no added wait for in-order traffic), discards late
 frames, and waits for a keyframe after a real gap. Three deterministic tests
 cover reordering, whole-frame loss, and sequence rollover.
 
-**Acceptance still open:** wireless debugging on the Xiaomi disconnected
-before this last ordering fix could be installed. The latest APK is built
-and installed on the tablet; the phone still has the preceding build. The
-phone needs wireless debugging re-enabled, then installation and an actual
-menu/rotation/controller/audio test plus a sustained gaming run. Do not call
-this setup stable yet. The previous phone runs recovered intermittently but
-showed corruption/freezes. Windows XInput confirmed one attached controller
-in the filtered build; a live recording of physical stick/button values is
-still pending. Rumble is not implemented.
+**Phone retest, 23:01–23:03:** wireless debugging reconnected and the final
+ordering build was installed successfully on the Xiaomi. It displayed the
+actual GameNight desktop at 3840×2160 / 120 target. The 72 one-second windows
+after startup averaged 112.8 decoded fps (77.4–121.8), with no zero-output
+window. There was one gap-driven recovery, rather than the previous repeating
+decoder-stall recoveries. This is a short live sample, not a long-session or
+input-to-photon latency measurement.
+
+Opened the side menu and dismissed it by tapping the picture, then rotated
+portrait → landscape → portrait. Video continued, native logs showed only
+surface resizes (no surface destruction), and Windows XInput kept controller
+slot 0 connected throughout the menu/rotation observation. Original Android
+auto-rotation settings were restored afterward. The phone's media output is
+unmuted and routed to its speaker; audibility and sync still require listening.
+
+**Acceptance still open:** hands-on controller feel, physical button/stick
+values in this final session, audio, and a sustained gaming run. The user
+confirmed input on the preceding build, but also reported its choppiness;
+that earlier observation must not be presented as acceptance of this build.
+Rumble is not implemented. Current evidence:
+`/tmp/streambeam-phone-ordered-live.log`,
+`/tmp/streambeam-xinput-ordered.log`, and
+`/tmp/phone-ordered-landscape.png`.
 
 Latest validation: 119 Rust workspace tests passed, one manual soak ignored;
 Flutter analysis clean; focused Flutter tests include menu/controller and
