@@ -11,6 +11,7 @@ import 'hdr_status.dart';
 import 'gamepad_forwarder.dart';
 import 'src/rust/api.dart';
 import 'vk_keys.dart';
+import 'remote_keyboard.dart';
 import 'touch_cursor.dart';
 
 /// How single-finger drag maps to the remote mouse.
@@ -366,9 +367,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   int _diagLastBytes = 0;
   int _diagLastFrames = 0;
   DateTime? _diagLastSampleAt;
-  final _keyboardFocus = FocusNode();
-  final _keyboardCtrl = TextEditingController();
-  String _keyboardText = '';
 
   /// Physical-keyboard forwarding (mouse-first platforms): focus node that
   /// captures keys while streaming, and the VKs currently held remotely so
@@ -717,8 +715,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _transformController.dispose();
     _controllerActivity.dispose();
     _liveDiagListenable.dispose();
-    _keyboardFocus.dispose();
-    _keyboardCtrl.dispose();
     _releaseAllKeys();
     _streamKeyFocus.dispose();
     super.dispose();
@@ -736,49 +732,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
 
   void _openKeyboard() {
     _closeMenu();
-    _keyboardCtrl.clear();
-    _keyboardText = '';
+    _releaseAllKeys();
     setState(() => _keyboardOpen = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _keyboardFocus.requestFocus();
-    });
   }
 
   void _closeKeyboard() {
-    _keyboardFocus.unfocus();
     setState(() => _keyboardOpen = false);
-  }
-
-  void _sendVkStroke(int vk, {bool shift = false}) {
-    if (shift) sendKey(vk: 0xA0, down: true);
-    sendKey(vk: vk, down: true);
-    sendKey(vk: vk, down: false);
-    if (shift) sendKey(vk: 0xA0, down: false);
-  }
-
-  void _onKeyboardTextChanged(String value) {
-    var prefix = 0;
-    final shared = math.min(_keyboardText.length, value.length);
-    while (prefix < shared &&
-        _keyboardText.codeUnitAt(prefix) == value.codeUnitAt(prefix)) {
-      prefix++;
-    }
-
-    // Replacements and software-keyboard backspace both appear as an edit of
-    // the TextField value. Remove the old suffix, then type the new suffix.
-    for (var i = prefix; i < _keyboardText.length; i++) {
-      _sendVkStroke(0x08);
-    }
-    for (final rune in value.substring(prefix).runes) {
-      final stroke = vkStrokeForCharacter(String.fromCharCode(rune));
-      if (stroke != null) _sendVkStroke(stroke.vk, shift: stroke.shift);
-    }
-    _keyboardText = value;
-  }
-
-  void _submitKeyboardText(String _) {
-    _sendVkStroke(0x0D);
-    _closeKeyboard();
+    if (!widget.touchControls) _streamKeyFocus.requestFocus();
   }
 
   void _handleStop() {
@@ -1413,43 +1373,13 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                           ),
                           Align(
                             alignment: Alignment.bottomCenter,
-                            child: Material(
-                              color: theme.colorScheme.surface,
-                              elevation: 8,
-                              child: SafeArea(
-                                top: false,
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    12,
-                                    16,
-                                    12,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _keyboardCtrl,
-                                          focusNode: _keyboardFocus,
-                                          autofocus: true,
-                                          decoration: InputDecoration(
-                                            hintText:
-                                                'Type to send keys to PC…',
-                                            border: const OutlineInputBorder(),
-                                            isDense: true,
-                                            suffixIcon: IconButton(
-                                              icon: const Icon(Icons.close),
-                                              onPressed: _closeKeyboard,
-                                            ),
-                                          ),
-                                          onChanged: _onKeyboardTextChanged,
-                                          onSubmitted: _submitKeyboardText,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
+                            child: RemoteKeyboard(
+                              sendKey: sendKey,
+                              onClose: _closeKeyboard,
+                              onSecureAttention:
+                                  widget.hostPlatform == 'windows'
+                                  ? sendSecureAttention
+                                  : null,
                             ),
                           ),
                         ],
@@ -2446,7 +2376,7 @@ class _StreamMenu extends StatelessWidget {
                           ),
                           title: const Text('Keyboard'),
                           subtitle: Text(
-                            'Send text to your PC',
+                            'Text, shortcuts and key combinations',
                             style: theme.textTheme.bodySmall,
                           ),
                           visualDensity: tileDensity,
