@@ -719,6 +719,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
         autoStart: false,
         detectionSpeed: DetectionSpeed.noDuplicates,
         facing: CameraFacing.back,
+        formats: const [BarcodeFormat.qrCode],
       );
     }
     unawaited(_ensureMdnsLock());
@@ -1988,6 +1989,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                     _QrScanPreview(
                       controller: _scannerController!,
                       paused: _busy,
+                      onRetry: () => unawaited(_syncScanner()),
                       onDetect: _handleQrDetect,
                     ),
                     const SizedBox(height: 8),
@@ -2147,11 +2149,13 @@ class _QrScanPreview extends StatelessWidget {
     required this.controller,
     required this.onDetect,
     required this.paused,
+    required this.onRetry,
   });
 
   final MobileScannerController controller;
   final void Function(BarcodeCapture capture) onDetect;
   final bool paused;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -2160,7 +2164,7 @@ class _QrScanPreview extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: SizedBox(
-        height: 128,
+        height: 180,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -2168,6 +2172,41 @@ class _QrScanPreview extends StatelessWidget {
               controller: controller,
               onDetect: paused ? null : onDetect,
               fit: BoxFit.cover,
+              errorBuilder: (context, error) => ColoredBox(
+                color: theme.colorScheme.surfaceContainerHighest,
+                child: Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          error.errorCode ==
+                                  MobileScannerErrorCode.permissionDenied
+                              ? 'Allow camera access to scan a QR code'
+                              : 'Couldn’t start the QR scanner',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          error.errorCode ==
+                                  MobileScannerErrorCode.permissionDenied
+                              ? 'Enable Camera in Android Settings → Apps → StreamBeam → Permissions.'
+                              : 'Try again, or copy the host’s pairing link and use Paste & play.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        TextButton.icon(
+                          onPressed: onRetry,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Retry scanner'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
             if (paused)
               const ColoredBox(
@@ -2179,22 +2218,27 @@ class _QrScanPreview extends StatelessWidget {
             Positioned(
               left: 8,
               bottom: 8,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
+              child: ValueListenableBuilder<MobileScannerState>(
+                valueListenable: controller,
+                builder: (context, state, child) =>
+                    state.error != null ? const SizedBox.shrink() : child!,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                  child: Text(
-                    paused
-                        ? 'Scanner paused while streaming'
-                        : 'Point at host QR',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: Colors.white,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    child: Text(
+                      paused
+                          ? 'Scanner paused while streaming'
+                          : 'Point at host QR',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),

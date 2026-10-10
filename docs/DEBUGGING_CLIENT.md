@@ -212,3 +212,17 @@ ports, which shows up as two identically-named tiles in the client's device
 list. Not a discovery bug; kill one host and it resolves. And **Desktop Duplication cannot capture a locked
 session** — a locked host degrades to ~0.5fps of stale frames, which reads as a
 black screen; the host log says so explicitly.
+
+## Android QR scanner fails only in release builds
+
+A native null-reference error while opening Scan QR can mean R8 removed ML Kit
+component constructors. Check the matching release `mapping.txt` before assuming
+it is a camera-permission or pairing failure. On 2026-10-11, `usage.txt` listed
+`public void <init>()` under all three ML Kit registrars; their manifest metadata
+remained, so reflective component discovery could not instantiate them.
+
+The application keep rule in `app/android/app/proguard-rules.pro` preserves
+`ComponentRegistrar` no-argument constructors. After an Android release build,
+run `python3 scripts/check-android-scanner.py`. This checks the minified artifact;
+Flutter analysis and widget tests alone cannot detect the regression. Still
+verify camera startup and a real QR scan on a device before claiming acceptance.
