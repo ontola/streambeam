@@ -342,6 +342,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   bool _hasVideo = false;
   bool _videoTimedOut = false;
   bool _videoStalled = false;
+  bool _negotiatedTouch = false;
+  bool get _hostUsesTouch => switch (widget.hostPlatform) {
+    'android' => true,
+    'windows' || 'macos' => false,
+    _ => widget.hostAcceptsTouch || _negotiatedTouch,
+  };
   final _decodeWatchdog = DecodeWatchdog();
 
   /// The watchdog's user-facing message, null while the decode path is healthy
@@ -648,6 +654,12 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
   void _updateDiagnostics() {
     if (!mounted || !widget.isStreaming) return;
     final snap = playbackDiagnostics();
+    // SessionAccept arrives after this player mounts. Reading the capability
+    // only in the parent build leaves Android in mouse/trackpad mode forever.
+    final touch = playbackHostAcceptsTouch();
+    if (touch != _negotiatedTouch) {
+      setState(() => _negotiatedTouch = touch);
+    }
     final now = DateTime.now();
     var bytesPerSec = _liveDiagListenable.value.bytesPerSec;
     var renderFps = _liveDiagListenable.value.renderFps;
@@ -932,6 +944,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
         diagnostics: liveDiag,
         showDiagnostics: widget.isStreaming,
         touchControls: widget.inputSupported && widget.touchControls,
+        nativeTouch: _hostUsesTouch,
         anchorLeft: anchorLeft,
         onClose: onClose,
         menuButtonEnabled: _touchMenuButtonEnabled,
@@ -1108,7 +1121,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                             mode: _pointerMode,
                             screenEdgeGrab: edgeGrab,
                             mouseControlEnabled: mouseControlEnabled,
-                            hostAcceptsTouch: widget.hostAcceptsTouch,
+                            hostAcceptsTouch: _hostUsesTouch,
                             multiTouchSession: _multiTouchSession,
                             onMultiTouchSessionChanged: (active) {
                               if (_multiTouchSession != active) {
@@ -1125,10 +1138,9 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
                               minScale: 1,
                               maxScale: 4,
                               scaleEnabled:
-                                  widget.touchControls &&
-                                  !widget.hostAcceptsTouch,
+                                  widget.touchControls && !_hostUsesTouch,
                               panEnabled:
-                                  !widget.hostAcceptsTouch &&
+                                  !_hostUsesTouch &&
                                   _panEnabled &&
                                   _multiTouchSession,
                               clipBehavior: Clip.none,
@@ -2200,6 +2212,7 @@ class _StreamMenu extends StatelessWidget {
     required this.diagnostics,
     required this.showDiagnostics,
     required this.touchControls,
+    required this.nativeTouch,
     this.anchorLeft = false,
     this.onClose,
     this.menuButtonEnabled = true,
@@ -2232,6 +2245,7 @@ class _StreamMenu extends StatelessWidget {
   final _LiveDiagnostics diagnostics;
   final bool showDiagnostics;
   final bool touchControls;
+  final bool nativeTouch;
 
   /// True when the panel is anchored to the left screen edge.
   final bool anchorLeft;
@@ -2688,7 +2702,7 @@ class _StreamMenu extends StatelessWidget {
                         ),
                         Divider(height: metrics.sectionGap),
                       ],
-                      if (touchControls) ...[
+                      if (touchControls && !nativeTouch) ...[
                         Padding(
                           padding: EdgeInsets.fromLTRB(
                             0,
@@ -2771,7 +2785,11 @@ class _StreamMenu extends StatelessWidget {
                           compact ? 4 : 8,
                         ),
                         child: Text(
-                          touchControls
+                          nativeTouch
+                              ? 'Touch the remote screen directly: tap, swipe or pinch.\n'
+                                    'For control, enable StreamBeam Accessibility on the receiving device.\n'
+                                    'Swipe from an edge here to open the menu.'
+                              : touchControls
                               ? 'Drag from the left or right edge for menu\n'
                                     '1 finger: move cursor · tap: left click\n'
                                     '2 fingers: pinch zoom / pan (local only)\n'

@@ -4,9 +4,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:streambeam/src/rust/api.dart';
 import 'package:streambeam/src/rust/frb_generated.dart';
 import 'package:streambeam/stream_player.dart';
+import 'package:streambeam/touch_cursor.dart';
 
 class _PlaybackApi extends StreambeamFfiApi {
   BigInt frames = BigInt.from(9000);
+  bool touch = false;
+  final touchFrames = <List<int>>[];
+  @override
+  void crateApiSendTouchFrame({
+    required List<int> ids,
+    required List<int> xs,
+    required List<int> ys,
+    required int refW,
+    required int refH,
+  }) {
+    touchFrames.add(List.of(ids));
+  }
+
+  @override
+  bool crateApiPlaybackHostAcceptsTouch() => touch;
 
   @override
   BigInt crateApiPlaybackFramesRendered() => frames;
@@ -30,7 +46,7 @@ class _PlaybackApi extends StreambeamFfiApi {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-Widget player() => MaterialApp(
+Widget player({bool input = false, String hostPlatform = ''}) => MaterialApp(
   home: StreamPlayerScreen(
     status: 'Streaming…',
     statusIsError: false,
@@ -39,7 +55,8 @@ Widget player() => MaterialApp(
     streamWidth: 3840,
     streamHeight: 2160,
     video: const ColoredBox(color: Colors.black),
-    inputSupported: false,
+    inputSupported: input,
+    hostPlatform: hostPlatform,
     touchControls: false,
     onStop: () {},
     streamMode: StreamMode.quality,
@@ -58,6 +75,46 @@ void main() {
     StreambeamFfi.initMock(api: api);
   });
   tearDownAll(StreambeamFfi.dispose);
+
+  testWidgets(
+    'late Android negotiation switches to direct multi-touch without a cursor',
+    (tester) async {
+      api.touch = false;
+      api.frames = BigInt.zero;
+      await tester.pumpWidget(player(input: true));
+      expect(
+        tester
+            .widget<StreamInputLayer>(find.byType(StreamInputLayer))
+            .hostAcceptsTouch,
+        isFalse,
+      );
+      api.touch = true;
+      api.frames = BigInt.from(30);
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(
+        tester
+            .widget<StreamInputLayer>(find.byType(StreamInputLayer))
+            .hostAcceptsTouch,
+        isTrue,
+      );
+      final area = tester.getRect(find.byType(StreamInputLayer));
+      final first = await tester.startGesture(area.center, pointer: 1);
+      final second = await tester.startGesture(
+        area.center + const Offset(40, 0),
+        pointer: 2,
+      );
+      await first.moveBy(const Offset(0, -30));
+      expect(api.touchFrames.last.length, 2);
+      await second.up();
+      expect(api.touchFrames.last.length, 1);
+      await first.up();
+      expect(api.touchFrames.last, isEmpty);
+      await tester.pump();
+      expect(find.byType(TouchCursorView), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      api.touch = false;
+    },
+  );
 
   testWidgets('waiting for approval never reuses the previous picture', (
     tester,

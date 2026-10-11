@@ -150,7 +150,11 @@ class ScreenCaptureService : Service() {
                 MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
             )
-            setInteger(MediaFormat.KEY_BIT_RATE, BITRATE)
+            // Text and UI need more detail than the old fixed 1280px capture.
+            // Scale the budget with actual pixels, rather than spending the
+            // same bitrate on a small phone and a high-resolution tablet.
+            setInteger(MediaFormat.KEY_BIT_RATE,
+                (w.toLong() * h * FPS / 8).coerceIn(8_000_000L, 24_000_000L).toInt())
             setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             setInteger(
@@ -446,9 +450,8 @@ class ScreenCaptureService : Service() {
         private const val APPROVAL_CHANNEL_ID = "streambeam_access"
         private const val NOTIF_ID = 42
         private const val APPROVAL_NOTIF_ID = 43
-        private const val MAX_DIM = 1280
+        private const val MAX_DIM = 2560
         private const val FPS = 30
-        private const val BITRATE = 8_000_000
 
         @Volatile
         private var captureActive = false

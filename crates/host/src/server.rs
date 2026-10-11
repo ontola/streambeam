@@ -967,6 +967,10 @@ async fn handle_client(
                 // pacing/backlog heuristics reason from false metadata.
                 #[cfg(target_os = "macos")]
                 let build_fps = build_fps.min(crate::macos_screen::CAPTURE_FPS);
+                // Android's MediaProjection encoder currently produces 30fps.
+                // Report that cadence rather than the viewer's 60/120fps cap.
+                #[cfg(target_os = "android")]
+                let build_fps = build_fps.min(30);
                 // AV1's better compression is only worth it if this client
                 // can actually decode it — `build_encoder` still isn't a
                 // hard promise (falls back to H.264 if this host's GPU
