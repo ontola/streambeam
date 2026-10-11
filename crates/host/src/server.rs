@@ -823,8 +823,10 @@ async fn handle_client(
                 finish_rejection(&mut send).await;
                 return Ok(());
             }
-            let approved =
-                request_approval(approval_tx.as_ref(), &client_name, conn.remote_address()).await;
+            let approved = tokio::select! {
+                approved = request_approval(approval_tx.as_ref(), &client_name, conn.remote_address()) => approved,
+                _ = conn.closed() => return Ok(()),
+            };
             if !approved {
                 log!("user declined pairing for {client_name}");
                 write_msg(

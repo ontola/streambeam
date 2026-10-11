@@ -310,6 +310,7 @@ pub fn snapshot() -> HostSnapshot {
         viewers,
         pending_approval: ui
             .and_then(|u| u.pending_approval.as_ref())
+            .filter(|p| !p.respond.is_closed())
             .map(|p| HostPairRequest {
                 id: p.id,
                 client_name: p.client_name.clone(),
@@ -344,6 +345,7 @@ pub fn pending_approval() -> Option<(u64, String)> {
     let ui = svc.ui.lock().ok()?;
     ui.pending_approval
         .as_ref()
+        .filter(|p| !p.respond.is_closed())
         .map(|p| (p.id, p.client_name.clone()))
 }
 

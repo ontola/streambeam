@@ -51,19 +51,20 @@ NoPictureReason? noPictureReason({
       icon: Icons.sync_problem_outlined,
       title: 'Stream stopped responding',
       detail:
-          'No new video frames arrived for 5 seconds. The other device may '
-          'be asleep or the connection may have closed.',
+          'No new picture has been displayed for 5 seconds. The other device, '
+          'connection or video decoder may have stalled.',
       waiting: false,
     );
   }
   if (videoTimedOut) {
     return (
-      icon: Icons.videocam_off_outlined,
-      title: 'No video received',
+      icon: Icons.hourglass_top,
+      title: 'Still waiting for video',
       detail:
-          'The connection opened, but no video arrived. Check that the other '
-          'device is awake and still sharing its screen.',
-      waiting: false,
+          'Open StreamBeam on the other device and allow the connection '
+          'request. On Android, also confirm screen sharing. You can cancel '
+          'and try again if no request appears.',
+      waiting: true,
     );
   }
   if (!hasVideo) {
@@ -72,7 +73,8 @@ NoPictureReason? noPictureReason({
       // rather than an hourglass beside one. Kept so the record stays uniform.
       icon: Icons.hourglass_top,
       title: 'Waiting for video…',
-      detail: 'Connected to your PC. The first video frame has not arrived yet.',
+      detail:
+          'Waiting for the other device to accept and send its first picture.',
       waiting: true,
     );
   }
@@ -191,8 +193,9 @@ class DecodeWatchdog {
     // be a stalled host. Not our call to make. `dropped` is a subset of
     // `decodeCalls` on macOS (counted inside `decode`) but need not be on every
     // platform, hence the max rather than a sum.
-    final offered =
-        health.decodeCalls > health.dropped ? health.decodeCalls : health.dropped;
+    final offered = health.decodeCalls > health.dropped
+        ? health.decodeCalls
+        : health.dropped;
     if (offered == 0) {
       _startedWaiting = null;
       _verdict = DecodeVerdict.healthy;

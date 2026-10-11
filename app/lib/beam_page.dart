@@ -348,7 +348,11 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
       _shownHostError = null;
     }
     final pending = next.pendingApproval;
-    if (pending != null && pending.id != _shownApprovalId) {
+    // Android handles approval at Activity level, including while this page
+    // is absent because the tablet is watching another device.
+    if (!Platform.isAndroid &&
+        pending != null &&
+        pending.id != _shownApprovalId) {
       _shownApprovalId = pending.id;
       unawaited(_showApprovalDialog(pending));
     }

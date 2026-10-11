@@ -30,8 +30,9 @@ class PairingHelp extends StatelessWidget {
                 ? '$hostName is reachable, but this device needs to be paired. '
                       'Open StreamBeam on $hostName and choose Show QR. '
                       'Scan it here, or copy its pairing link to this device.'
-                : 'For a first connection, open StreamBeam on $hostName '
-                      'and approve this device. Already paired? Connect directly.',
+                : 'Send a connection request to $hostName. On that device, '
+                      'open StreamBeam and tap Allow. If it runs only as a '
+                      'background service, use its pairing QR or link instead.',
           ),
           const SizedBox(height: 20),
           if (!needsCode) ...[
@@ -39,7 +40,7 @@ class PairingHelp extends StatelessWidget {
               onPressed: () =>
                   Navigator.pop(context, PairingAction.requestAccess),
               icon: const Icon(Icons.devices),
-              label: const Text('Connect'),
+              label: const Text('Request connection'),
             ),
             const SizedBox(height: 16),
             const Text(

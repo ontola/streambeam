@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -506,20 +507,24 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
     _watchClock
       ..reset()
       ..start();
-    _streamStartedAt = DateTime.now();
+    _streamStartedAt = clock.now();
     _lastVideoFrameAt = _streamStartedAt;
     _lastRenderedFrames = playbackFramesRendered();
     _videoPoll?.cancel();
     _videoPoll = Timer.periodic(const Duration(milliseconds: 400), (_) {
       if (!mounted || !widget.isStreaming) return;
-      final now = DateTime.now();
+      final now = clock.now();
       final frames = playbackFramesRendered();
       final advanced = frames > _lastRenderedFrames;
+      // The player can mount before Rust resets the previous session's
+      // counter. Always rebase on the latest sample, including a decrease:
+      // otherwise a healthy reconnect looks stalled until it has rendered
+      // more frames than the entire previous session.
+      _lastRenderedFrames = frames;
       if (advanced) {
-        _lastRenderedFrames = frames;
         _lastVideoFrameAt = now;
       }
-      if ((frames > BigInt.zero && !_hasVideo) || (advanced && _videoStalled)) {
+      if (advanced && (!_hasVideo || _videoStalled)) {
         setState(() {
           _hasVideo = true;
           _videoTimedOut = false;
@@ -607,7 +612,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen>
       // short chance to produce again instead of declaring the whole sleep
       // interval a live-stream stall on the first resumed timer tick.
       _lastRenderedFrames = playbackFramesRendered();
-      _lastVideoFrameAt = DateTime.now();
+      _lastVideoFrameAt = clock.now();
     }
   }
 
