@@ -3,7 +3,7 @@
 mod active_stream;
 #[cfg(any(target_os = "android", test))]
 pub mod android_input;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub mod android_screen;
 pub mod audio;
 #[cfg(all(windows, feature = "audio"))]

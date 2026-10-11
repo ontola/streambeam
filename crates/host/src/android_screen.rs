@@ -21,13 +21,50 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::encode::{EncodeError, EncodedFrame, VideoEncoder};
 
-/// Max buffered access units before the oldest is dropped. The screen stream is
-/// live, so a backlog means the link can't keep up — better to drop and let the
-/// client recover via RFI/IDR than to let latency grow unbounded.
+/// Bound latency without ever forwarding dependent frames after a local drop.
 const MAX_PENDING: usize = 8;
 
+struct FrameQueue {
+    frames: VecDeque<EncodedFrame>,
+    waiting_for_keyframe: bool,
+}
+
+impl FrameQueue {
+    const fn new() -> Self {
+        Self {
+            frames: VecDeque::new(),
+            waiting_for_keyframe: true,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.waiting_for_keyframe = true;
+    }
+
+    /// True requests one fresh keyframe after overflow. Wire sequence IDs are
+    /// assigned later, so the receiver cannot detect these sender-side drops.
+    fn push(&mut self, frame: EncodedFrame) -> bool {
+        let overflow = self.frames.len() >= MAX_PENDING;
+        if overflow {
+            self.clear();
+        }
+        if frame.keyframe {
+            self.waiting_for_keyframe = false;
+        } else if self.waiting_for_keyframe {
+            return overflow;
+        }
+        self.frames.push_back(frame);
+        false
+    }
+
+    fn pop_front(&mut self) -> Option<EncodedFrame> {
+        self.frames.pop_front()
+    }
+}
+
 struct ScreenSource {
-    pending: Mutex<VecDeque<EncodedFrame>>,
+    pending: Mutex<FrameQueue>,
     codec_config: Mutex<Option<Vec<u8>>>,
     idr_requested: AtomicBool,
     active: AtomicBool,
@@ -37,7 +74,7 @@ struct ScreenSource {
 }
 
 static SOURCE: ScreenSource = ScreenSource {
-    pending: Mutex::new(VecDeque::new()),
+    pending: Mutex::new(FrameQueue::new()),
     codec_config: Mutex::new(None),
     idr_requested: AtomicBool::new(false),
     active: AtomicBool::new(false),
@@ -112,16 +149,17 @@ pub fn submit(data: Vec<u8>, keyframe: bool, is_config: bool, width: u32, height
         SOURCE.height.load(Ordering::Relaxed),
     );
     let mut q = SOURCE.pending.lock().unwrap();
-    while q.len() >= MAX_PENDING {
-        q.pop_front();
-    }
-    q.push_back(EncodedFrame {
+    let needs_idr = q.push(EncodedFrame {
         data,
         keyframe,
         width: w,
         height: h,
         timestamp: 0,
     });
+    if needs_idr {
+        SOURCE.idr_requested.store(true, Ordering::Relaxed);
+        crate::logging::log("Android capture queue overflow: waiting for a fresh keyframe");
+    }
 }
 
 /// Consume a pending "request a keyframe" flag. Kotlin polls this and, when
@@ -153,5 +191,68 @@ impl VideoEncoder for AndroidScreenEncoder {
 
     fn codec_config(&self) -> Option<Vec<u8>> {
         SOURCE.codec_config.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(id: u64, keyframe: bool) -> EncodedFrame {
+        EncodedFrame {
+            data: vec![id as u8],
+            keyframe,
+            width: 2560,
+            height: 1600,
+            timestamp: id,
+        }
+    }
+
+    #[test]
+    fn overflow_never_forwards_a_broken_reference_chain() {
+        let mut q = FrameQueue::new();
+        for id in 0..MAX_PENDING as u64 {
+            assert!(!q.push(frame(id, id == 0)));
+        }
+        assert!(q.push(frame(8, false)), "overflow must request recovery");
+        assert!(q.pop_front().is_none());
+        for id in 9..20 {
+            assert!(!q.push(frame(id, false)), "request only once per overflow");
+            assert!(
+                q.pop_front().is_none(),
+                "dependent frames must be discarded"
+            );
+        }
+        assert!(!q.push(frame(20, true)));
+        assert!(!q.push(frame(21, false)));
+        assert_eq!(q.pop_front().unwrap().timestamp, 20);
+        assert_eq!(q.pop_front().unwrap().timestamp, 21);
+    }
+
+    #[test]
+    fn overflowing_keyframe_recovers_without_an_extra_request() {
+        let mut q = FrameQueue::new();
+        for id in 0..MAX_PENDING as u64 {
+            q.push(frame(id, id == 0));
+        }
+        assert!(!q.push(frame(8, true)));
+        assert_eq!(q.pop_front().unwrap().timestamp, 8);
+        assert!(q.pop_front().is_none());
+    }
+
+    #[test]
+    fn healthy_frames_stay_ordered_and_a_new_capture_waits_for_keyframe() {
+        let mut q = FrameQueue::new();
+        q.push(frame(0, false));
+        assert!(q.pop_front().is_none());
+        for id in 1..100 {
+            assert!(!q.push(frame(id, id == 1)));
+            assert_eq!(q.pop_front().unwrap().timestamp, id);
+        }
+        q.clear();
+        q.push(frame(100, false));
+        assert!(q.pop_front().is_none());
+        q.push(frame(101, true));
+        assert_eq!(q.pop_front().unwrap().timestamp, 101);
     }
 }

@@ -156,6 +156,13 @@ class ScreenCaptureService : Service() {
             setInteger(MediaFormat.KEY_BIT_RATE,
                 (w.toLong() * h * FPS / 8).coerceIn(8_000_000L, 24_000_000L).toInt())
             setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // KEY_FRAME_RATE describes the intended cadence; Surface
+                // producers can still submit at the display's 60/120Hz rate.
+                // Drop excess input BEFORE encoding, preserving references.
+                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, FPS.toFloat())
+                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            }
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             setInteger(
                 MediaFormat.KEY_BITRATE_MODE,
