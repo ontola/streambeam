@@ -97,6 +97,7 @@ jobs:
         run: |
           dart pub get
           dart run test/rustup_check.dart
+          dart run test/android_outputs_check.dart
 
   android-release:
     name: Android release and scanner regression

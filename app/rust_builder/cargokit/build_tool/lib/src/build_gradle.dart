@@ -14,6 +14,18 @@ import 'target.dart';
 
 final log = Logger('build_gradle');
 
+// Gradle packages every ABI left in this generated jniLibs directory, even
+// when the current build requests only ARM64. Never ship stale native code
+// left over from an earlier universal build.
+void removeUnusedAndroidTargets(String outputDir, List<Target> targets) {
+  final selected = targets.map((target) => target.android).toSet();
+  for (final target in Target.androidTargets()) {
+    if (selected.contains(target.android)) continue;
+    final directory = Directory(path.join(outputDir, target.android!));
+    if (directory.existsSync()) directory.deleteSync(recursive: true);
+  }
+}
+
 class BuildGradle {
   BuildGradle({required this.userOptions});
 
@@ -33,6 +45,8 @@ class BuildGradle {
     final provider =
         ArtifactProvider(environment: environment, userOptions: userOptions);
     final artifacts = await provider.getArtifacts(targets);
+
+    removeUnusedAndroidTargets(Environment.outputDir, targets);
 
     for (final target in targets) {
       final libs = artifacts[target]!;
