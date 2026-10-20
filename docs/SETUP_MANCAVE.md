@@ -254,7 +254,10 @@ is resolved; this build is now installed on both phone and tablet.
   The app was launched, owns UDP `*:47989` and discovers MANCAVE.
 - A real reconnect using the existing Mac client pairing received 120
   H.264 frames at 1920×1080. ffmpeg decoded all 120 without errors; an
-  extracted frame visibly contained the Windows desktop.
+  extracted frame visibly contained the Windows desktop. A subsequent 15-second
+  receive run completed 900 frames at approximately 60 fps with zero abandoned
+  frames in the reported transport statistics; this is a mostly static desktop
+  sample, not a gameplay or input-latency measurement.
 
 Mac Home remained locked. No visible Flutter playback, Mac screen capture,
 Accessibility/input, listening check or sustained gameplay was verified.

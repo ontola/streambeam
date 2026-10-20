@@ -17,6 +17,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   FLUTTER_VERSION: '3.44.7'
+  # Vendored Opus still declares a pre-3.5 CMake minimum.
+  CMAKE_POLICY_VERSION_MINIMUM: '3.5'
 
 jobs:
   fmt:
@@ -62,7 +64,7 @@ jobs:
 
   macos-check:
     name: macOS host and app bridge
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
