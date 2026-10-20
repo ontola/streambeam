@@ -234,3 +234,35 @@ Evidence: `/tmp/streambeam-phone-1080-live.log`,
 `/tmp/streambeam-phone-1080-frame.png`, `/tmp/streambeam-xinput-1080.log`,
 `/tmp/streambeam-host-1080-sample.log`. The earlier wireless-debugging blocker
 is resolved; this build is now installed on both phone and tablet.
+
+
+## Installation check — 2026-10-20
+
+- Mancave's automatic `StreamBeamHost` service is running. Its installed worker
+  still matches SHA-256
+  `8fcca62302a7ab60e24f2f81e89e8ddfca3bfb5baaa0ab7e151d1b0ad1751e14`
+  and owns UDP `0.0.0.0:47989`. It was not replaced unnecessarily.
+- Mac Home received a fresh optimized ARM64 build including committed fixes
+  through `648b484`, installed at `/Users/joep/Applications/StreamBeam.app`.
+  It uses the existing **StreamBeam Local Development** signing certificate;
+  `codesign --verify --deep --strict` passes. This is a local installation,
+  not a notarized public Mac distribution.
+- The previous app is retained at
+  `/Users/joep/Applications/StreamBeam-before-20261020.app`.
+- The installed executable SHA-256 is
+  `46cf5891f5c2bd9f456bba7faeaa67f66bcaf3f017c11278dd881934829bc6d2`.
+  The app was launched, owns UDP `*:47989` and discovers MANCAVE.
+- A real reconnect using the existing Mac client pairing received 120
+  H.264 frames at 1920×1080. ffmpeg decoded all 120 without errors; an
+  extracted frame visibly contained the Windows desktop.
+
+Mac Home remained locked. No visible Flutter playback, Mac screen capture,
+Accessibility/input, listening check or sustained gameplay was verified.
+Do not equate the process/listener or software decode with those acceptance
+checks. Screen Recording/Accessibility may require re-approval after the
+change from the previous ad hoc signature to the stable local certificate.
+
+Temporary evidence: `/tmp/streambeam-mancave-20261020.log`,
+`/tmp/streambeam-mancave-20261020.h264`,
+`/tmp/streambeam-mancave-frame-20261020.png`.
+Do not commit these files: the capture contains the private desktop.

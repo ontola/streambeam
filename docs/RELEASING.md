@@ -39,3 +39,77 @@ signed APK only after comparing its certificate with the previous preview.
 Before a public/store launch, choose a dedicated long-term production signing
 identity and update `site/.well-known/assetlinks.json` as described in
 `site/README.md`. Changing signer requires an explicit migration plan.
+
+
+## Store candidates (2026-10-20)
+
+The **Signed store candidates** workflow builds downloadable artifacts on
+explicit dispatch. It does not upload to Apple/Google, create store listings,
+or imply that either platform has passed device acceptance.
+Choose an unused increasing build number greater than the existing Android
+preview's version code 2. Use the same bundle/package ID:
+`io.streambeam.streambeam`.
+
+### Android signing
+
+Configure these repository secrets before dispatching the Android job:
+
+- `STREAMBEAM_KEYSTORE_BASE64`: base64 PKCS12 upload keystore.
+- `STREAMBEAM_KEYSTORE_PASSWORD`: keystore password.
+- `STREAMBEAM_KEY_ALIAS`: alias inside the keystore.
+- `STREAMBEAM_KEY_PASSWORD`: private key password.
+
+Set repository variable `STREAMBEAM_UPLOAD_CERT_SHA256` to that key's public
+SHA-256 certificate fingerprint. The job builds an ARM64 AAB and verifies its
+JAR signature, pinned certificate, non-debug signer and exact native ABI
+payload before uploading the artifact. Secrets are not exposed on PR builds.
+An unsigned release bundle or partial signing configuration fails explicitly;
+APK previews can still use their existing development identity.
+
+The upload key is separate from the **app signing key** used by Google Play
+to sign installed APKs. Add the Play app signing certificate, not merely the
+upload certificate, to the hosted `assetlinks.json` before claiming App Links
+work. Existing debug-signed previews cannot be updated in place by a
+different Play signer. Do not uninstall previews or discard pairing data as
+part of store setup; establish the migration separately.
+
+Official reference:
+[Android app signing](https://developer.android.com/studio/publish/app-signing).
+
+### iOS signing and current blocker
+
+The iOS job expects `IOS_DISTRIBUTION_P12_BASE64`,
+`IOS_DISTRIBUTION_P12_PASSWORD` and `IOS_APP_STORE_PROFILE_BASE64`.
+The profile must be an unexpired App Store distribution profile for the
+exact bundle ID; development, ad hoc and enterprise profiles are rejected.
+Signing uses a temporary CI keychain and an ignored Runner-only xcconfig,
+then removes the signing material. Exported IPAs remain artifacts, with no
+automatic upload or submission.
+
+**iOS is not currently buildable or ready for TestFlight.** An actual device
+build on 2026-10-20 exposed:
+
+1. Xcode 27 rejects the old iOS 13 deployment target. Runner/Pods now target 15.
+2. The vendored Opus CMake project requires
+   `CMAKE_POLICY_VERSION_MINIMUM=3.5` with CMake 4; the workflow sets it.
+3. `app/rust/src/audio_play.rs` has no iOS `sink`, so Rust compilation fails.
+   The iOS Runner also has no `streambeam/video_desktop` channel or native
+   decoder; resolving compilation alone would not provide a functioning app.
+
+Implement and test iOS video/audio, camera/local-network permissions and
+pairing/input on a real device before distributing a build. The signing job
+is prepared but its signed build/export has not been exercised.
+
+App Store Connect still requires an authenticated account and an app record
+before an upload. See
+[Apple's app record setup](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app).
+Neither store registration nor an upload was completed in this session.
+No permanent Android upload key was generated: the approval request for
+creating it and saving it in `joepio/streambeam` Actions secrets is pending.
+
+Validation for this preparation: 122 Rust tests passed (one manual soak
+ignored), full Flutter analysis and all 53 Flutter tests passed, Rust formatting
+and Clippy passed with existing warnings, optimized Mac build and signed
+installation passed, Android ARM64 release APK and all three ML Kit registrar
+checks passed. The unsigned App Bundle rejection is exercised in CI.
+A signed AAB/IPA and hosted CI have not yet been verified.

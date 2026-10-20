@@ -135,6 +135,14 @@ jobs:
       - run: flutter build apk --release --target-platform android-arm64
         working-directory: app
       - run: python3 scripts/check-android-scanner.py
+      - name: Reject unsigned store bundles
+        working-directory: app
+        run: |
+          if flutter build appbundle --release --no-pub --target-platform android-arm64 > "$RUNNER_TEMP/unsigned-bundle.log" 2>&1; then
+            echo "::error::An unsigned store bundle unexpectedly built successfully"
+            exit 1
+          fi
+          grep -F 'Release App Bundles require the StreamBeam upload signing key.' "$RUNNER_TEMP/unsigned-bundle.log"
       # This artifact uses the runner's development signer. Published APKs are
       # signed locally with the persistent preview key (see docs/RELEASING.md).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -1,0 +1,22 @@
+PODS:
+  - Flutter (1.0.0)
+  - rust_lib_streambeam (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - rust_lib_streambeam (from `.symlinks/plugins/rust_lib_streambeam/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  rust_lib_streambeam:
+    :path: ".symlinks/plugins/rust_lib_streambeam/ios"
+
+SPEC CHECKSUMS:
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  rust_lib_streambeam: e42f501a4955fb87974e7598d09fc6cd1bbcf6c7
+
+PODFILE CHECKSUM: 30d505a55b9838f3cd050f155dedca6853864f4d
+
+COCOAPODS: 1.16.2
