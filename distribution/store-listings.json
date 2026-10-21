@@ -1,0 +1,34 @@
+{
+  "status": "draft-not-submitted",
+  "packageId": "io.streambeam.streambeam",
+  "name": "StreamBeam",
+  "language": "en-US",
+  "website": "https://streambeam.eu",
+  "supportEmail": null,
+  "privacyPolicyUrl": null,
+  "googlePlay": {
+    "shortDescription": "Share screens and control your devices over your local network.",
+    "fullDescription": "Bring your screens together with StreamBeam. Watch a Windows or Mac desktop on your Android phone or tablet, or share your Android screen with another paired StreamBeam device.\n\nPair once using a QR code or an approved connection request. Saved devices let you reconnect without repeating setup. Connections run directly over your local network.\n\nUse touch controls and the on-screen keyboard to control a compatible paired device. Choose streaming quality to suit your screen and network. Audio playback depends on the sending device; Android screen sharing currently sends video without system audio.\n\nOptional Android remote control uses AccessibilityService to apply taps, swipes and keyboard input from your paired device. To edit text, StreamBeam reads and changes the focused text field locally. Accessibility text is not uploaded to StreamBeam servers; a paired viewer can see text visible in your shared screen. Enable or disable this access in Android Settings. Android asks you to choose what to share each time you start screen sharing.\n\nStreamBeam currently requires devices on the same local network and a compatible StreamBeam app on the other device. This early release does not include internet relay access."
+  },
+  "appStore": {
+    "subtitle": "Your desktop on your devices",
+    "description": "Watch your Mac or Windows desktop on your iPhone or iPad with StreamBeam. Pair with a QR code or approve a connection request, then reconnect to your saved device.\n\nStream video and supported host audio over your local network. Use touch controls and the keyboard to control the paired computer. Choose a quality profile to suit your screen and connection.\n\nThe sending computer needs the StreamBeam desktop app. This iOS release is a viewer; it does not share your iPhone or iPad screen. Devices must be on the same local network. Internet relay access is not included.",
+    "keywords": "screen,sharing,remote,desktop,streaming,local,network,computer,control",
+    "validation": "Do not submit until iOS pairing, live playback, audio and input pass on a physical device."
+  },
+  "microsoftStore": {
+    "shortDescription": "Share your Windows desktop with your paired StreamBeam devices.",
+    "description": "Stream your Windows desktop to a compatible StreamBeam viewer on your local network. Pair once and reconnect from a saved device. A paired viewer can send supported mouse, keyboard and controller input.\n\nThe Store package supports the signed-in desktop session. Secure-desktop and sign-in-screen access are not included in this package. A compatible GPU and receiving device are required.",
+    "validation": "Partner Center identity, packaged runtime and Store certification are pending."
+  },
+  "submissionChecklist": [
+    "Confirm publisher account, support email and a public privacy policy URL.",
+    "Capture screenshots of the actual release on each supported platform; do not use concept mockups as app screenshots.",
+    "Complete Play AccessibilityService and screen-capture foreground-service declarations with a real demonstration video.",
+    "Review Data safety and Apple App Privacy against the shipped SDK versions and actual data flows.",
+    "Complete age-rating, content-rights and encryption/export questions using the publisher's verified answers.",
+    "Keep existing debug-signed previews and pairing data; Play-signed migration needs a separate path.",
+    "Verify Play's installed-app signing certificate in public assetlinks.json.",
+    "Verify actual install, discovery, pairing, moving picture, audio and input before promotion."
+  ]
+}

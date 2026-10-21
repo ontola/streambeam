@@ -1,13 +1,17 @@
-name: Signed store candidates
+name: Signed store candidates and uploads
 
 on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Build a signed candidate (does not publish to a store)
+        description: Platform for the signed candidate
         type: choice
         options: [android, ios]
         required: true
+      upload_store:
+        description: Upload to TestFlight or a Google Play internal draft (no public release)
+        type: boolean
+        default: false
       build_number:
         description: Unused increasing store build number (Android preview is 2)
         type: string
@@ -57,6 +61,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+      - name: Require Play upload access when requested
+        if: inputs.upload_store
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: test -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: aarch64-linux-android
@@ -84,6 +93,11 @@ jobs:
           name: streambeam-play-${{ inputs.build_number }}
           path: app/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
+      - name: Upload verified bundle to a Play internal draft
+        if: inputs.upload_store
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: python3 scripts/upload-store.py play-draft app/build/app/outputs/bundle/release/app-release.aab --build-number="$BUILD_NUMBER"
       - name: Remove upload key
         if: always()
         run: rm -f "$STREAMBEAM_KEYSTORE_FILE"
@@ -106,6 +120,16 @@ jobs:
           test -n "$IOS_DISTRIBUTION_P12_BASE64"
           test -n "$IOS_DISTRIBUTION_P12_PASSWORD"
           test -n "$IOS_APP_STORE_PROFILE_BASE64"
+      - name: Require TestFlight upload access when requested
+        if: inputs.upload_store
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_STORE_CONNECT_KEY_ID"
+          test -n "$APP_STORE_CONNECT_ISSUER_ID"
+          test -n "$APP_STORE_CONNECT_PRIVATE_KEY"
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: aarch64-apple-ios
@@ -125,6 +149,17 @@ jobs:
           name: streambeam-ios-${{ inputs.build_number }}
           path: app/build/ios/ipa/*.ipa
           if-no-files-found: error
+      - name: Upload signed IPA to TestFlight
+        if: inputs.upload_store
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          shopt -s nullglob
+          ipas=(app/build/ios/ipa/*.ipa)
+          test "${#ipas[@]}" -eq 1
+          python3 scripts/upload-store.py testflight "${ipas[0]}"
       - name: Remove signing material
         if: always()
         run: |

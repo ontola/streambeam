@@ -43,9 +43,11 @@ identity and update `site/.well-known/assetlinks.json` as described in
 
 ## Store candidates (2026-10-20)
 
-The **Signed store candidates** workflow builds downloadable artifacts on
-explicit dispatch. It does not upload to Apple/Google, create store listings,
-or imply that either platform has passed device acceptance.
+The **Signed store candidates and uploads** workflow builds downloadable artifacts
+on explicit dispatch. With `upload_store: true`, it validates/uploads an IPA to
+TestFlight or uploads a verified AAB to a Google Play internal **draft**. It never
+submits a public release, invites testers, or implies device acceptance. With the
+default `upload_store: false`, it only builds artifacts.
 Choose an unused increasing build number greater than the existing Android
 preview's version code 2. Use the same bundle/package ID:
 `io.streambeam.streambeam`.
@@ -83,8 +85,7 @@ The iOS job expects `IOS_DISTRIBUTION_P12_BASE64`,
 The profile must be an unexpired App Store distribution profile for the
 exact bundle ID; development, ad hoc and enterprise profiles are rejected.
 Signing uses a temporary CI keychain and an ignored Runner-only xcconfig,
-then removes the signing material. Exported IPAs remain artifacts, with no
-automatic upload or submission.
+then removes the signing material. Exported IPAs remain artifacts by default; explicit upload is described below.
 
 **iOS is not currently buildable or ready for TestFlight.** An actual device
 build on 2026-10-20 exposed:
@@ -113,3 +114,37 @@ and Clippy passed with existing warnings, optimized Mac build and signed
 installation passed, Android ARM64 release APK and all three ML Kit registrar
 checks passed. The unsigned App Bundle rejection is exercised in CI.
 A signed AAB/IPA and hosted CI have not yet been verified.
+
+## Store uploads and listing assets (2026-10-21)
+
+`scripts/upload-store.py` adds explicit upload paths to the candidate workflow:
+
+- Play: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` must be a Google service account with
+  access to this app and its test releases. The app record and initial Play
+  setup must already exist. The script checks Google's version code and SHA-256
+  against the candidate, preserves the current completed internal release,
+  refuses to overwrite pending drafts/rollouts or cancel a review, validates
+  and commits an internal draft. It does not release the draft to testers.
+- Apple: `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and
+  `APP_STORE_CONNECT_PRIVATE_KEY` provide upload access for the existing app
+  record. The private key exists only in a temporary directory for validation
+  and upload. The documented `--use-old-altool` compatibility mode supports the
+  pinned macOS runner and current local Xcode. Successful upload must still be
+  followed by checking Apple processing and TestFlight availability.
+
+Seven mocked boundary tests cover digest/version rejection, preservation of
+existing releases, refusal of pending edits, cleanup and credential endpoints.
+They run in ordinary CI, without credentials. They are not live store proof.
+
+Draft descriptions and the remaining submission fields live in
+`distribution/store-listings.json`. Android's permission help now discloses
+remote taps/typing and local focused-text access before the user agrees to open
+Accessibility settings. A Play declaration and demonstration video remain
+required; the dialog change alone does not establish policy approval.
+
+Desktop signed/notarized and Windows MSIX delivery are documented in
+[DESKTOP_RELEASES.md](DESKTOP_RELEASES.md).
+
+References: [Google edits](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit),
+[Apple uploads](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/),
+[Accessibility declaration](https://support.google.com/googleplay/android-developer/answer/10964491).

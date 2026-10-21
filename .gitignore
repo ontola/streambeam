@@ -21,3 +21,7 @@ app/android/.gradle/
 app/rust/target/
 app/macos/Runner/Configs/LocalSigning.xcconfig
 /build/
+
+# Python validation helpers
+__pycache__/
+*.pyc
