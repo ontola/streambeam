@@ -26,10 +26,12 @@ cd "$repo_dir/app"
 "$flutter_bin" build ios --simulator --debug --config-only --no-pub
 cd ios
 pod install
+# Keep the xcresult assertions/logs; skip heavyweight simulator sysdiagnoses,
+# which can hang on local Xcode 27 even after every test has passed.
 # An explicit architecture avoids Flutter/Xcode 27 treating 'arm64 x86_64'
 # as one architecture in the framework preparation script.
 xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Debug \
   -sdk iphonesimulator -destination "platform=iOS Simulator,id=$simulator_id" \
   -resultBundlePath "${IOS_TEST_RESULT_BUNDLE:-$repo_dir/app/build/ios-native-tests.xcresult}" \
-  -parallel-testing-enabled NO \
+  -parallel-testing-enabled NO -collect-test-diagnostics never \
   ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO test

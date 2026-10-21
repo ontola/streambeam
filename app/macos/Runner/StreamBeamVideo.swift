@@ -29,6 +29,14 @@ final class StreamBeamAudioOut {
 
   func start() {
     guard !running else { return }
+    guard
+      let format = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true),
+      // Engine connections must use a deinterleaved ("standard") format —
+      // connecting with the interleaved render format raises an NSException
+      // inside AVAudioEngine. The engine converts between the two.
+      let connectFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)
+    else { return }
 #if os(iOS)
     do {
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -38,14 +46,6 @@ final class StreamBeamAudioOut {
       return
     }
 #endif
-    guard
-      let format = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true),
-      // Engine connections must use a deinterleaved ("standard") format —
-      // connecting with the interleaved render format raises an NSException
-      // inside AVAudioEngine. The engine converts between the two.
-      let connectFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)
-    else { return }
     let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
       let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
       guard let buffer = buffers.first, let data = buffer.mData else { return noErr }
@@ -61,6 +61,9 @@ final class StreamBeamAudioOut {
     } catch {
       NSLog("StreamBeam: audio output engine failed to start: %@", error.localizedDescription)
       engine.detach(node)
+#if os(iOS)
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+#endif
     }
   }
 
