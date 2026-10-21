@@ -349,7 +349,7 @@
         <div class="spec"><dt>Per-frame FEC</dt><dd>Reed–Solomon parity rebuilds lost packets without waiting for a retransmit.</dd></div>
         <div class="spec"><dt>Hardware codecs</dt><dd>NVIDIA NVENC on Windows, VideoToolbox on macOS and MediaCodec on Android. Available codecs depend on hardware.</dd></div>
         <div class="spec"><dt>Pinned Ed25519 keys</dt><dd>Devices authenticate each other directly. The sharing device approves new viewers; subsequent sessions use the saved identity.</dd></div>
-        <div class="spec"><dt>Developed in the open</dt><dd>Browse the source, follow progress and report issues on GitHub. Current capabilities and known gaps are documented per platform.</dd></div>
+        <div class="spec"><dt>One shared core</dt><dd>Rust handles transport, pairing and media. Flutter provides the interface, with native capture and playback for each platform.</dd></div>
       </dl>
     </section>
   </main>
