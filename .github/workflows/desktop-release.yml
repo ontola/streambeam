@@ -123,6 +123,8 @@ jobs:
       - run: cargo build --release --locked -p streambeam-host -p streambeam-svc --bins
       - run: flutter build windows --release --no-pub
         working-directory: app
+        env:
+          CARGOKIT_BUILD_ROOT: ${{ runner.temp }}/sb-rust
       - run: ./scripts/package-windows.ps1
       - name: Package for Store signing on certification
         shell: pwsh

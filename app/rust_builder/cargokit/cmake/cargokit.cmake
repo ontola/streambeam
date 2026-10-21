@@ -25,7 +25,19 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         set(CARGOKIT_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
         set(OUTPUT_LIB "${CMAKE_CURRENT_BINARY_DIR}/${CARGOKIT_LIB_FULL_NAME}")
     endif()
-    set(CARGOKIT_TEMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargokit_build")
+    # Native dependencies such as Opus run nested CMake/MSBuild probes. On
+    # Windows their tracking files can exceed MAX_PATH under Flutter's deeply
+    # nested plugin directory. CI supplies a short, per-job build root; leave
+    # other builds unchanged and keep different library targets separate.
+    if(DEFINED ENV{CARGOKIT_BUILD_ROOT} AND NOT "$ENV{CARGOKIT_BUILD_ROOT}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{CARGOKIT_BUILD_ROOT}" CARGOKIT_BUILD_ROOT)
+        if(NOT IS_ABSOLUTE "${CARGOKIT_BUILD_ROOT}")
+            message(FATAL_ERROR "CARGOKIT_BUILD_ROOT must be an absolute path")
+        endif()
+        set(CARGOKIT_TEMP_DIR "${CARGOKIT_BUILD_ROOT}/${lib_name}")
+    else()
+        set(CARGOKIT_TEMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargokit_build")
+    endif()
 
     if (FLUTTER_TARGET_PLATFORM)
         set(CARGOKIT_TARGET_PLATFORM "${FLUTTER_TARGET_PLATFORM}")

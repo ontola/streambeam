@@ -10,7 +10,11 @@ A successful build is not a real-device streaming test or Store certification.
 `scripts/package-windows.ps1` archives the complete Flutter release directory,
 adds `streambeam-host.exe` and `streambeam-svc.exe`, and includes the Visual C++
 redistributable runtime. This avoids shipping an EXE that depends on files left
-behind on the build runner. The ZIP must be extracted before launch.
+behind on the build runner. The ZIP must be extracted before launch. On Windows, the workflows set
+`CARGOKIT_BUILD_ROOT` to a short directory in the runner's temporary directory:
+nested Opus/MSBuild tracking filenames otherwise exceed Windows' path limit.
+Local long-path builds can set the same variable to a short absolute directory,
+unique to that checkout. The final Flutter output bundle remains unchanged.
 
 The manually dispatched **Desktop distribution candidates** workflow supports
 `windows-store`. Set these repository variables to the exact values shown by

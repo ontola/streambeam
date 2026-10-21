@@ -72,6 +72,8 @@ jobs:
         working-directory: app
       - run: flutter build windows --release --no-pub
         working-directory: app
+        env:
+          CARGOKIT_BUILD_ROOT: ${{ runner.temp }}/sb-rust
       - name: Package app, runtime and secure-desktop helpers
         shell: pwsh
         run: ./scripts/package-windows.ps1
