@@ -269,3 +269,35 @@ Temporary evidence: `/tmp/streambeam-mancave-20261020.log`,
 `/tmp/streambeam-mancave-20261020.h264`,
 `/tmp/streambeam-mancave-frame-20261020.png`.
 Do not commit these files: the capture contains the private desktop.
+
+
+## Live follow-up — 2026-10-21
+
+- Xiaomi 15 (`456cb10b`) updated in place with the local ARM64 preview APK;
+  the installed SHA-256 is
+  `72cd55df7fb2f1eed8cdc530668b724a0a1e32bd94c0c0f938cff2223eb0248b`.
+  Existing and replacement certificates matched. Android reported a successful
+  launch and the real screen showed Mancave. Pairing data was preserved.
+- The two other advertised wireless ADB endpoints were unreachable. Later the
+  Xiaomi also disconnected from ADB. The two other devices remain unupdated.
+- The Mac process/listening port did **not** establish discovery or playback:
+  the phone and native Bonjour both initially saw only Mancave and Xiaomi.
+  Restarting alone did not help. Existing macOS Local Network toggles were on;
+  toggling them and re-signing the old bundle alone also did not restore it.
+- Rebuilt the Mac app with opt-in Rust network diagnostics and signed with the
+  existing Apple Development identity (team `Q9WPWRTU7G`). After reinstalling,
+  the mDNS log showed successful IPv4 probing/announcing and native Bonjour
+  independently listed **MacBook Pro** at the Mac's LAN endpoint. The precise
+  reason the prior app could not advertise has not been isolated.
+- The running Mac app still reports Screen Recording and Accessibility as
+  disabled. Phone-visible Mac discovery, capture, input, and the Mac-to-Xiaomi
+  Android consent flow remain unverified after this change because ADB was no
+  longer connected. Do not label these paths working based on discovery alone.
+- UI automation briefly opened the generated build as a second app. That process
+  was stopped; generated/backup bundles were unregistered from Launch Services
+  and the installed app registered again. Keep only one host on port 47989.
+
+- Mac discovery also survived a normal restart with diagnostic logging unset.
+  The updated local Rust workspace passed 122 tests (one manual soak ignored);
+  formatting and diff checks passed. The diagnostic build is locally verified,
+  not covered by the earlier green hosted run at `26422ed`.

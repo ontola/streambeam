@@ -226,3 +226,14 @@ The application keep rule in `app/android/app/proguard-rules.pro` preserves
 run `python3 scripts/check-android-scanner.py`. This checks the minified artifact;
 Flutter analysis and widget tests alone cannot detect the regression. Still
 verify camera startup and a real QR scan on a device before claiming acceptance.
+
+
+## Opt-in native network diagnostics
+
+Set `STREAMBEAM_NETWORK_DIAGNOSTICS=1` when launching a desktop app to route
+Rust mDNS debug messages and warning/error messages to stderr. This is useful
+when a listener is running but the host is absent from Bonjour; compare actual
+IPv4 probe/announce records with `dns-sd -B _streambeam._udp local.`. QUIC
+packet tracing stays disabled. Redirect diagnostics to a private file, since
+the existing host startup output also contains pairing QR material. Leave the
+environment variable unset during normal use.

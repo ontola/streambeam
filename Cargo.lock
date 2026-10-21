@@ -1539,6 +1539,7 @@ dependencies = [
  "clap",
  "core-graphics2",
  "libloading",
+ "log",
  "opus",
  "qrcode",
  "quinn",

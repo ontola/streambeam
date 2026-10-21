@@ -39,9 +39,33 @@ pub fn log(msg: &str) {
 /// unwinds silently in release builds — no console to print to — and the
 /// video path just stops forever with nothing in `host.log` explaining why.
 pub fn install_panic_hook() {
+    // Opt-in diagnostics for desktop builds, where the Rust log facade may
+    // otherwise have no sink. Keep transport packet tracing disabled.
+    if std::env::var_os("STREAMBEAM_NETWORK_DIAGNOSTICS").is_some()
+        && log::set_logger(&NETWORK_LOGGER).is_ok()
+    {
+        log::set_max_level(log::LevelFilter::Debug);
+    }
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         log(&format!("PANIC: {info}"));
         default_hook(info);
     }));
+}
+
+struct NetworkLogger;
+static NETWORK_LOGGER: NetworkLogger = NetworkLogger;
+
+impl log::Log for NetworkLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target().starts_with("mdns_sd") || metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!("{} {}: {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
 }
