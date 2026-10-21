@@ -1,14 +1,14 @@
 # Experimental browser viewer
 
-The browser path is a **development preview with optional desktop control**, not a replacement for
-native apps. It needs a separately launched `webbridge` process. Native hosts do
-not yet offer a browser-sharing button or generate browser invitations. Audio,
-saved browser devices, mobile-browser acceptance, and WAN routing
-are not implemented. Do not advertise the website as a working browser viewer
+The browser path is a **development preview with optional sound and desktop
+control**, not a replacement for native apps. It needs a separately launched `webbridge` process. Native hosts do
+not yet offer a browser-sharing button or generate browser invitations. Saved
+browser devices, mobile-browser acceptance, and WAN routing are not implemented. Do not advertise the website as a working browser viewer
 until the assets are deployed and the host integration is complete.
 
-The first slice is real H.264 playback: native host → pinned mutual-TLS QUIC
-client → WebTransport gateway → WebCodecs decoder → browser canvas. It does not
+The media path provides real H.264 and optional Opus playback: native host →
+pinned mutual-TLS QUIC client → WebTransport gateway → WebCodecs decoders →
+browser canvas and Web Audio. It does not
 capture the browser's own screen or play a pre-recorded video URL. The fixture
 smoke test sends the repository's H.264 fixture through the same real network path.
 
@@ -20,7 +20,9 @@ needs its own endpoint and application authentication. Its certificate-hash
 option authenticates the server, not the client. This experiment preserves the
 native protocol and authorization gate instead of weakening it to fit browsers.
 
-WebCodecs can decode the native Annex-B H.264 stream without transcoding. The
+WebCodecs can decode the native Annex-B H.264 stream without transcoding. Opus
+uses the native session’s negotiated sample rate, channels and
+frame duration; this preview supports 48 kHz mono/stereo playback. The
 current slice uses a reliable WebTransport stream for framed access units; it
 is not yet the datagram/FEC design required for competitive game-stream latency.
 
@@ -28,6 +30,7 @@ Primary references:
 
 - [WebTransport security and certificate hashes](https://www.w3.org/TR/webtransport/)
 - [WebCodecs video decoding](https://developer.chrome.com/docs/web-platform/best-practices/webcodecs)
+- [Raw Opus codec registration](https://www.w3.org/TR/webcodecs-opus-codec-registration/)
 - [wtransport short-lived self-signed identities](https://docs.rs/wtransport/0.7.2/wtransport/tls/struct.Identity.html)
 
 ## Run locally
@@ -56,6 +59,11 @@ cargo run -p streambeam-devtools --features web --bin webbridge -- \
 ```
 
 Open the URL from the private invitation file in the browser and click Connect.
+Sound is off by default; click Enable sound to start playback. Mute and hiding
+the tab clear queued sound. Physical audibility and A/V synchronization still
+need real-device acceptance; the automated test proves decoded PCM and scheduled
+browser playback, not what reaches the speakers.
+
 Control is off by default. Enable “Allow remote control for this session” to use
 the shared desktop; leaving the canvas, hiding the tab, or pressing Escape revokes
 control and releases held keys/buttons. Keyboard mapping currently assumes the
@@ -95,17 +103,20 @@ block it. Do not publish the invitation or expose the gateway to the internet.
   bidirectional stream must send the exact 32-byte capability within five seconds;
   constant-time comparison and a five-minute expiry gate all native connection
   attempts and application responses. Invalid attempts do not consume the invite.
-- Only one authenticated browser is accepted per process. No parallel per-peer
-  unbounded tasks or media queues are created. One bounded input reader task is
-  created after authentication and aborted at session teardown. QUIC ingress is limited to four
+- Only one authenticated browser is accepted per process. The gateway does not
+  spawn a task for each unauthenticated peer. One bounded input reader task is
+  created after authentication and aborted at session teardown. QUIC ingress is
+  limited to four
   pending handshakes, 128 KiB total initial data, and 256 KiB per connection.
   After successful authentication,
   the native connection has a 60-second setup timeout. Video packets are capped
   at 4 MiB, writes at two seconds, and decode backlog at eight queued frames.
 - Server messages use a big-endian u32 length. The first is UTF-8 JSON with
-  `version:1`, H.264 `codec`, `width`, `height`, `fps`. Following messages contain
-  one keyframe flag byte, a big-endian u64 timestamp in microseconds, and Annex-B
-  H.264. Keyframes include SPS/PPS. Native FEC completion order is restored and
+  `version:2`, H.264 `codec`, `width`, `height`, `fps`, desktop `control` support and
+  negotiated `audio {sample_rate, channels, frame_ms}`. Following messages contain
+  one media flag byte, a big-endian u64 timestamp in microseconds, and payload.
+  Flags 0/1 are delta/keyframe Annex-B H.264; flag 2 is raw Opus. Keyframes include
+  SPS/PPS. Native FEC completion order is restored and
   native packet loss requests IDR recovery before dependent frames resume.
 - After the initial capability, the client side of the same bidirectional stream
   carries u16 big-endian-length JSON input commands (maximum 512 bytes, queue 32,
@@ -121,6 +132,11 @@ block it. Do not publish the invitation or expose the gateway to the internet.
   generation: the newer connection's first input releases old holds atomically;
   old input/cleanup cannot release keys belonging to the new owner. Stream EOF,
   task cancellation and connection loss all release owned keys/buttons.
+- Audio is decoded only after a user click. Decoder backlog is capped at 12
+  packets; excess Opus packets are dropped so a brief browser stall can recover; scheduled playback is capped at 200 ms and 24 sources. Muting, hiding
+  the tab or teardown stops every scheduled source. Duplicate/old native Opus
+  datagrams are discarded; full packet-loss concealment and synchronized A/V
+  presentation remain follow-up work.
 - Closing/stopping the viewer releases the native session. A slow decoder
   terminates instead of dropping reference frames and displaying corrupted video.
 
@@ -138,15 +154,18 @@ then requires at least 30 decoded 640×360 frames with non-uniform image pixels.
 It verifies that the invitation fragment is cleared, no native input arrives before
 consent, consented browser key/button events reach the actual native fixture,
 focus loss releases held input, and closing the actual tab releases held keys,
-closes the bridge and removes the private invitation. The fixture's opt-in private
-JSONL input recorder never injects events into the OS. Credentials stay in temporary private files
+closes the bridge and removes the private invitation. The audio test also verifies no decoding before a click, nonzero decoded PCM,
+a bounded source count, recovery after a 250 ms main-thread stall, and an empty
+queue after Mute. Chrome runs headless, so
+this is not an audibility assertion. The fixture’s opt-in private JSONL input
+recorder never injects events into the OS. Credentials stay in temporary private files
 and are not printed. Screenshot output defaults to Cargo's target directory
 under `web-smoke/`; `STREAMBEAM_WEB_ARTIFACTS` overrides it. The dedicated Browser
 preview workflow runs this same path in Chrome and retains the screenshot.
 
 Production follow-up: integrate invitation and lifecycle with native hosts,
 replace the prototype bearer capability with reviewed persistent browser pairing,
-add audio, keyboard-layout/IME support and visibility recovery, evaluate unreliable media delivery,
+add A/V synchronization, keyboard-layout/IME support and visibility recovery, evaluate unreliable media delivery,
 exercise LAN browser permissions and target browsers, then ship the viewer URL.
 
 ## Native host integration path

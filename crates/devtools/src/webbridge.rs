@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use streambeam_core::{FrameOrder, FrameReassembler, access_unit_is_keyframe};
-use streambeam_proto::media::{CHANNEL_VIDEO, MediaHeader};
+use streambeam_proto::media::{CHANNEL_AUDIO, CHANNEL_VIDEO, MEDIA_HEADER_LEN, MediaHeader};
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use url::Url;
@@ -198,6 +198,7 @@ async fn relay(
     let mut session = tokio::select! {
         result = timeout(Duration::from_secs(60), streambeam_core::connect_as(payload, "StreamBeam browser bridge")) => result??,
         _ = connection.closed() => return Ok(()),
+        _ = tokio::signal::ctrl_c() => return Ok(()),
     };
     let can_control = session.input_mode == streambeam_proto::control::HostInputMode::Mouse;
     let mut control = web_input::Control::new(can_control);
@@ -217,7 +218,7 @@ async fn relay(
         let (sps, _) = streambeam_core::extract_avc_decoder_config(config).ok_or("invalid H.264 configuration")?;
         if sps.len() < 4 { return Err("short H.264 SPS".into()); }
         let config = config.to_vec();
-        let metadata = serde_json::json!({"version":1,"codec":format!("avc1.{}", hex(&sps[1..4])),"width":session.width,"height":session.height,"fps":session.fps,"control":can_control});
+        let metadata = serde_json::json!({"version":2,"codec":format!("avc1.{}", hex(&sps[1..4])),"width":session.width,"height":session.height,"fps":session.fps,"control":can_control,"audio":session.audio});
         packet(&mut send, &serde_json::to_vec(&metadata)?).await?;
         streambeam_core::request_idr(&mut session).await?;
         let mut assembler = FrameReassembler::default();
@@ -226,6 +227,8 @@ async fn relay(
         let mut waiting_keyframe = true;
         let mut last_idr = Instant::now();
         let mut frame_number = 0u64;
+        let mut last_audio_id: Option<u16> = None;
+        let mut audio_clock = 0u64;
         loop {
             let datagram = tokio::select! {
                 result = timeout(Duration::from_secs(10), session.conn.read_datagram()) => result??,
@@ -243,6 +246,18 @@ async fn relay(
                 }
             };
             let header = MediaHeader::decode(&datagram)?;
+            if header.channel == CHANNEL_AUDIO {
+                if header.k != 1 || header.r != 0 || header.shard_index != 0 || header.frame_len as usize != datagram.len()-MEDIA_HEADER_LEN || header.frame_len > 4000 { continue; }
+                let advance = last_audio_id.map(|last|header.frame_id.wrapping_sub(last)).unwrap_or(1);
+                if advance == 0 || (advance as i16) < 0 { continue; }
+                last_audio_id = Some(header.frame_id);
+                audio_clock += u64::from(advance) * u64::from(session.audio.frame_ms) * 1000;
+                let mut audio = Vec::with_capacity(datagram.len());
+                audio.push(2); audio.extend_from_slice(&audio_clock.to_be_bytes());
+                audio.extend_from_slice(&datagram[MEDIA_HEADER_LEN..]);
+                packet(&mut send, &audio).await?;
+                continue;
+            }
             if header.channel != CHANNEL_VIDEO { continue; }
             if let Some((id, frame)) = assembler.push_datagram(&datagram)? {
                 order.push(id, frame);

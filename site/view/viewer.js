@@ -1,3 +1,4 @@
+import { audioPlayback } from './audio.js';
 import { attachControls } from './controls.js';
 const status = document.querySelector('#status');
 const start = document.querySelector('#connect');
@@ -6,7 +7,7 @@ const canvas = document.querySelector('#screen');
 const stats = document.querySelector('#stats');
 const context = canvas.getContext('2d');
 const MAX_PACKET = 4 * 1024 * 1024;
-let transport, decoder, controller, stopped = false;
+let transport, decoder, controller, sound, stopped = false;
 
 function fromHex(value) {
   if (!/^[a-f0-9]{64}$/.test(value ?? '')) throw new Error('Invalid invitation.');
@@ -34,6 +35,7 @@ try {
 function end(message) {
   stopped = true;
   controller?.dispose();
+  sound?.dispose();
   transport?.close();
   if (decoder && decoder.state !== 'closed') decoder.close();
   stop.disabled = true;
@@ -86,7 +88,7 @@ start.onclick = async () => {
     for await (const packet of packets(stream.readable)) {
       if (!configured) {
         const metadata = JSON.parse(new TextDecoder().decode(packet));
-        if (metadata.version !== 1 || !/^avc1\.[a-f0-9]{6}$/.test(metadata.codec) || metadata.width < 1 || metadata.width > 4096 || metadata.height < 1 || metadata.height > 4096) throw new Error('Unsupported video configuration.');
+        if (metadata.version !== 2 || !/^avc1\.[a-f0-9]{6}$/.test(metadata.codec) || metadata.width < 1 || metadata.width > 4096 || metadata.height < 1 || metadata.height > 4096) throw new Error('Unsupported video configuration.');
         const config = { codec: metadata.codec, codedWidth: metadata.width, codedHeight: metadata.height, optimizeForLatency: true };
         if (!(await VideoDecoder.isConfigSupported(config)).supported) throw new Error('This browser cannot decode the shared screen. Try the native StreamBeam app.');
         decoder = new VideoDecoder({
@@ -104,10 +106,12 @@ start.onclick = async () => {
         });
         decoder.configure(config); configured = true;
         controller = attachControls({canvas,writer,allowed:metadata.control===true,onError:end});
+        sound = await audioPlayback(metadata.audio);
       } else {
-        if (packet.length < 10 || packet[0] > 1) throw new Error('Invalid video frame.');
+        if (packet.length < 10 || packet[0] > 2) throw new Error('Invalid media frame.');
+        if (packet[0] === 2) { sound?.push(packet); continue; }
         // Fail closed on decoder backlog; never drop reference frames and continue corrupted.
-        if (decoder.decodeQueueSize > 8) throw new Error('The browser cannot keep up with this stream. Try the native app.');
+        if (decoder.decodeQueueSize >= 8) throw new Error('The browser cannot keep up with this stream. Try the native app.');
         decoder.decode(new EncodedVideoChunk({ type: packet[0] ? 'key' : 'delta', timestamp: Number(new DataView(packet.buffer, packet.byteOffset + 1, 8).getBigUint64(0)), data: packet.subarray(9) }));
       }
     }

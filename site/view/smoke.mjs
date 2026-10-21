@@ -18,7 +18,7 @@ const children = [];
 let browser;
 const server = createServer(async (req, res) => {
   // Exact static-file allowlist; no invitation can become a request URL.
-  const files = {'/view/':'view/index.html','/view/viewer.js':'view/viewer.js','/view/controls.js':'view/controls.js','/view/viewer.css':'view/viewer.css','/assets/streambeam-logo.svg':'assets/streambeam-logo.svg'};
+  const files = {'/view/':'view/index.html','/view/viewer.js':'view/viewer.js','/view/controls.js':'view/controls.js','/view/audio.js':'view/audio.js','/view/viewer.css':'view/viewer.css','/assets/streambeam-logo.svg':'assets/streambeam-logo.svg'};
   const name = files[req.url];
   if (!name) {res.writeHead(404).end(); return;}
   const mime = name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
@@ -90,6 +90,16 @@ try {
     return {width:canvas.width,height:canvas.height,frames:Number(canvas.dataset.decodedFrames),colors:colors.size};
   });
   assert.equal(evidence.width,640); assert.equal(evidence.height,360); assert.ok(evidence.colors>20);
+  assert.equal(await page.locator('#sound-status').getAttribute('data-decoded-frames'),null);
+  await page.getByRole('button',{name:'Enable sound',exact:true}).click();
+  // Simulate a short main-thread stall; queued network packets must recover.
+  await page.evaluate(()=>{const until=performance.now()+250;while(performance.now()<until){}});
+  await page.waitForFunction(()=>Number(document.querySelector('#sound-status').dataset.decodedFrames)>=4800).catch(async()=>{throw new Error('Audio verification failed: '+await page.locator('#sound-status').textContent()+'; '+await page.locator('#status').textContent());});
+  const audioEvidence=await page.locator('#sound-status').evaluate(el=>({frames:Number(el.dataset.decodedFrames),peak:Number(el.dataset.peak),activeSources:Number(el.dataset.activeSources),droppedPackets:Number(el.dataset.droppedPackets||0)}));
+  assert.ok(audioEvidence.peak>0.01);assert.ok(audioEvidence.activeSources<=24);
+  await page.getByRole('button',{name:'Mute',exact:true}).click();
+  assert.equal(await page.locator('#sound-status').getAttribute('data-enabled'),'false');
+  assert.equal(await page.locator('#sound-status').getAttribute('data-active-sources'),'0');
   const recorded = async () => (await readFile(inputFile,'utf8')).split('\n').slice(0,-1).filter(Boolean).map(line=>JSON.parse(line));
   const hasKey=(events,vk,down)=>events.some(e=>e.Key?.vk===vk && e.Key.down===down);
   const hasButton=(events,down)=>events.some(e=>e.MouseButton?.button===0 && e.MouseButton.down===down);
@@ -119,7 +129,7 @@ try {
   assert.ok(hasKey(await recorded(),66,false),'Tab close did not release held B');
   assert.equal(bridge.exitCode,0);
   assert.equal(await readFile(inviteFile).then(()=>true,()=>false),false);
-  console.log(JSON.stringify({result:'passed',...evidence,wrongTokenRejected:true,wrongOriginRejected:true,wrongCertificateRejected:true,fragmentCleared:true,inputConsentVerified:true,nativeInputReceived:true,focusLossReleased:true,tabCloseReleased:true,cleanShutdown:true,screenshot:join(artifactDir,'browser-viewer.png')}));
+  console.log(JSON.stringify({result:'passed',...evidence,wrongTokenRejected:true,wrongOriginRejected:true,wrongCertificateRejected:true,fragmentCleared:true,audioDecoded:audioEvidence,audioStartsOnClick:true,audioMuteClearsQueue:true,inputConsentVerified:true,nativeInputReceived:true,focusLossReleased:true,tabCloseReleased:true,cleanShutdown:true,screenshot:join(artifactDir,'browser-viewer.png')}));
 } finally {
   await browser?.close();
   for (const process of children) process.kill('SIGTERM');
