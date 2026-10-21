@@ -13,7 +13,7 @@ This matrix describes implementation, not a guarantee that every device combinat
 | Android | Implemented | Implemented | MediaProjection capture with MediaCodec H.264 encoding; MediaCodec playback to a Surface. AV1 playback is negotiated where supported. System sharing consent is required per capture session. |
 | Linux | Not implemented | Not implemented | An experimental Flutter shell bundle builds in CI; native capture, video decoding/rendering, audio and input remain to be implemented. |
 | iOS / iPadOS | Not available | Implemented; physical-device acceptance pending | Foreground SDR H.264 viewer using the shared Apple VideoToolbox decoder and Flutter texture. Native Bonjour, QR pairing and saved-host reconnect are wired. Unsigned release builds and simulator video/audio tests pass; no signed/store release yet. |
-| Browser | Not available | Experimental video only | Optional `webbridge` converts the authenticated native stream to WebTransport; WebCodecs displays H.264. Separate bridge launch required; no native host/QR integration or deployed viewer. |
+| Browser | Not available | Experimental video, audio and control | Optional `webbridge` converts the authenticated native stream to WebTransport; WebCodecs displays H.264. Separate bridge launch required; no native host/QR integration or deployed viewer. |
 
 Desktop capture stays idle until an authorized viewer requests a session. macOS needs Screen Recording permission. Android shows the system's sharing chooser before capture starts.
 
@@ -26,7 +26,7 @@ Desktop capture stays idle until an authorized viewer requests a session. macOS 
 | Windows | Viewer exists; input coverage needs further verification | Mouse and keyboard through SendInput; gamepad through VIIPER, which needs separate installation. |
 | Linux | Planned | Planned |
 | iOS / iPadOS | Existing touch/trackpad and keyboard controls enabled; physical-device acceptance pending | Not available |
-| Browser | Not implemented | Not available |
+| Browser | Explicit session opt-in for mouse/keyboard forwarding; focus loss revokes control | Not available |
 
 A successful video stream alone does not establish that remote input works. Validate capture, decoding, mouse/touch, keyboard and gamepad separately on the actual pair of devices.
 
@@ -38,7 +38,8 @@ A successful video stream alone does not establish that remote input works. Vali
 | Android | Not implemented; screen sharing is video-only | Opus → AAudio implemented; broader live validation pending |
 | Windows | WASAPI capture pending | WASAPI playback pending |
 | iOS / iPadOS | Not available | Opus → shared Rust PCM ring → AVAudioEngine implemented. Simulator engine startup and PCM conversion pass; audible real-device playback remains unverified. |
-| Linux / Browser | Not implemented | Not implemented |
+| Linux | Not implemented | Not implemented |
+| Browser | Not available | Optional Opus → WebCodecs/Web Audio after a user click; fixture PCM verified, physical audibility and A/V sync pending |
 
 ## Distribution and networking
 
@@ -46,7 +47,7 @@ A successful video stream alone does not establish that remote input works. Vali
 - Ordinary CI packages Windows x64, macOS Apple Silicon/Intel, Android ARM64, iOS and an experimental Linux x64 shell. Windows/iOS outputs are unsigned; macOS CI signatures are ad hoc, and Android CI uses a development signer. These are not production-signed store releases. Consult the exact commit’s run before claiming all jobs are green.
 - A complete unsigned iOS release builds locally. Three iPhone simulator tests verify decoded H.264 pixels, texture lifecycle/errors and a running audio graph; three Rust audio tests verify PCM behavior. The shared Apple changes also pass a full macOS ARM64 release build and six existing macOS decoder tests, including AV1, HDR10 and MetalFX. This is not physical iPhone pairing, audible A/V or remote-input acceptance.
 - Apple has registered **StreamBeam Remote Desktop** (`io.streambeam.streambeam`), currently Prepare for Submission with no uploaded build. Public App Store, Google Play and Microsoft Store releases remain unavailable. See [RELEASING](RELEASING.md) and [DESKTOP_RELEASES](DESKTOP_RELEASES.md).
-- The optional browser bridge has local fixture-based video/security checks and a dedicated CI workflow. It is video-only and not a deployed website feature; physical desktop/mobile-browser acceptance remains pending. See [WEB](WEB.md).
+- The optional browser bridge has local Linux/macOS fixture-based video/audio/control/security checks and a dedicated CI workflow. It is not a deployed website feature; physical desktop/mobile-browser acceptance remains pending. See [WEB](WEB.md).
 - Nearby discovery and pairing target the local network. Built-in internet discovery, NAT traversal and relays remain [future work](WAN.md).
 - HDR, display selection, quality settings and upscaling depend on the complete capture-to-display path; consult [HDR](HDR.md), [UPSCALE](UPSCALE.md) and the decisions log before claiming support for a particular setup.
 

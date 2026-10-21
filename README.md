@@ -40,9 +40,9 @@ On macOS, allow **Screen Recording** to share your screen and **Accessibility** 
 | **Windows** | Yes; desktop capture and optional background service | Yes; H.264 viewer implemented | Source / unsigned CI ZIP |
 | **Linux** | Not implemented | Not implemented | Experimental CI shell bundle; no native streaming |
 | **iOS / iPadOS** | Not available | Implemented: SDR H.264 and host audio; physical-device acceptance pending | Source / unsigned CI build; no installable store release |
-| **Browser** | Not available | Experimental video-only viewer through a separate bridge | Local development only; not deployed |
+| **Browser** | Not available | Experimental viewer with optional audio/control through a separate bridge | Local development only; not deployed |
 
-**Preview limits:** CI bundles are build artifacts, not signed public installers. App Store, Google Play and Microsoft Store releases are not available yet. The iOS app record is registered as **StreamBeam Remote Desktop**, with no uploaded build; see [release status](docs/RELEASING.md). Audio is partially implemented and still needs broader device validation; Android screen sharing is video-only. The [experimental browser viewer](docs/WEB.md) requires a separately launched bridge and has no audio or remote input. Internet discovery, NAT traversal and relays are [future work](docs/WAN.md). There is no published end-to-end latency guarantee.
+**Preview limits:** CI bundles are build artifacts, not signed public installers. App Store, Google Play and Microsoft Store releases are not available yet. The iOS app record is registered as **StreamBeam Remote Desktop**, with no uploaded build; see [release status](docs/RELEASING.md). Audio is partially implemented and still needs broader device validation; Android screen sharing is video-only. The [experimental browser viewer](docs/WEB.md) requires a separately launched bridge; audio and remote input require session consent. Physical browser/desktop acceptance remains pending. Internet discovery, NAT traversal and relays are [future work](docs/WAN.md). There is no published end-to-end latency guarantee.
 
 The published Android preview may lag behind current development. See [releases](https://github.com/joepio/streambeam/releases) for the exact downloadable build, and [PROGRESS](docs/PROGRESS.md) for recent changes.
 

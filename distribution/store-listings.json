@@ -25,12 +25,12 @@
       "publisher": "Argu B.V.",
       "teamId": "Q9WPWRTU7G",
       "url": "https://appstoreconnect.apple.com/apps/6825263933/distribution",
-      "version": "1.0",
+      "version": "0.1.0",
       "state": "Prepare for Submission",
       "nameNote": "StreamBeam was unavailable; the registered App Store name is StreamBeam Remote Desktop."
     },
-    "deliveryStatus": "No signed IPA or uploaded build verified. Apple signing/API credential setup is authorized and underway.",
-    "versionAlignment": "The registered store version is 1.0; app/pubspec.yaml is 0.1.0+2. Align the marketing version before selecting a build."
+    "deliveryStatus": "Distribution certificate/profile verified and signing secrets configured; signed export/upload and API-key recovery remain pending.",
+    "versionAlignment": "App Store marketing version 0.1.0 matches app/pubspec.yaml 0.1.0+2; use an unused increasing store build number."
   },
   "microsoftStore": {
     "shortDescription": "Share your Windows desktop with your paired StreamBeam devices.",
@@ -39,13 +39,13 @@
   },
   "submissionChecklist": [
     "Confirm publisher account, support email and a public privacy policy URL.",
-    "Align the Apple marketing version with the binary before choosing a build; the registered app record currently has iOS 1.0 while source is 0.1.0+2.",
     "Capture screenshots of the actual release on each supported platform; do not use concept mockups as app screenshots.",
     "Complete Play AccessibilityService and screen-capture foreground-service declarations with a real demonstration video.",
     "Review Data safety and Apple App Privacy against the shipped SDK versions and actual data flows.",
     "Complete age-rating, content-rights and encryption/export questions using the publisher's verified answers.",
     "Keep existing debug-signed previews and pairing data; Play-signed migration needs a separate path.",
     "Verify Play's installed-app signing certificate in public assetlinks.json.",
-    "Verify actual install, discovery, pairing, moving picture, audio and input before promotion."
+    "Verify actual install, discovery, pairing, moving picture, audio and input before promotion.",
+    "Verify recoverable signing-key backups in the publisher password manager."
   ]
 }

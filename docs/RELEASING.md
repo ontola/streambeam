@@ -4,7 +4,7 @@ The first downloadable release is `v0.1.0` (Android version code 2). These are
 LAN-streaming previews, not the completed M8/v1 milestone. Ordinary CI now builds
 Android ARM64, Windows x64, macOS Apple Silicon/Intel, an experimental Linux x64
 shell, and a complete unsigned iOS app. Browser fixture tests cover the optional
-video bridge separately. See [DESKTOP_RELEASES.md](DESKTOP_RELEASES.md),
+video/audio/control bridge separately. See [DESKTOP_RELEASES.md](DESKTOP_RELEASES.md),
 [IOS.md](IOS.md) and [WEB.md](WEB.md). Build artifacts do not establish production
 signing, actual install/upgrade behavior, physical input, cameras or live latency.
 
@@ -19,15 +19,20 @@ The Apple bundle identifier and App Store Connect app record have been created:
 | SKU | `streambeam-ios` |
 | Apple app ID | `6825263933` |
 | Publisher / team | Argu B.V. / `Q9WPWRTU7G` |
-| Store version / state | iOS **1.0**, **Prepare for Submission** |
+| Store version / state | iOS **0.1.0**, **Prepare for Submission** |
 | Account record | [App Store Connect](https://appstoreconnect.apple.com/apps/6825263933/distribution) |
 
 This is registration, not an App Store release or TestFlight build. There is no
-verified signed IPA or upload yet. Apple signing/API credential setup is
-underway following user authorization; completing that setup still requires
-verification. The app source currently builds **0.1.0+2**: align the App Store
-marketing version with the intended binary version before selecting a build.
-Do not assume the record's initial 1.0 means the application has reached v1.
+verified signed IPA or upload yet. The dedicated Apple Distribution certificate
+and matching App Store profile were created and validated on 2026-10-21; the
+three signing secrets are configured in this repository. The app record's
+marketing version is now **0.1.0**, matching source **0.1.0+2**, and its draft
+description/keywords are saved with manual release selected.
+
+The App Store Connect API-key download failed in the in-app browser. The first
+unused key was revoked with user approval; its replacement is not yet backed up
+or configured for CI. Do not claim upload access until the private file is
+actually saved and authenticated. The password-manager backup is also pending.
 
 Google Play registration/upload and Microsoft Store identity/submission are
 still unverified. Keep their draft listings separate from Apple's registered
@@ -185,3 +190,12 @@ Desktop signed/notarized and Windows MSIX delivery are documented in
 References: [Google edits](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit),
 [Apple uploads](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/),
 [Accessibility declaration](https://support.google.com/googleplay/android-developer/answer/10964491).
+
+## Credential recovery
+
+GitHub Actions secrets cannot serve as a recoverable backup. Keep the dedicated
+Apple distribution P12 and its password, the App Store profile, API private key
+with key/issuer IDs, and any Android upload keystore/password/alias in the
+publisher's password manager. Verify the backup before removing local originals.
+Never commit keys or include them in diagnostic artifacts. Certificate/profile
+renewal is separate from replacing an installed app's signing identity.
