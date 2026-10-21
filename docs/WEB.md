@@ -29,6 +29,7 @@ is not yet the datagram/FEC design required for competitive game-stream latency.
 Primary references:
 
 - [WebTransport security and certificate hashes](https://www.w3.org/TR/webtransport/)
+- [WebCodecs H.264 access-unit requirements](https://www.w3.org/TR/webcodecs-avc-codec-registration/)
 - [WebCodecs video decoding](https://developer.chrome.com/docs/web-platform/best-practices/webcodecs)
 - [Raw Opus codec registration](https://www.w3.org/TR/webcodecs-opus-codec-registration/)
 - [wtransport short-lived self-signed identities](https://docs.rs/wtransport/0.7.2/wtransport/tls/struct.Identity.html)
@@ -118,7 +119,9 @@ block it. Do not publish the invitation or expose the gateway to the internet.
   negotiated `audio {sample_rate, channels, frame_ms}`. Following messages contain
   one media flag byte, a big-endian u64 timestamp in microseconds, and payload.
   Flags 0/1 are delta/keyframe Annex-B H.264; flag 2 is raw Opus. Keyframes include
-  SPS/PPS. Native FEC completion order is restored and
+  SPS/PPS only from the native CodecConfig, even when that config also includes
+  an IDR picture. Prepending that picture would put two access units in one
+  WebCodecs chunk, which Linux Chrome rejects. Native FEC completion order is restored and
   native packet loss requests IDR recovery before dependent frames resume.
 - After the initial capability, the client side of the same bidirectional stream
   carries u16 big-endian-length JSON input commands (maximum 512 bytes, queue 32,

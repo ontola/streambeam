@@ -189,6 +189,21 @@ async fn packet(send: &mut wtransport::SendStream, data: &[u8]) -> Result<(), Er
     Ok(())
 }
 
+/// Some native hosts include an IDR access unit in CodecConfig. WebCodecs
+/// requires exactly one access unit per EncodedVideoChunk, so only parameter
+/// sets may be prepended to a later keyframe (never that embedded picture).
+fn browser_codec_config(data: &[u8]) -> Result<(String, Vec<u8>), Error> {
+    let (sps, pps) =
+        streambeam_core::extract_avc_decoder_config(data).ok_or("invalid H.264 configuration")?;
+    if sps.len() < 4 {
+        return Err("short H.264 SPS".into());
+    }
+    let codec = format!("avc1.{}", hex(&sps[1..4]));
+    let mut config = streambeam_core::nal_with_start_code(&sps);
+    config.extend_from_slice(&streambeam_core::nal_with_start_code(&pps));
+    Ok((codec, config))
+}
+
 async fn relay(
     payload: &str,
     connection: &wtransport::Connection,
@@ -215,10 +230,8 @@ async fn relay(
             return Err::<(), Error>("browser preview requires H.264".into());
         }
         let config = session.codec_config.as_deref().ok_or("missing H.264 configuration")?;
-        let (sps, _) = streambeam_core::extract_avc_decoder_config(config).ok_or("invalid H.264 configuration")?;
-        if sps.len() < 4 { return Err("short H.264 SPS".into()); }
-        let config = config.to_vec();
-        let metadata = serde_json::json!({"version":2,"codec":format!("avc1.{}", hex(&sps[1..4])),"width":session.width,"height":session.height,"fps":session.fps,"control":can_control,"audio":session.audio});
+        let (codec, config) = browser_codec_config(config)?;
+        let metadata = serde_json::json!({"version":2,"codec":codec,"width":session.width,"height":session.height,"fps":session.fps,"control":can_control,"audio":session.audio});
         packet(&mut send, &serde_json::to_vec(&metadata)?).await?;
         streambeam_core::request_idr(&mut session).await?;
         let mut assembler = FrameReassembler::default();
@@ -304,6 +317,20 @@ async fn relay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn codec_config_never_prepends_a_second_picture() {
+        let frames = streambeam_core::split_access_units(include_bytes!("../assets/test.h264"));
+        // fakehost deliberately sends the entire first picture as CodecConfig.
+        let (codec, mut config) = browser_codec_config(&frames[0].data).unwrap();
+        assert_eq!(codec, "avc1.64001e");
+        let types: Vec<_> = streambeam_core::split_nal_units(&config)
+            .iter()
+            .map(|nal| nal[0] & 0x1f)
+            .collect();
+        assert_eq!(types, [7, 8]);
+        config.extend_from_slice(&frames[0].data);
+        assert_eq!(streambeam_core::split_access_units(&config).len(), 1);
+    }
     #[test]
     fn capabilities_are_exact_and_expire() {
         assert!(authorized(&[7; 32], &[7; 32], Duration::ZERO));
