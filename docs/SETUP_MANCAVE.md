@@ -292,7 +292,10 @@ Do not commit these files: the capture contains the private desktop.
 - TCC logs confirmed that re-signing invalidated the existing Screen Recording
   and PostEvent requirements, despite enabled switches in System Settings.
   Replacing the Screen Recording entry with the current installed app removed
-  its capture warning. Accessibility restoration is pending system authentication.
+  its capture warning. After restarting System Settings and renewed user
+  authentication, adding the current app to Accessibility succeeded. Relaunching
+  StreamBeam removed both permission warnings; its UI listed Mancave and Xiaomi
+  as online. This verifies permission status, not remote input execution.
   Phone-visible Mac discovery, actual capture/input, and the Mac-to-Xiaomi
   Android consent flow remain unverified while ADB is disconnected. Do not label
   these paths working based on discovery or permission status alone.

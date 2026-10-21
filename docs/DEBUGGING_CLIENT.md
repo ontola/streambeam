@@ -250,5 +250,9 @@ Turning the old Screen Recording entry off and on was insufficient. Removing
 that entry and adding the current installed app through System Settings, then
 relaunching it, restored the app's capture permission status. Restore only the
 app's existing grants through the normal system UI; user authentication may be
-required. Do not edit the TCC database or infer working capture/input from a
-switch alone. Preserve the signing identity on subsequent builds.
+required. If the Accessibility file picker keeps Open disabled for the current
+app after removing its old entry, restart System Settings and authenticate again;
+this allowed adding the installed app in the observed case. Relaunch StreamBeam
+and check that both warnings disappear. Do not edit the TCC database or infer
+working capture/input from a switch alone. Preserve the signing identity on
+subsequent builds.
