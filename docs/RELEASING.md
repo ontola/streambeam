@@ -31,8 +31,11 @@ This is a signed export; no upload, Apple processing, TestFlight availability or
 public App Store release is verified.
 
 The [hosted signed build 4](https://github.com/joepio/streambeam/actions/runs/39608208468)
-was still running when this status was recorded; its outcome must be checked
-separately from the successful local export. The app record's
+passed on merge commit `6dc295c6c902356d945e4f84be6670bacd5bac5d`. The downloaded
+IPA **0.1.0 (4)** independently passed strict signature, exact profile/certificate,
+production entitlement, bundle/team and Rust privacy-manifest checks. Its SHA-256
+is `d84ac566b377e3ddb819ba34357751a3055be82d2965ba85dfe4f03e6757459d`.
+CI removed its temporary signing material and skipped the upload step. The app record's
 marketing version is now **0.1.0**, matching source **0.1.0+2**, and its draft
 description/keywords are saved with manual release selected.
 
@@ -191,8 +194,8 @@ Check hosted results for the exact commit; local results are not hosted CI proof
 
 Before public submission, verify installation, Local Network/camera consent,
 first pairing, reconnection, moving video, audible A/V and remote input on a
-physical iPhone/iPad. The local signed export is verified; hosted signed output,
-Apple processing and TestFlight availability remain separate checks. The
+physical iPhone/iPad. Local and hosted signed exports are verified; Apple processing and
+TestFlight availability remain separate checks. The
 registered app record above resolves the old registration blocker; it does not resolve these acceptance requirements.
 
 Android upload-key setup and a successful signed AAB also remain unverified.

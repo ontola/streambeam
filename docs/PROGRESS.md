@@ -21,7 +21,8 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - Local iOS **0.1.0 (3)** is an exported App Store distribution IPA with strict
   signature, profile and privacy-manifest verification. The
   [hosted signed build 4](https://github.com/joepio/streambeam/actions/runs/39608208468)
-  is still running at this documentation update. No upload or physical iPhone
+  passed, and its downloaded IPA 0.1.0 (4) independently passed the same signing
+  checks. No upload or physical iPhone
   acceptance is claimed.
 - Apple app **6825263933**, **StreamBeam Remote Desktop**, remains a draft.
   Missing API `.p8` recovery blocks upload setup. Bitwarden is locked and a
@@ -117,7 +118,7 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 
 ## Decisions log
 
-- 2026-10-21 — **Export and verify a signed iOS candidate without changing its signing identity.** Apple's keychain rejected the original OpenSSL 3 PKCS12 container. Re-exported the same Apple Distribution key/certificate with explicit 3DES encryption and SHA-1 MAC for Apple compatibility, and replaced the encrypted GitHub signing secret. Local App Store IPA 0.1.0 (3) export now passes strict signature, embedded profile and Rust privacy-manifest checks. This is container compatibility, not a new signing identity. Hosted build 4 is separately in progress; no store upload occurred. Credential inventory is private and ready, but Bitwarden unlock/vault selection and recoverable backup remain pending.
+- 2026-10-21 — **Export and verify a signed iOS candidate without changing its signing identity.** Apple's keychain rejected the original OpenSSL 3 PKCS12 container. Re-exported the same Apple Distribution key/certificate with explicit 3DES encryption and SHA-1 MAC for Apple compatibility, and replaced the encrypted GitHub signing secret. Local App Store IPA 0.1.0 (3) export now passes strict signature, embedded profile and Rust privacy-manifest checks. This is container compatibility, not a new signing identity. Hosted build 4 also passed on merge commit `6dc295c`; the downloaded IPA independently passed strict signature, exact profile/certificate, production entitlement and privacy-manifest checks. CI cleanup passed and upload was skipped. Credential inventory is private and ready, but Bitwarden unlock/vault selection and recoverable backup remain pending.
 
 - 2026-10-21 — **Verify integrated CI and separate it from installation evidence.** All ten checks passed for exact 5a99a2799340a1460f2d63e7119d7c02b93ea50b, including full Windows/macOS/Linux/Android builds, unsigned iOS/native tests and genuine browser fixture media/input; PR #3 merged. Installed that Mac build without changing its signing identity or existing permissions and observed nonblank 3840×2160 AV1 in a real Mac/Mancave session. The 120 fps menu target is not a throughput measurement. The matching Windows update is staged but its unsigned updater is blocked by machine AllSigned policy; the prior service remains intact. Final Android installation could not proceed while ADB was offline; the last verified Xiaomi update is 604ce0e. Signed iOS export, store upload, physical iPhone acceptance and credential backup are tracked separately above.
 

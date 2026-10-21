@@ -30,7 +30,7 @@
       "state": "Prepare for Submission",
       "nameNote": "StreamBeam was unavailable; the registered App Store name is StreamBeam Remote Desktop."
     },
-    "deliveryStatus": "Local signed IPA 0.1.0 (3) verified; hosted signed build 4 is in progress as of 2026-10-21 (run 39608208468). No upload occurred: App Store Connect API .p8 recovery remains pending. Signing secrets are configured with the Apple-compatible export of the same key/certificate; recoverable password-manager backup is not yet verified.",
+    "deliveryStatus": "Local signed IPA 0.1.0 (3) and hosted signed IPA 0.1.0 (4) verified on 2026-10-21 (run 39608208468); downloaded CI artifact passed strict signature/profile/privacy checks. No upload occurred: App Store Connect API .p8 recovery remains pending. Signing secrets are configured with the Apple-compatible export of the same key/certificate; recoverable password-manager backup is not yet verified.",
     "versionAlignment": "App Store marketing version 0.1.0 matches app/pubspec.yaml 0.1.0+2; use an unused increasing store build number."
   },
   "microsoftStore": {
