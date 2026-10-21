@@ -12,7 +12,10 @@ import 'widget_test.dart' show IdleApi;
 
 class _PairingApi extends IdleApi {
   SavedHostInfo? saved;
-  final stream = StreamController<DesktopStreamEvent>();
+  // No event is emitted until playback subscribes. A broadcast controller also
+  // closes when an earlier assertion fails before that subscription exists;
+  // a single-subscription controller would hang teardown and hide the failure.
+  final stream = StreamController<DesktopStreamEvent>.broadcast();
   int connections = 0;
 
   @override
