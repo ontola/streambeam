@@ -52,6 +52,8 @@ for size in [192, 512]:
     export(f'app/web/icons/Icon-maskable-{size}.png', size, svg(background=True, rounded=False, scale=.85))
 export('app/web/favicon.png', 32)
 export('assets/streambeam-logo.png', 512)
+for name, size in [('Square44x44Logo', 44), ('Square150x150Logo', 150), ('StoreLogo', 50)]:
+    export(f'packaging/windows/Assets/{name}.png', size)
 
 with tempfile.TemporaryDirectory(prefix='streambeam-brand-') as temporary:
     tmp = Path(temporary)
