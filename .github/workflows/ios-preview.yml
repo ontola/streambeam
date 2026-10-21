@@ -1,0 +1,68 @@
+name: iOS preview
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-preview-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  FLUTTER_VERSION: '3.44.7'
+  CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+  # Present on the pinned macos-15 runner image. Keep CI's SDK deliberate;
+  # changing a runner default must not silently change store compatibility.
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+jobs:
+  ios-preview:
+    name: iOS unsigned app and native decoder tests
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify Xcode selection
+        run: xcodebuild -version
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/rust -> ../build/rust_lib_streambeam/build
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - name: Build complete unsigned device app
+        run: flutter build ios --release --no-codesign --no-pub
+        working-directory: app
+      - name: Package unsigned build
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent app/build/ios/iphoneos/Runner.app artifacts/StreamBeam-ios-unsigned.zip
+          shasum -a 256 artifacts/StreamBeam-ios-unsigned.zip > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-unsigned-preview
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Decode video and start audio on an iPhone simulator
+        run: scripts/test-ios-native.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ios-native-test-results
+          path: app/build/ios-native-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 14

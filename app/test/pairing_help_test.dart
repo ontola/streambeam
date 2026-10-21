@@ -47,10 +47,10 @@ void main() {
           ),
         ),
       );
-      expect(find.textContaining('approve this device'), findsOneWidget);
+      expect(find.textContaining('tap Allow'), findsOneWidget);
       expect(find.text('Scan pairing QR'), findsNothing);
       expect(find.text('Paste pairing link'), findsOneWidget);
-      expect(find.text('Connect'), findsOneWidget);
+      expect(find.text('Request connection'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

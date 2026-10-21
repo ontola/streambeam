@@ -39,6 +39,13 @@ AppCapabilities appCapabilities() {
       platformLabel: 'Android',
     );
   }
+  if (Platform.isIOS) {
+    return const AppCapabilities(
+      host: false,
+      watch: true,
+      platformLabel: 'iOS',
+    );
+  }
   final host = hostPlatformSupported();
   // Desktop decode/watch is not wired yet on any desktop OS.
   const watch = false;
@@ -348,7 +355,11 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
       _shownHostError = null;
     }
     final pending = next.pendingApproval;
-    if (pending != null && pending.id != _shownApprovalId) {
+    // Android handles approval at Activity level, including while this page
+    // is absent because the tablet is watching another device.
+    if (!Platform.isAndroid &&
+        pending != null &&
+        pending.id != _shownApprovalId) {
       _shownApprovalId = pending.id;
       unawaited(_showApprovalDialog(pending));
     }
@@ -582,14 +593,15 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
         ? 'Allow Screen Recording'
         : 'Allow Accessibility';
     final instructions = androidAccessibility
-        ? 'Android uses an Accessibility service to apply remote touch and keyboard input.\n\n'
+        ? 'StreamBeam uses Android Accessibility to let a paired device tap, swipe and type on this device. To edit text, it reads and changes the focused text field.\n\n'
+              'This happens locally when you use remote control. Accessibility text is not sent to StreamBeam servers. Your paired viewer can see text that appears in the screen you share.\n\n'
               '1. Open Accessibility settings.\n'
               '2. Find StreamBeam under installed or downloaded apps.\n'
               '3. Enable “Use StreamBeam” and confirm the warning.\n\n'
               'StreamBeam only uses this while a paired device controls this screen.'
         : screenRecording
         ? 'Open System Settings → Privacy & Security → Screen & System Audio Recording, then enable StreamBeam.\n\n'
-              'If StreamBeam was already enabled, toggle it off and on once. macOS may ask you to restart the app.'
+              'If access still fails while enabled, remove the old StreamBeam entry and add the currently installed app again. Then restart StreamBeam.'
         : 'Open System Settings → Privacy & Security → Accessibility, then enable StreamBeam.\n\n'
               'This lets paired devices send mouse and keyboard input to this Mac.';
     if (!mounted) return;
@@ -607,7 +619,11 @@ class _BeamPageState extends State<BeamPage> with WidgetsBindingObserver {
           FilledButton.icon(
             onPressed: () => Navigator.pop(dialogContext, true),
             icon: const Icon(Icons.settings),
-            label: const Text('Open settings'),
+            label: Text(
+              androidAccessibility
+                  ? 'Agree and open settings'
+                  : 'Open settings',
+            ),
           ),
         ],
       ),

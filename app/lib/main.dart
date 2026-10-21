@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'beam_page.dart';
 import 'hdr_probe.dart';
 import 'hdr_status.dart';
+import 'host_discovery.dart';
 import 'decode_watchdog.dart';
 import 'pairing_help.dart';
 import 'src/rust/api.dart';
@@ -645,7 +646,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       context: context,
       builder: (_) => PairingHelp(
         hostName: entry.name,
-        canScan: Platform.isAndroid,
+        canScan: Platform.isAndroid || Platform.isIOS,
         needsCode: entry.needsPairing,
       ),
     );
@@ -716,7 +717,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _refreshSavedHost();
     _primeHdrCapability();
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || Platform.isIOS) {
       _scannerController = MobileScannerController(
         autoStart: false,
         detectionSpeed: DetectionSpeed.noDuplicates,
@@ -802,6 +803,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // iOS suspends networking/audio in the background. End the session before
+    // suspension so returning cannot leave a disposed texture marked active.
+    if (Platform.isIOS && state == AppLifecycleState.paused && _busy) {
+      unawaited(_stopDesktopPlayback());
+    }
     if (state == AppLifecycleState.resumed && !_busy) {
       unawaited(_refreshClipboard());
     }
@@ -817,6 +823,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       );
     }
 
+    // iOS asks before reading another app's clipboard; only the explicit Paste
+    // action may read it, rather than polling and repeatedly prompting.
+    if (Platform.isIOS) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     final clientActive = _showVideo && _status == 'Streaming…';
@@ -847,7 +856,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   Future<void> _syncScanner() async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
       if (_qrPreviewOpen && !_busy) {
         await _scannerController?.start();
@@ -920,6 +929,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   void _teardownVideo() {
+    // Native playback saves the host after authentication. Manual stop changes
+    // _sessionId before its Future completes, so that completion cannot refresh
+    // the list. Reload the persisted identity whenever we leave the player.
+    _savedHostInfo = loadSavedHostInfo();
     unawaited(_setStreamingWifiLock(false));
     _showVideo = false;
     appImmersive.value = false;
@@ -994,19 +1007,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     }
     try {
-      final List<DiscoveredHost> hosts;
-      if (Platform.isAndroid) {
-        await _ensureMdnsLock();
-        final rustHosts = await discoverHosts(timeoutMs: 6000);
-        // Some Samsung builds hold the multicast lock but still feed raw UDP
-        // browsers only empty DNS packets. Android's NSD service goes through
-        // the platform mDNS responder and remains reliable there.
-        hosts = rustHosts.isEmpty ? await _discoverHostsNative() : rustHosts;
-      } else {
-        // macOS: Rust mdns-sd can't reliably receive (mDNSResponder owns 5353),
-        // so browse via native Bonjour instead.
-        hosts = await _discoverHostsNative();
-      }
+      if (Platform.isAndroid) await _ensureMdnsLock();
+      final hosts = await discoverHostsOnPlatform(
+        operatingSystem: Platform.operatingSystem,
+        rustDiscovery: () => discoverHosts(timeoutMs: 6000),
+        nativeDiscovery: _discoverHostsNative,
+      );
       if (!mounted) return;
       final localHostPubkey = hostPublicKey();
       final visibleHosts = localHostPubkey.length == 32
@@ -1401,6 +1407,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     appImmersive.value = false;
     if (mounted) {
       setState(() {
+        _savedHostInfo = loadSavedHostInfo();
         _desktopTextureId = null;
         _desktopHdr = false;
         _showVideo = false;
@@ -1875,7 +1882,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               )
             : Texture(textureId: _desktopTextureId!),
         hostAcceptsTouch: playbackHostAcceptsTouch(),
-        touchControls: false,
+        touchControls: Platform.isIOS,
         upscaleSupported: _upscaleSupported ?? false,
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
@@ -1999,7 +2006,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   ],
                   const SizedBox(height: 16),
                   // Add a host by QR or pasted code.
-                  if (Platform.isAndroid && _qrPreviewOpen) ...[
+                  if ((Platform.isAndroid || Platform.isIOS) &&
+                      _qrPreviewOpen) ...[
                     _QrScanPreview(
                       controller: _scannerController!,
                       paused: _busy,
@@ -2011,7 +2019,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   Row(
                     children: [
                       Expanded(
-                        child: _clipboardReady
+                        child: (_clipboardReady || Platform.isIOS)
                             ? FilledButton.icon(
                                 onPressed: _busy ? null : _pasteFromClipboard,
                                 icon: const Icon(Icons.content_paste),
@@ -2023,7 +2031,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                                 label: const Text('Paste'),
                               ),
                       ),
-                      if (Platform.isAndroid) ...[
+                      if (Platform.isAndroid || Platform.isIOS) ...[
                         const SizedBox(width: 8),
                         Expanded(
                           child: FilledButton.tonalIcon(

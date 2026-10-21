@@ -226,3 +226,33 @@ The application keep rule in `app/android/app/proguard-rules.pro` preserves
 run `python3 scripts/check-android-scanner.py`. This checks the minified artifact;
 Flutter analysis and widget tests alone cannot detect the regression. Still
 verify camera startup and a real QR scan on a device before claiming acceptance.
+
+
+## Opt-in native network diagnostics
+
+Set `STREAMBEAM_NETWORK_DIAGNOSTICS=1` when launching a desktop app to route
+Rust mDNS debug messages and warning/error messages to stderr. This is useful
+when a listener is running but the host is absent from Bonjour; compare actual
+IPv4 probe/announce records with `dns-sd -B _streambeam._udp local.`. QUIC
+packet tracing stays disabled. Redirect diagnostics to a private file, since
+the existing host startup output also contains pairing QR material. Leave the
+environment variable unset during normal use.
+
+## macOS permission switch enabled but app reports disabled
+
+Check the installed bundle's signing requirement before blaming the UI poll.
+On 2026-10-21, re-signing from the local development certificate to an existing
+Apple Development identity caused TCC to reject the prior requirement for
+ScreenCapture and PostEvent. The switches remained enabled. Unified `tccd`
+logs explicitly reported “Failed to match existing code requirement”.
+
+Turning the old Screen Recording entry off and on was insufficient. Removing
+that entry and adding the current installed app through System Settings, then
+relaunching it, restored the app's capture permission status. Restore only the
+app's existing grants through the normal system UI; user authentication may be
+required. If the Accessibility file picker keeps Open disabled for the current
+app after removing its old entry, restart System Settings and authenticate again;
+this allowed adding the installed app in the observed case. Relaunch StreamBeam
+and check that both warnings disappear. Do not edit the TCC database or infer
+working capture/input from a switch alone. Preserve the signing identity on
+subsequent builds.

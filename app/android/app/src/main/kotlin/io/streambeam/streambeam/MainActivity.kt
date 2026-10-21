@@ -1,6 +1,7 @@
 package io.streambeam.streambeam
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -39,6 +40,9 @@ class MainActivity : FlutterActivity() {
     private var remoteCaptureRequestHandled = false
     private var activityResumed = false
     private var captureNotificationShown = false
+    private var pairingDialog: AlertDialog? = null
+    private var pairingDialogId: Long = -1
+    private var pairingNotificationId: Long = -1
     private val captureHandler = Handler(Looper.getMainLooper())
     private var capturePoll: Runnable? = null
     private val nativeHosts = ConcurrentHashMap<String, Map<String, Any>>()
@@ -50,6 +54,8 @@ class MainActivity : FlutterActivity() {
         const val REQUEST_SCREEN_CAPTURE = 9731
         const val CAPTURE_REQUEST_CHANNEL = "streambeam_capture_requests"
         const val CAPTURE_REQUEST_NOTIFICATION = 44
+        const val PAIRING_REQUEST_CHANNEL = "streambeam_pairing_requests"
+        const val PAIRING_REQUEST_NOTIFICATION = 45
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -243,6 +249,7 @@ class MainActivity : FlutterActivity() {
         if (capturePoll != null) return
         val poll = object : Runnable {
             override fun run() {
+                pollPairingRequest()
                 val wanted = try {
                     NativeStream.nativeCaptureRequested()
                 } catch (_: Exception) {
@@ -308,6 +315,58 @@ class MainActivity : FlutterActivity() {
         manager.notify(CAPTURE_REQUEST_NOTIFICATION, notification)
     }
 
+    // Pairing precedes screen-capture consent. Poll here, not only from the
+    // capture service (which cannot exist yet for a first connection).
+    // A native dialog also works while Flutter's home/BeamPage is unmounted.
+    private fun pollPairingRequest() {
+        val pending = NativeStream.nativePollApprovalRequest()
+        val id = pending?.substringBefore('|')?.toLongOrNull()
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (id == null) {
+            pairingDialog?.dismiss()
+            pairingDialog = null
+            pairingDialogId = -1
+            manager.cancel(PAIRING_REQUEST_NOTIFICATION)
+            pairingNotificationId = -1
+            return
+        }
+        val name = pending.substringAfter('|', "A device")
+        if (activityResumed) {
+            manager.cancel(PAIRING_REQUEST_NOTIFICATION)
+            pairingNotificationId = -1
+            if (pairingDialogId == id) return
+            pairingDialog?.dismiss()
+            pairingDialogId = id
+            pairingDialog = AlertDialog.Builder(this)
+                .setTitle("Allow $name to connect?")
+                .setMessage("Pair this device so it can request your screen. Android will ask you separately before sharing starts.")
+                .setNegativeButton("Deny") { _, _ -> NativeStream.nativeRespondPairing(id, false) }
+                .setPositiveButton("Allow") { _, _ -> NativeStream.nativeRespondPairing(id, true) }
+                .setCancelable(false)
+                .show()
+        } else if (!ScreenCaptureService.isCaptureActive() && pairingNotificationId != id) {
+            manager.createNotificationChannel(NotificationChannel(
+                PAIRING_REQUEST_CHANNEL, "Connection requests", NotificationManager.IMPORTANCE_HIGH,
+            ))
+            val open = PendingIntent.getActivity(
+                this, PAIRING_REQUEST_NOTIFICATION,
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            manager.notify(PAIRING_REQUEST_NOTIFICATION,
+                Notification.Builder(this, PAIRING_REQUEST_CHANNEL)
+                    .setContentTitle("$name wants to connect")
+                    .setContentText("Tap to allow or deny this connection.")
+                    .setSmallIcon(android.R.drawable.ic_menu_view)
+                    .setContentIntent(open)
+                    .setAutoCancel(true)
+                    .build(),
+            )
+            pairingNotificationId = id
+        }
+    }
+
     private fun cancelCaptureRequestNotification() {
         if (!captureNotificationShown) return
         captureNotificationShown = false
@@ -362,6 +421,10 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        pairingDialog?.dismiss()
+        pairingDialog = null
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(PAIRING_REQUEST_NOTIFICATION)
         capturePoll?.let { captureHandler.removeCallbacks(it) }
         capturePoll = null
         stopNativeDiscovery()

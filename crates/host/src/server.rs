@@ -823,8 +823,10 @@ async fn handle_client(
                 finish_rejection(&mut send).await;
                 return Ok(());
             }
-            let approved =
-                request_approval(approval_tx.as_ref(), &client_name, conn.remote_address()).await;
+            let approved = tokio::select! {
+                approved = request_approval(approval_tx.as_ref(), &client_name, conn.remote_address()) => approved,
+                _ = conn.closed() => return Ok(()),
+            };
             if !approved {
                 log!("user declined pairing for {client_name}");
                 write_msg(
@@ -869,12 +871,16 @@ async fn handle_client(
 
     let input_conn = conn.clone();
     let input_controls = controls.clone();
+    // One generation per authenticated connection, never per extra uni stream.
+    let input_lease = crate::input_session::acquire();
     tokio::spawn(async move {
         loop {
             match input_conn.accept_uni().await {
                 Ok(recv) => {
                     log!("input stream opened");
-                    if let Err(e) = handle_input_stream(recv, input_controls.clone()).await {
+                    if let Err(e) =
+                        handle_input_stream(recv, input_controls.clone(), &input_lease).await
+                    {
                         log!("input stream ended: {e}");
                     }
                 }
@@ -965,6 +971,10 @@ async fn handle_client(
                 // pacing/backlog heuristics reason from false metadata.
                 #[cfg(target_os = "macos")]
                 let build_fps = build_fps.min(crate::macos_screen::CAPTURE_FPS);
+                // Android's MediaProjection encoder currently produces 30fps.
+                // Report that cadence rather than the viewer's 60/120fps cap.
+                #[cfg(target_os = "android")]
+                let build_fps = build_fps.min(30);
                 // AV1's better compression is only worth it if this client
                 // can actually decode it — `build_encoder` still isn't a
                 // hard promise (falls back to H.264 if this host's GPU
@@ -1240,18 +1250,21 @@ async fn handle_client(
 async fn handle_input_stream(
     mut recv: quinn::RecvStream,
     controls: Arc<HostControls>,
+    input_lease: &crate::input_session::Lease<fn(InputEvent)>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Called only after Hello authorization; the connection task owns cleanup.
     let mut buf = Vec::new();
     let result = async {
         loop {
             let event: InputEvent = read_msg(&mut recv, &mut buf).await?;
             match event {
                 InputEvent::ClipboardText { text } => controls.receive_remote_clipboard(text),
-                other => crate::input_inject::apply(other),
+                other => input_lease.apply(other),
             }
         }
     }
     .await;
+    input_lease.release();
     #[cfg(windows)]
     crate::gamepad_inject::reset();
     result

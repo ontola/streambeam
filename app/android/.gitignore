@@ -13,3 +13,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Private PKCS12 signing identities
+**/*.p12

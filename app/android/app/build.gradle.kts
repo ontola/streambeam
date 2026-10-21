@@ -4,6 +4,22 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Store bundles must never silently fall back to the preview/debug identity.
+val signingVariables = listOf(
+    "STREAMBEAM_KEYSTORE_FILE", "STREAMBEAM_KEYSTORE_PASSWORD",
+    "STREAMBEAM_KEY_ALIAS", "STREAMBEAM_KEY_PASSWORD",
+)
+val signingValues = signingVariables.associateWith { System.getenv(it).orEmpty() }
+val hasStoreSigning = signingValues.values.all { it.isNotBlank() }
+require(signingValues.values.all { it.isBlank() } || hasStoreSigning) {
+    "Incomplete StreamBeam signing configuration: set all four STREAMBEAM_KEYSTORE/KEY variables."
+}
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.path == ":app:bundleRelease" } && !hasStoreSigning) {
+        throw GradleException("Release App Bundles require the StreamBeam upload signing key.")
+    }
+}
+
 android {
     namespace = "io.streambeam.streambeam"
     compileSdk = flutter.compileSdkVersion
@@ -26,15 +42,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasStoreSigning) {
+            create("store") {
+                storeFile = file(signingValues.getValue("STREAMBEAM_KEYSTORE_FILE"))
+                storePassword = signingValues.getValue("STREAMBEAM_KEYSTORE_PASSWORD")
+                keyAlias = signingValues.getValue("STREAMBEAM_KEY_ALIAS")
+                keyPassword = signingValues.getValue("STREAMBEAM_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // APK previews retain their existing identity. Store bundles require
+            // the explicit upload identity, enforced above.
+            signingConfig = signingConfigs.getByName(if (hasStoreSigning) "store" else "debug")
         }
     }
 }

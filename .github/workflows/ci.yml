@@ -17,6 +17,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   FLUTTER_VERSION: '3.44.7'
+  # Vendored Opus still declares a pre-3.5 CMake minimum.
+  CMAKE_POLICY_VERSION_MINIMUM: '3.5'
 
 jobs:
   fmt:
@@ -28,6 +30,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt
+      - name: Test store upload boundaries
+        run: python3 scripts/test-store-upload.py
       - run: cargo fmt --all --check
       - run: cargo fmt --manifest-path app/rust/Cargo.toml --all --check
 
@@ -45,35 +49,119 @@ jobs:
       # Warnings remain visible; compilation failures are blocking.
       - run: cargo clippy --workspace --all-targets --locked
 
-  windows-check:
-    name: Windows host and app bridge
+  windows-release:
+    name: Windows x64 release app and host
     runs-on: windows-2025
-    timeout-minutes: 25
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             .
             app/rust
       - run: cargo check --workspace --locked
-      - run: cargo check --manifest-path app/rust/Cargo.toml --locked
+      - run: cargo build --release --locked -p streambeam-host -p streambeam-svc --bins
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - run: flutter build windows --release --no-pub
+        working-directory: app
+        env:
+          CARGOKIT_BUILD_ROOT: ${{ runner.temp }}/sb-rust
+      - name: Package app, runtime and secure-desktop helpers
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64-ci
+          path: build/desktop/streambeam-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
 
-  macos-check:
-    name: macOS host and app bridge
-    runs-on: macos-14
-    timeout-minutes: 20
+  macos-release:
+    name: macOS ${{ matrix.arch }} release app
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             .
             app/rust
       - run: cargo check --workspace --locked
-      - run: cargo check --manifest-path app/rust/Cargo.toml --locked
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - name: Build native release app
+        run: scripts/build-macos-local.sh
+      - name: Verify and archive app (ad-hoc CI signature)
+        run: |
+          app=app/build/macos/Build/Products/Release/streambeam.app
+          test -d "$app"
+          codesign --verify --deep --strict "$app"
+          mkdir -p build/desktop
+          ditto -c -k --keepParent "$app" "build/desktop/streambeam-macos-${{ matrix.arch }}.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-${{ matrix.arch }}-ci
+          path: build/desktop/streambeam-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-release:
+    # The Linux shell builds, but native capture/decoder/input are not ported.
+    name: Linux x64 experimental app build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Install Flutter desktop build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libayatana-appindicator3-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/rust
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - run: flutter build linux --release --no-pub
+        working-directory: app
+      - name: Archive experimental Linux bundle
+        run: |
+          test -x app/build/linux/x64/release/bundle/streambeam
+          test -f app/build/linux/x64/release/bundle/lib/librust_lib_streambeam.so
+          mkdir -p build/desktop
+          tar -czf build/desktop/streambeam-linux-x64-experimental.tar.gz -C app/build/linux/x64/release bundle
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x64-experimental-ci
+          path: build/desktop/streambeam-linux-x64-experimental.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   flutter-test:
     name: Flutter analysis and tests
@@ -97,6 +185,7 @@ jobs:
         run: |
           dart pub get
           dart run test/rustup_check.dart
+          dart run test/android_outputs_check.dart
 
   android-release:
     name: Android release and scanner regression
@@ -134,6 +223,14 @@ jobs:
       - run: flutter build apk --release --target-platform android-arm64
         working-directory: app
       - run: python3 scripts/check-android-scanner.py
+      - name: Reject unsigned store bundles
+        working-directory: app
+        run: |
+          if flutter build appbundle --release --no-pub --target-platform android-arm64 > "$RUNNER_TEMP/unsigned-bundle.log" 2>&1; then
+            echo "::error::An unsigned store bundle unexpectedly built successfully"
+            exit 1
+          fi
+          grep -F 'Release App Bundles require the StreamBeam upload signing key.' "$RUNNER_TEMP/unsigned-bundle.log"
       # This artifact uses the runner's development signer. Published APKs are
       # signed locally with the persistent preview key (see docs/RELEASING.md).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

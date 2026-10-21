@@ -13,7 +13,7 @@
 
 **StreamBeam shares screens, streams games and lets you control another device over your local network.** Watch your Mac on an Android phone, play from a Windows PC on a tablet, or share an Android screen with your desktop.
 
-Windows, macOS and Android can send and receive video. Capabilities such as audio, remote input and hardware codecs vary by platform. StreamBeam is an early preview, with active development and real-device testing.
+Windows, macOS and Android can send and receive video. The iPhone/iPad viewer is implemented and tested in the simulator; physical-device acceptance is still pending. Capabilities such as audio, remote input and hardware codecs vary by platform. StreamBeam is an early preview, with active development and real-device testing.
 
 ## Find a device. Pair once. Connect.
 
@@ -36,14 +36,21 @@ On macOS, allow **Screen Recording** to share your screen and **Accessibility** 
 | Platform | Share its screen | Watch another screen | Install today |
 |---|---|---|---|
 | **Android** | Yes; system confirmation per capture session | Yes | [ARM64 preview APK](https://github.com/joepio/streambeam/releases/tag/v0.1.0), Android 8+ |
-| **macOS** | Yes; Screen Recording permission required | Yes | Build from source |
-| **Windows** | Yes; desktop capture and optional background service | Yes; H.264 viewer implemented | Build from source |
-| **Linux** | Planned | Planned | No supported preview |
-| **iOS / iPadOS** | Not available | Planned | No supported preview |
+| **macOS** | Yes; Screen Recording permission required | Yes | Source / CI app bundles for Apple Silicon and Intel |
+| **Windows** | Yes; desktop capture and optional background service | Yes; H.264 viewer implemented | Source / unsigned CI ZIP |
+| **Linux** | Not implemented | Not implemented | Experimental CI shell bundle; no native streaming |
+| **iOS / iPadOS** | Not available | Implemented: SDR H.264 and host audio; physical-device acceptance pending | Source / unsigned CI build; no installable store release |
+| **Browser** | Not available | Experimental viewer with optional audio/control through a separate bridge | Local development only; not deployed |
 
-**Preview limits:** desktop installers and App Store / Google Play releases are not available yet. Audio is partially implemented and still needs broader device validation; Android screen sharing is video-only. Internet discovery, NAT traversal and relays are [future work](docs/WAN.md). There is no published end-to-end latency guarantee.
+**Preview limits:** CI bundles are build artifacts, not signed public installers. App Store, Google Play and Microsoft Store releases are not available yet. The iOS app record is registered as **StreamBeam Remote Desktop**, with no uploaded build; see [release status](docs/RELEASING.md). Audio is partially implemented and still needs broader device validation; Android screen sharing is video-only. The [experimental browser viewer](docs/WEB.md) requires a separately launched bridge; audio and remote input require session consent. Physical browser/desktop acceptance remains pending. Internet discovery, NAT traversal and relays are [future work](docs/WAN.md). There is no published end-to-end latency guarantee.
 
 The published Android preview may lag behind current development. See [releases](https://github.com/joepio/streambeam/releases) for the exact downloadable build, and [PROGRESS](docs/PROGRESS.md) for recent changes.
+
+## Continuous integration
+
+CI builds Android ARM64, Windows x64, macOS Apple Silicon and Intel, an experimental Linux x64 shell, and an unsigned iOS app. The iOS workflow also tests real VideoToolbox decoding and audio-engine startup in a simulator. A separate browser workflow exercises the optional bridge and viewer against the streaming fixture.
+
+A passing build does not establish device acceptance or store signing. Check the [workflow run for the exact commit](https://github.com/joepio/streambeam/actions); see [desktop delivery](docs/DESKTOP_RELEASES.md), [iOS validation](docs/IOS.md) and [store delivery](docs/RELEASING.md) for the remaining steps.
 
 ## Build and run
 
@@ -72,7 +79,7 @@ cargo run -p streambeam-devtools --bin streamdemo
 
 ## How it works
 
-A Flutter interface connects to a shared Rust core. Native capture and playback use ScreenCaptureKit / VideoToolbox on macOS, MediaProjection / MediaCodec on Android, and Windows capture / NVENC with a software H.264 fallback. H.264 is the common codec; AV1 is negotiated on supported hardware.
+A Flutter interface connects to a shared Rust core. Native capture and playback use ScreenCaptureKit / VideoToolbox on macOS, VideoToolbox playback on iOS, MediaProjection / MediaCodec on Android, and Windows capture / NVENC with a software H.264 fallback. H.264 is the common codec; AV1 is negotiated on supported hardware.
 
 Video travels in QUIC datagrams with Reed–Solomon forward error correction. Reliable streams carry session control and input. Pairing pins Ed25519 identities; the host authorizes a viewer before sending media. QR pairing codes live in the URL fragment, which browsers do not send to the website server.
 
@@ -85,7 +92,7 @@ Video travels in QUIC datagrams with Reed–Solomon forward error correction. Re
 | `crates/host` | Capture, encoding and host session handling |
 | `crates/svc` | Windows host service and worker lifecycle |
 | `crates/devtools` | Fake host, test clients and streaming diagnostics |
-| `site/` | Website and pairing-link landing page |
+| `site/` | Website, pairing-link landing page and experimental browser viewer |
 
 [Protocol](docs/PROTOCOL.md) · [Debugging](docs/DEBUGGING_CLIENT.md) · [Release process](docs/RELEASING.md) · [Contributing conventions](AGENTS.md) · [Brand assets](assets/README.md)
 

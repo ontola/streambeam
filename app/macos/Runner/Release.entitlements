@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- StreamBeam is a LAN host and injects consent-gated Accessibility input;
-	     both roles are incompatible with the App Sandbox. -->
+	<!-- The current capture and Accessibility-input integration is distributed
+	     outside the Mac App Store. A sandboxed variant needs separate validation;
+	     LAN networking itself is supported through the network entitlements. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 	<key>com.apple.security.network.server</key>

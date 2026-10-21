@@ -197,8 +197,8 @@ void main() {
         videoTimedOut: true,
         hasVideo: false,
       );
-      expect(r!.title, 'No video received');
-      expect(r.waiting, isFalse);
+      expect(r!.title, 'Still waiting for video');
+      expect(r.waiting, isTrue);
     });
 
     // The player renders a stop/cancel button unconditionally in this overlay,
@@ -236,8 +236,8 @@ void main() {
         expect(s!.title, isNotEmpty);
         expect(s.detail, isNotEmpty);
       }
-      // Exactly one of them is a "be patient" state.
-      expect(states.where((s) => s!.waiting).length, 1);
+      // First-frame/approval waits remain cancellable waiting states.
+      expect(states.where((s) => s!.waiting).length, 2);
     });
   });
 

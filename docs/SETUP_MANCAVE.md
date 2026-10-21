@@ -234,3 +234,85 @@ Evidence: `/tmp/streambeam-phone-1080-live.log`,
 `/tmp/streambeam-phone-1080-frame.png`, `/tmp/streambeam-xinput-1080.log`,
 `/tmp/streambeam-host-1080-sample.log`. The earlier wireless-debugging blocker
 is resolved; this build is now installed on both phone and tablet.
+
+
+## Installation check — 2026-10-20
+
+- Mancave's automatic `StreamBeamHost` service is running. Its installed worker
+  still matches SHA-256
+  `8fcca62302a7ab60e24f2f81e89e8ddfca3bfb5baaa0ab7e151d1b0ad1751e14`
+  and owns UDP `0.0.0.0:47989`. It was not replaced unnecessarily.
+- Mac Home received a fresh optimized ARM64 build including committed fixes
+  through `648b484`, installed at `/Users/joep/Applications/StreamBeam.app`.
+  It uses the existing **StreamBeam Local Development** signing certificate;
+  `codesign --verify --deep --strict` passes. This is a local installation,
+  not a notarized public Mac distribution.
+- The previous app is retained at
+  `/Users/joep/Applications/StreamBeam-before-20261020.app`.
+- The installed executable SHA-256 is
+  `46cf5891f5c2bd9f456bba7faeaa67f66bcaf3f017c11278dd881934829bc6d2`.
+  The app was launched, owns UDP `*:47989` and discovers MANCAVE.
+- A real reconnect using the existing Mac client pairing received 120
+  H.264 frames at 1920×1080. ffmpeg decoded all 120 without errors; an
+  extracted frame visibly contained the Windows desktop. A subsequent 15-second
+  receive run completed 900 frames at approximately 60 fps with zero abandoned
+  frames in the reported transport statistics; this is a mostly static desktop
+  sample, not a gameplay or input-latency measurement.
+
+Mac Home remained locked. No visible Flutter playback, Mac screen capture,
+Accessibility/input, listening check or sustained gameplay was verified.
+Do not equate the process/listener or software decode with those acceptance
+checks. Screen Recording/Accessibility may require re-approval after the
+change from the previous ad hoc signature to the stable local certificate.
+
+Temporary evidence: `/tmp/streambeam-mancave-20261020.log`,
+`/tmp/streambeam-mancave-20261020.h264`,
+`/tmp/streambeam-mancave-frame-20261020.png`.
+Do not commit these files: the capture contains the private desktop.
+
+
+## Live follow-up — 2026-10-21
+
+- Xiaomi 15 (`456cb10b`) updated in place with the local ARM64 preview APK;
+  the installed SHA-256 is
+  `72cd55df7fb2f1eed8cdc530668b724a0a1e32bd94c0c0f938cff2223eb0248b`.
+  Existing and replacement certificates matched. Android reported a successful
+  launch and the real screen showed Mancave. Pairing data was preserved.
+- The two other advertised wireless ADB endpoints were unreachable. Later the
+  Xiaomi also disconnected from ADB. The two other devices remain unupdated.
+- The Mac process/listening port did **not** establish discovery or playback:
+  the phone and native Bonjour both initially saw only Mancave and Xiaomi.
+  Restarting alone did not help. Existing macOS Local Network toggles were on;
+  toggling them and re-signing the old bundle alone also did not restore it.
+- Rebuilt the Mac app with opt-in Rust network diagnostics and signed with the
+  existing Apple Development identity (team `Q9WPWRTU7G`). After reinstalling,
+  the mDNS log showed successful IPv4 probing/announcing and native Bonjour
+  independently listed **MacBook Pro** at the Mac's LAN endpoint. The precise
+  reason the prior app could not advertise has not been isolated.
+- TCC logs confirmed that re-signing invalidated the existing Screen Recording
+  and PostEvent requirements, despite enabled switches in System Settings.
+  Replacing the Screen Recording entry with the current installed app removed
+  its capture warning. After restarting System Settings and renewed user
+  authentication, adding the current app to Accessibility succeeded. Relaunching
+  StreamBeam removed both permission warnings; its UI listed Mancave and Xiaomi
+  as online. This verifies permission status, not remote input execution.
+  A later Xiaomi screenshot confirmed MacBook Pro in the list, and the user
+  confirmed successful streaming after requesting a connection. Remote input
+  and the reverse Mac-to-Xiaomi Android consent flow remain unverified.
+- UI automation briefly opened the generated build as a second app. That process
+  was stopped; generated/backup bundles were unregistered from Launch Services
+  and the installed app registered again. Keep only one host on port 47989.
+
+- Mac discovery also survived a normal restart with diagnostic logging unset.
+  The updated local Rust workspace passed 122 tests (one manual soak ignored);
+  formatting and diff checks passed. The diagnostic build is locally verified,
+  not covered by the earlier green hosted run at `26422ed`.
+
+- Follow-up saved-tile correction: ARM64 preview updated in place again on
+  Xiaomi 15 with APK SHA-256
+  `fe6cddfcac942ecb068fa9782d84d48ed53a04d2ba04380050ee97fb8462e33a`.
+  The persistent preview signer is unchanged. Android install succeeded and
+  the installed APK hash matches. The user confirmed a fresh connection and
+  stop leaves MacBook Pro at Saved / Tap to start streaming. Flutter analysis
+  and all 54 tests pass, including the regression that fails before the
+  teardown reload.

@@ -32,3 +32,8 @@ Runner/GeneratedPluginRegistrant.*
 !default.mode2v3
 !default.pbxuser
 !default.perspectivev3
+
+# CI signing material
+Flutter/Signing.xcconfig
+*.p12
+*.mobileprovision

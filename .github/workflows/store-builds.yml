@@ -1,0 +1,172 @@
+name: Signed store candidates and uploads
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform for the signed candidate
+        type: choice
+        options: [android, ios]
+        required: true
+      upload_store:
+        description: Upload to TestFlight or a Google Play internal draft (no public release)
+        type: boolean
+        default: false
+      build_number:
+        description: Unused increasing store build number (Android preview is 2)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: store-candidates-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.44.7'
+  # audiopus_sys vendors an older Opus CMake project.
+  CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+
+jobs:
+  android:
+    if: inputs.platform == 'android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      STREAMBEAM_KEYSTORE_FILE: ${{ github.workspace }}/../streambeam-upload.p12
+      STREAMBEAM_KEYSTORE_PASSWORD: ${{ secrets.STREAMBEAM_KEYSTORE_PASSWORD }}
+      STREAMBEAM_KEY_ALIAS: ${{ secrets.STREAMBEAM_KEY_ALIAS }}
+      STREAMBEAM_KEY_PASSWORD: ${{ secrets.STREAMBEAM_KEY_PASSWORD }}
+      STREAMBEAM_UPLOAD_CERT_SHA256: ${{ vars.STREAMBEAM_UPLOAD_CERT_SHA256 }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Require signing credentials
+        env:
+          KEYSTORE_BASE64: ${{ secrets.STREAMBEAM_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] && (( BUILD_NUMBER > 2 && BUILD_NUMBER <= 2100000000 ))
+          test -n "$KEYSTORE_BASE64"
+          test -n "$STREAMBEAM_KEYSTORE_PASSWORD"
+          test -n "$STREAMBEAM_KEY_ALIAS"
+          test -n "$STREAMBEAM_KEY_PASSWORD"
+          test -n "$STREAMBEAM_UPLOAD_CERT_SHA256"
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$STREAMBEAM_KEYSTORE_FILE"
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+      - name: Require Play upload access when requested
+        if: inputs.upload_store
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: test -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/rust -> ../build/rust_lib_streambeam/build
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - run: flutter analyze --no-pub
+        working-directory: app
+      - run: flutter test --no-pub
+        working-directory: app
+      - name: Build signed ARM64 App Bundle
+        working-directory: app
+        run: flutter build appbundle --release --target-platform android-arm64 --build-number="$BUILD_NUMBER"
+      - run: python3 scripts/check-android-scanner.py
+      - name: Verify bundle signature and native ABI
+        run: python3 scripts/verify-store-bundle.py app/build/app/outputs/bundle/release/app-release.aab
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: streambeam-play-${{ inputs.build_number }}
+          path: app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+      - name: Upload verified bundle to a Play internal draft
+        if: inputs.upload_store
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: python3 scripts/upload-store.py play-draft app/build/app/outputs/bundle/release/app-release.aab --build-number="$BUILD_NUMBER"
+      - name: Remove upload key
+        if: always()
+        run: rm -f "$STREAMBEAM_KEYSTORE_FILE"
+
+  ios:
+    if: inputs.platform == 'ios'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      BUILD_NUMBER: ${{ inputs.build_number }}
+      IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+      IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+      IOS_APP_STORE_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROFILE_BASE64 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Require signing credentials
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          test -n "$IOS_DISTRIBUTION_P12_BASE64"
+          test -n "$IOS_DISTRIBUTION_P12_PASSWORD"
+          test -n "$IOS_APP_STORE_PROFILE_BASE64"
+      - name: Require TestFlight upload access when requested
+        if: inputs.upload_store
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_STORE_CONNECT_KEY_ID"
+          test -n "$APP_STORE_CONNECT_ISSUER_ID"
+          test -n "$APP_STORE_CONNECT_PRIVATE_KEY"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-ios
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+        working-directory: app
+      - name: Install isolated signing identity and profile
+        run: python3 scripts/prepare-ios-signing.py
+      - name: Build signed IPA
+        working-directory: app
+        run: flutter build ipa --release --build-number="$BUILD_NUMBER" --export-options-plist="$RUNNER_TEMP/streambeam-signing/ExportOptions.plist"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: streambeam-ios-${{ inputs.build_number }}
+          path: app/build/ios/ipa/*.ipa
+          if-no-files-found: error
+      - name: Upload signed IPA to TestFlight
+        if: inputs.upload_store
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          shopt -s nullglob
+          ipas=(app/build/ios/ipa/*.ipa)
+          test "${#ipas[@]}" -eq 1
+          python3 scripts/upload-store.py testflight "${ipas[0]}"
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/streambeam-signing/signing.keychain-db" || true
+          if [ -f "$RUNNER_TEMP/streambeam-signing/profile-path" ]; then
+            rm -f "$(cat "$RUNNER_TEMP/streambeam-signing/profile-path")"
+          fi
+          rm -f app/ios/Flutter/Signing.xcconfig
+          rm -rf "$RUNNER_TEMP/streambeam-signing"

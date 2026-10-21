@@ -1,4 +1,8 @@
+#if os(macOS)
 import FlutterMacOS
+#else
+import Flutter
+#endif
 import Foundation
 
 /// Native macOS mDNS host discovery. On macOS the OS's `mDNSResponder` owns the
