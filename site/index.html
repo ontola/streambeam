@@ -4,8 +4,17 @@
 <meta charset="utf-8">
 <link rel="icon" type="image/svg+xml" href="/assets/streambeam-logo.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>StreamBeam — your PC, on your phone, one scan</title>
-<meta name="description" content="StreamBeam beams your Windows desktop and games to your phone over your own Wi-Fi. Scan one QR code and you're playing. Open source, no accounts, no cloud.">
+<title>StreamBeam — your screens, closer together</title>
+<meta name="description" content="Screen sharing, remote control and game streaming between Windows, macOS and Android. Pair once and connect over your local network.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="StreamBeam — your screens, closer together">
+<meta property="og:description" content="Screen sharing, remote control and game streaming between Windows, macOS and Android. Pair once and connect over your local network.">
+<meta property="og:url" content="https://streambeam.eu/">
+<meta property="og:image" content="https://streambeam.eu/assets/streambeam-social.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="StreamBeam connects a desktop and phone. Windows, macOS and Android.">
+<meta name="twitter:card" content="summary_large_image">
 <style>
   :root {
     --beam: #6C7BFF;
@@ -207,22 +216,22 @@
   <main>
     <div class="hero">
       <div>
-        <p class="eyebrow">Open-source game &amp; desktop streaming</p>
-        <h1>Your PC. On your phone. <span class="sweep">One scan.</span></h1>
+        <p class="eyebrow">Screen sharing · Remote control · Game streaming</p>
+        <h1>Your screens.<br><span class="sweep">Closer together.</span></h1>
         <p class="lede">
-          StreamBeam beams your Windows desktop and games to your phone over your
-          own Wi&#8209;Fi. Scan the QR code on your PC and you're playing in seconds —
-          video, audio and controller, built for sub&#8209;80&nbsp;ms latency.
-          No accounts. No cloud. No certificate warnings.
+          Watch your Mac on your phone. Play from your Windows PC on a tablet.
+          Share your Android screen with your desktop. StreamBeam connects your
+          screens over your local network, with remote control where supported.
+          Pair once. Connect directly. No account required.
         </p>
         <div class="cta-row">
-          <a class="btn btn-beam" href="https://github.com/joepio/streambeam/releases">Download for Windows</a>
-          <a class="btn btn-ghost" href="https://github.com/joepio/streambeam/releases">Get the Android app</a>
+          <a class="btn btn-beam" href="https://github.com/joepio/streambeam/releases/tag/v0.1.0">Get the Android preview</a>
+          <a class="btn btn-ghost" href="https://github.com/joepio/streambeam#build-and-run">Build for desktop</a>
         </div>
-        <p class="cta-note mono">early access · free · MIT/Apache-2.0</p>
+        <p class="cta-note mono">early preview · Windows, macOS &amp; Android</p>
       </div>
 
-      <div class="diagram" role="img" aria-label="Diagram: a PC showing a QR code beams a live stream to a phone at 42 milliseconds latency.">
+      <div class="diagram" role="img" aria-label="Illustration: a desktop shares its screen with a phone over the local network.">
         <svg viewBox="0 0 440 240">
           <!-- PC -->
           <rect class="screen" x="18" y="38" width="150" height="100" rx="8"/>
@@ -242,8 +251,8 @@
             <rect class="qr-dot" x="27" y="47" width="7"  height="7"/>
             <rect class="qr-dot" x="47" y="47" width="7"  height="7"/>
           </g>
-          <text x="30" y="185">streambeam-host</text>
-          <text x="30" y="200">shows a QR</text>
+          <text x="30" y="185">Windows / macOS</text>
+          <text x="30" y="200">share a screen</text>
 
           <!-- beam -->
           <path class="beam-glow" d="M178 88 C 250 60, 280 130, 336 118"/>
@@ -256,30 +265,30 @@
           <path d="M369 106 l16 10 -16 10 z" fill="var(--beam-strong)"/>
           <circle class="chip-live" cx="356" cy="176" r="3"/>
           <text class="t-live" x="364" y="180">LIVE</text>
-          <text x="336" y="215">paired ✓ · 42 ms</text>
+          <text x="336" y="215">Android · watch</text>
         </svg>
       </div>
     </div>
 
     <section id="qr">
-      <h2>One QR code does everything</h2>
+      <h2>A simple way to connect</h2>
       <p class="section-lede">
-        The QR on your PC is just a link. What happens when you scan it depends on
-        what your phone needs next — there is no wrong first step.
+        Choose a nearby device and request a connection, or use its pairing QR
+        code or link. Approve the viewer on the device you want to share.
       </p>
       <div class="qr-flow">
         <div>
           <div class="qr-case">
             <span class="mono">app installed →</span>
-            <p>The link opens StreamBeam directly and the stream starts. Pairing is automatic.</p>
+            <p>Scan the pairing QR in StreamBeam, or open its app link where supported. Approve the connection on the sharing device.</p>
           </div>
           <div class="qr-case">
             <span class="mono">no app yet →</span>
-            <p>The same link opens a page that gets you the app, then connects you. Scan once, not twice.</p>
+            <p>The link opens a download page. Install the preview, then return to the pairing link or scan the QR again.</p>
           </div>
           <div class="qr-case">
             <span class="mono">already paired →</span>
-            <p>Skip the QR entirely: your PC shows up in the app by itself when you're on the same network.</p>
+            <p>Skip pairing next time: choose the saved device when it is online. Android still asks for screen-sharing consent for each capture session.</p>
           </div>
         </div>
         <div>
@@ -287,7 +296,7 @@
           <p class="section-lede" style="margin-top:16px; font-size:0.92rem;">
             The part after <span class="mono">#</span> is your pairing code. It stays on
             your devices — browsers never send it to the server, and it expires after a
-            few minutes. Pairing itself is end&#8209;to&#8209;end: the code contains your PC's
+            few minutes. Pairing itself is end&#8209;to&#8209;end: the code contains the sharing device's
             public key, so no server ever sits in the middle.
           </p>
         </div>
@@ -295,48 +304,58 @@
     </section>
 
     <section id="how">
-      <h2>Playing in three moves</h2>
+      <h2>From one screen to another</h2>
       <div class="steps">
         <div class="step">
           <span class="step-n">STEP 1</span>
-          <h3>Run StreamBeam on your PC</h3>
-          <p>A small window shows a QR code. That's the whole setup — no browser
-             config panel, no self-signed certificate warnings, no PIN.</p>
+          <h3>Open on both devices</h3>
+          <p>Use the same local network. Nearby devices appear in the app.
+             Allow screen capture on the device you want to share.</p>
         </div>
         <div class="step">
           <span class="step-n">STEP 2</span>
-          <h3>Scan it with your phone</h3>
-          <p>Use your camera or the app. Your phone and PC exchange keys directly
-             over your Wi-Fi and remember each other from then on.</p>
+          <h3>Choose and pair</h3>
+          <p>Request a connection and approve it on the other device,
+             or scan its QR code. Devices exchange keys directly.</p>
         </div>
         <div class="step">
           <span class="step-n">STEP 3</span>
-          <h3>Play</h3>
-          <p>Desktop, games, audio and controller input — streamed at full frame
-             rate with hardware encoding on both ends.</p>
+          <h3>Watch, work or play</h3>
+          <p>View a desktop, stream a game or share a phone screen. Use mouse,
+             keyboard, touch or gamepad where your device pair supports it.</p>
         </div>
       </div>
+    </section>
+
+    <section id="availability">
+      <h2>An early preview, with clear limits</h2>
+      <p class="section-lede">Android has an ARM64 preview for Android 8 and later.
+        Windows and macOS currently need source builds. Linux and iOS viewers are planned.
+        Desktop installers and app-store releases are not available yet.</p>
+      <p class="section-lede" style="margin-top:16px">Audio is partially implemented and still being validated;
+        Android screen sharing is video-only. Remote input and hardware codecs vary by platform.
+        <a href="https://github.com/joepio/streambeam/blob/main/docs/PLATFORMS.md">See platform support and current limitations.</a></p>
     </section>
 
     <section id="tech">
       <h2>Under the hood</h2>
       <p class="section-lede">
-        Built in Rust, end to end. The same hardware pipeline the best remote-play
-        tools use — with a protocol designed this decade.
+        A shared Rust streaming core and a Flutter interface, with native capture
+        and playback on each platform.
       </p>
       <dl class="specs">
-        <div class="spec"><dt>LAN-only by design</dt><dd>Your pixels never leave your network. There is no relay, no account, nothing to subscribe to.</dd></div>
+        <div class="spec"><dt>Local network first</dt><dd>Local sessions connect devices directly. Built-in internet discovery, NAT traversal and relays are future work.</dd></div>
         <div class="spec"><dt>QUIC transport</dt><dd>Media rides unreliable datagrams — no head-of-line blocking when a packet drops mid-firefight.</dd></div>
         <div class="spec"><dt>Per-frame FEC</dt><dd>Reed–Solomon parity rebuilds lost packets without waiting for a retransmit.</dd></div>
-        <div class="spec"><dt>Hardware codecs</dt><dd>NVENC / AMF / QuickSync on the PC, MediaCodec straight to the screen on your phone.</dd></div>
-        <div class="spec"><dt>Pinned Ed25519 keys</dt><dd>Devices authenticate each other directly. No certificate authorities, no trust dialogs.</dd></div>
-        <div class="spec"><dt>Open source</dt><dd>MIT/Apache-2.0 licensed, from the capture loop to this page. Audit it, fork it, break it, fix it.</dd></div>
+        <div class="spec"><dt>Hardware codecs</dt><dd>NVIDIA NVENC on Windows, VideoToolbox on macOS and MediaCodec on Android. Available codecs depend on hardware.</dd></div>
+        <div class="spec"><dt>Pinned Ed25519 keys</dt><dd>Devices authenticate each other directly. The sharing device approves new viewers; subsequent sessions use the saved identity.</dd></div>
+        <div class="spec"><dt>One shared core</dt><dd>Rust handles transport, pairing and media. Flutter provides the interface, with native capture and playback for each platform.</dd></div>
       </dl>
     </section>
   </main>
 
   <footer class="site">
-    <span>StreamBeam — beam your PC to your phone.</span>
+    <span>StreamBeam — your screens, closer together.</span>
     <span>Made with <span class="mono" aria-hidden="true">&lt;3</span><span class="sr-only">love</span> by <a href="https://ontola.io">Ontola.io</a> · <a href="https://github.com/joepio/streambeam">GitHub</a> · <span class="mono">streambeam.eu</span></span>
   </footer>
 </div>

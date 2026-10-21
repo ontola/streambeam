@@ -1,101 +1,92 @@
-# StreamBeam
+<p align="center">
+  <img src="assets/streambeam-banner.png" alt="StreamBeam — stream your screen, control your devices, play across screens. Windows, macOS and Android." width="100%">
+</p>
 
-Low-latency screen streaming (Apollo/Moonlight-class) with a radically simpler UX:
-the host shows a QR, the other device scans it — or just taps it on the LAN — and
-you're watching. No web UI, no browser certificate warnings, no PIN dance.
+<p align="center">
+  <a href="https://github.com/joepio/streambeam/releases/tag/v0.1.0">Download Android preview</a> ·
+  <a href="https://streambeam.eu">Website</a> ·
+  <a href="docs/PLATFORMS.md">Platform support</a> ·
+  <a href="docs/PROGRESS.md">Development status</a>
+</p>
 
-**[Download the Android preview (v0.1.0)](https://github.com/joepio/streambeam/releases/tag/v0.1.0).**
-ARM64, Android 8 or newer. Open the APK on your phone and install it over the
-existing preview; wireless debugging is not required. Desktop packages are not
-included yet. [Release process](docs/RELEASING.md) · [CI](https://github.com/joepio/streambeam/actions/workflows/ci.yml).
+# Your screens, closer together
 
-**Symmetric apps.** One Flutter UI + one Rust core per platform. Every build can
-**Watch** (view another device's screen); platforms that can capture also **Beam**
-(send their own screen). Live per-platform status is in
-[PLATFORMS.md](docs/PLATFORMS.md) — today:
+**StreamBeam shares screens, streams games and lets you control another device over your local network.** Watch your Mac on an Android phone, play from a Windows PC on a tablet, or share an Android screen with your desktop.
 
-- **Beam (host):** Windows ✅ (WGC/DXGI → Media Foundation H.264; hardware NVENC in
-  progress) · Android ✅ (MediaProjection → MediaCodec, video-only) · macOS ✅
-  (ScreenCaptureKit → VideoToolbox H.264, video-only)
-- **Watch (client):** Android ✅ (MediaCodec → Surface) · macOS ✅ (VideoToolbox →
-  Flutter texture) · Windows/Linux ⬜ (planned)
-- **Control:** Android sends touch/trackpad + gamepad; Windows host injects mouse +
-  gamepad (keyboard + PC→phone control pending — see PLATFORMS.md)
+Windows, macOS and Android can send and receive video. Capabilities such as audio, remote input and hardware codecs vary by platform. StreamBeam is an early preview, with active development and real-device testing.
 
-Core details:
+## Find a device. Pair once. Connect.
 
-- **Protocol:** clean-slate over QUIC — unreliable datagrams for media with per-frame
-  Reed-Solomon FEC (+ reference-frame-invalidation recovery), reliable streams for
-  control/input, mutual TLS with pinned Ed25519 keys.
-- **One QR does everything:** the host's QR is a link
-  (`https://streambeam.eu/session/#sbm1:…`). A device with the app opens the stream
-  directly (Android App Link); without it, a download page. The pairing code rides in
-  the URL *fragment*, so it never reaches the web server.
-- **Discovery:** mDNS (`_streambeam._udp`) for tap-to-connect on the LAN; native
-  Bonjour on macOS. QR/link only needed for first pairing.
-- **Client-initiated sessions:** approve a device once on the host; its pinned
-  key is persisted, and from then on that client can start a beam directly.
-  On macOS the host stays idle/available and only runs ScreenCaptureKit while
-  an authorized client is actively watching.
+1. **Open StreamBeam on both devices**, connected to the same local network. Nearby devices appear automatically.
+2. **Choose the device you want to watch.** Request a connection and approve it on that device, or pair using its QR code or link.
+3. **Start streaming.** An approved device can reconnect without repeating pairing. Android asks you to confirm screen sharing for each new capture session.
 
-Docs: [PROTOCOL.md](docs/PROTOCOL.md) (wire format) · [PROGRESS.md](docs/PROGRESS.md) (live status & decisions log) · [PLATFORMS.md](docs/PLATFORMS.md) (per-platform beam/watch/control matrix) · [SYMMETRY.md](docs/SYMMETRY.md) (symmetric-apps direction) · [PLAN.md](docs/PLAN.md) (original design & milestones) · [WAN.md](docs/WAN.md) (internet/NAT roadmap) · [COMPETITION.md](docs/COMPETITION.md) (competitive landscape) · [AGENTS.md](AGENTS.md) (working conventions)
+On macOS, allow **Screen Recording** to share your screen and **Accessibility** for remote mouse and keyboard control. On Android, remote touch control requires the app's Accessibility service.
 
-## Workspace
+## What you can do
 
-| Crate | Purpose |
-|---|---|
-| `crates/proto` | Pure wire types, media framing, FEC. No I/O; builds everywhere. |
-| `crates/net` | QUIC endpoint, Ed25519 identity, pinned-key mTLS, pairing enrollment, mDNS. |
-| `crates/core` | Client session logic (reassembly, FEC/IDR recovery, input coalescing). FRB-free. |
-| `crates/host` | Cross-platform host: capture/encode/input behind traits — Windows WGC/DXGI + Media Foundation H.264 (NVENC in progress), Android screen capture (`android_screen`), mock encoder for the dev loop. Reuses the shared pairing/QUIC/FEC server. |
-| `crates/devtools` | `fakehost`, `devclient`, `playclient`, `streamdemo`, `hostdisc` — the headless dev loop; no phone/Windows box needed. |
-| `app/` | The StreamBeam app — one Flutter UI + Rust core (flutter_rust_bridge) for Android, macOS, and Windows. Watch + Beam tabs; MediaCodec (Android) / VideoToolbox (macOS) decode; native mDNS on macOS. |
-| `site/` | streambeam.eu — landing page, `session/` deep-link fallback, `assetlinks.json`. Static, no build step (see [site/README.md](site/README.md)). |
+- **Share a desktop or phone screen.** The same app can watch another screen or share its own.
+- **Play across devices.** Hardware video encoding and decoding where supported, adjustable quality, and gamepad forwarding to Windows hosts with VIIPER installed.
+- **Control the remote device.** Mouse, keyboard and touch support depend on the sending and receiving platforms; see the [capability matrix](docs/PLATFORMS.md).
+- **Connect directly.** Devices authenticate with pinned keys over encrypted QUIC connections. No account or cloud relay is required for local streaming.
+- **Pair without configuration pages.** Nearby-device approval, QR codes and pairing links are built into the app.
 
-## Run the app
+## Availability
+
+| Platform | Share its screen | Watch another screen | Install today |
+|---|---|---|---|
+| **Android** | Yes; system confirmation per capture session | Yes | [ARM64 preview APK](https://github.com/joepio/streambeam/releases/tag/v0.1.0), Android 8+ |
+| **macOS** | Yes; Screen Recording permission required | Yes | Build from source |
+| **Windows** | Yes; desktop capture and optional background service | Yes; H.264 viewer implemented | Build from source |
+| **Linux** | Planned | Planned | No supported preview |
+| **iOS / iPadOS** | Not available | Planned | No supported preview |
+
+**Preview limits:** desktop installers and App Store / Google Play releases are not available yet. Audio is partially implemented and still needs broader device validation; Android screen sharing is video-only. Internet discovery, NAT traversal and relays are [future work](docs/WAN.md). There is no published end-to-end latency guarantee.
+
+The published Android preview may lag behind current development. See [releases](https://github.com/joepio/streambeam/releases) for the exact downloadable build, and [PROGRESS](docs/PROGRESS.md) for recent changes.
+
+## Build and run
+
+Use Flutter, the Rust toolchain pinned in `rust-toolchain.toml`, and the native SDK for your target platform. Android builds also need the Android NDK. See the [app development guide](app/README.md) and [Windows host setup](docs/SETUP_MANCAVE.md).
 
 ```sh
 cd app
-flutter run -d macos      # or: -d windows, or a connected Android device
+flutter pub get
+flutter run -d macos      # or -d windows, or a connected Android device
 ```
 
-Watch tab: tap a discovered paired device to start a beam, or paste/scan its
-link for the one-time pairing. Desktop Beam tabs stay ready in the background;
-Android still needs its per-session MediaProjection confirmation.
+After changing `app/rust/src/api/`, run `flutter_rust_bridge_codegen generate` from `app/`.
 
-After changing `app/rust/src/api/`, regenerate bindings: `flutter_rust_bridge_codegen generate`.
+```sh
+cargo test
+cd app
+flutter analyze --no-pub
+flutter test --no-pub
+```
 
-## Headless dev loop (no phone / Windows box)
-
-Everything except the real capture/encode paths builds and runs on macOS.
-
-**Visual smoke test** — fakehost → ffplay window + stereo audio (needs `brew install ffmpeg`):
+For a local visual smoke test without a phone or real capture device, install FFmpeg and run:
 
 ```sh
 cargo run -p streambeam-devtools --bin streamdemo
 ```
 
-**Host ↔ client by hand:**
+## How it works
 
-```sh
-# Terminal 1 — a host streaming the bundled test clip
-STREAMBEAM_LISTEN=0.0.0.0:47989 cargo run -p streambeam-devtools --bin fakehost
-# copy the sbm1:… line it prints
+A Flutter interface connects to a shared Rust core. Native capture and playback use ScreenCaptureKit / VideoToolbox on macOS, MediaProjection / MediaCodec on Android, and Windows capture / NVENC with a software H.264 fallback. H.264 is the common codec; AV1 is negotiated on supported hardware.
 
-# Terminal 2 — headless client, stats + per-frame hash verify
-cargo run -p streambeam-devtools --bin devclient -- 'sbm1:…' --frames 60
-# …or playback in an ffplay window:
-cargo run -p streambeam-devtools --bin playclient -- 'sbm1:…'
-```
+Video travels in QUIC datagrams with Reed–Solomon forward error correction. Reliable streams carry session control and input. Pairing pins Ed25519 identities; the host authorizes a viewer before sending media. QR pairing codes live in the URL fragment, which browsers do not send to the website server.
 
-**Real host binary** (Windows, or macOS for dev with the mock encoder):
+| Directory | Purpose |
+|---|---|
+| `app/` | Flutter app, Rust bridge and native platform integration |
+| `crates/proto` | Wire types and media framing |
+| `crates/net` | Transport, identities, pairing and discovery |
+| `crates/core` | Client sessions, media recovery and input |
+| `crates/host` | Capture, encoding and host session handling |
+| `crates/svc` | Windows host service and worker lifecycle |
+| `crates/devtools` | Fake host, test clients and streaming diagnostics |
+| `site/` | Website and pairing-link landing page |
 
-```sh
-cargo run -p streambeam-host --release   # listens on 0.0.0.0:47989, prints QR + sbm1:, advertises via mDNS
-```
+[Protocol](docs/PROTOCOL.md) · [Debugging](docs/DEBUGGING_CLIENT.md) · [Release process](docs/RELEASING.md) · [Contributing conventions](AGENTS.md) · [Brand assets](assets/README.md)
 
-## Tests
-
-```sh
-cargo test   # proto + net + core + e2e pairing/stream smoke tests
-```
+Made by [Ontola](https://ontola.io).
