@@ -645,7 +645,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       context: context,
       builder: (_) => PairingHelp(
         hostName: entry.name,
-        canScan: Platform.isAndroid,
+        canScan: Platform.isAndroid || Platform.isIOS,
         needsCode: entry.needsPairing,
       ),
     );
@@ -716,7 +716,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _refreshSavedHost();
     _primeHdrCapability();
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || Platform.isIOS) {
       _scannerController = MobileScannerController(
         autoStart: false,
         detectionSpeed: DetectionSpeed.noDuplicates,
@@ -802,6 +802,11 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // iOS suspends networking/audio in the background. End the session before
+    // suspension so returning cannot leave a disposed texture marked active.
+    if (Platform.isIOS && state == AppLifecycleState.paused && _busy) {
+      unawaited(_stopDesktopPlayback());
+    }
     if (state == AppLifecycleState.resumed && !_busy) {
       unawaited(_refreshClipboard());
     }
@@ -817,6 +822,9 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       );
     }
 
+    // iOS asks before reading another app's clipboard; only the explicit Paste
+    // action may read it, rather than polling and repeatedly prompting.
+    if (Platform.isIOS) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     final clientActive = _showVideo && _status == 'Streaming…';
@@ -847,7 +855,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   Future<void> _syncScanner() async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
       if (_qrPreviewOpen && !_busy) {
         await _scannerController?.start();
@@ -1880,7 +1888,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
               )
             : Texture(textureId: _desktopTextureId!),
         hostAcceptsTouch: playbackHostAcceptsTouch(),
-        touchControls: false,
+        touchControls: Platform.isIOS,
         upscaleSupported: _upscaleSupported ?? false,
         upscaleActive: _upscaleActive,
         onToggleUpscale: _toggleUpscale,
@@ -2004,7 +2012,8 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   ],
                   const SizedBox(height: 16),
                   // Add a host by QR or pasted code.
-                  if (Platform.isAndroid && _qrPreviewOpen) ...[
+                  if ((Platform.isAndroid || Platform.isIOS) &&
+                      _qrPreviewOpen) ...[
                     _QrScanPreview(
                       controller: _scannerController!,
                       paused: _busy,
@@ -2016,7 +2025,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                   Row(
                     children: [
                       Expanded(
-                        child: _clipboardReady
+                        child: (_clipboardReady || Platform.isIOS)
                             ? FilledButton.icon(
                                 onPressed: _busy ? null : _pasteFromClipboard,
                                 icon: const Icon(Icons.content_paste),
@@ -2028,7 +2037,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
                                 label: const Text('Paste'),
                               ),
                       ),
-                      if (Platform.isAndroid) ...[
+                      if (Platform.isAndroid || Platform.isIOS) ...[
                         const SizedBox(width: 8),
                         Expanded(
                           child: FilledButton.tonalIcon(

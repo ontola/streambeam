@@ -1,9 +1,15 @@
 import AVFoundation
+#if os(macOS)
 import AppKit
 import FlutterMacOS
+#else
+import Flutter
+#endif
 import Foundation
+#if os(macOS)
 import Metal
 import MetalFX
+#endif
 import VideoToolbox
 
 @_silgen_name("streambeam_macos_audio_fill")
@@ -19,8 +25,19 @@ final class StreamBeamAudioOut {
   private var source: AVAudioSourceNode?
   private var running = false
 
+  var isRunning: Bool { engine.isRunning }
+
   func start() {
     guard !running else { return }
+#if os(iOS)
+    do {
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+      try AVAudioSession.sharedInstance().setActive(true)
+    } catch {
+      NSLog("StreamBeam: audio session could not start: %@", error.localizedDescription)
+      return
+    }
+#endif
     guard
       let format = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true),
@@ -53,6 +70,9 @@ final class StreamBeamAudioOut {
     if let source { engine.detach(source) }
     source = nil
     running = false
+#if os(iOS)
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+#endif
   }
 }
 
@@ -81,9 +101,11 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         self.registry = registry
         super.init()
         textureId = registry.register(self)
+#if os(macOS)
         if #available(macOS 13.0, *) {
             upscalerStorage = MetalFXUpscaler()
         }
+#endif
     }
 
     /// Enable/disable MetalFX upscaling. Returns whether upscaling is actually
@@ -504,6 +526,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
                 CVPixelBufferGetWidth(imageBuffer), CVPixelBufferGetHeight(imageBuffer))
         }
         var frame = imageBuffer
+#if os(macOS)
         lock.lock()
         // The upscaler's Metal textures are bgra8Unorm; a 10-bit biplanar
         // buffer can't go through it, and quietly producing a wrong picture
@@ -517,6 +540,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         {
             frame = scaled
         }
+#endif
         lock.lock()
         // A decode callback can land after dispose() (async decompression);
         // marking an unregistered texture trips kInternalInconsistency.
@@ -533,10 +557,17 @@ class StreamBeamVideo: NSObject, FlutterTexture {
         // to draw, the frames went nowhere at all and the picture was black
         // (observed live 2026-08-17, and exactly the failure mode this project
         // keeps relearning: an either/or that silently drops the frame).
+#if os(macOS)
         registry.textureFrameAvailable(textureId)
         if isHDR10, let hdrView = StreamBeamHdrViewFactory.current {
             hdrView.present(frame)
         }
+#else
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.disposed else { return }
+            self.registry.textureFrameAvailable(self.textureId)
+        }
+#endif
     }
 
     func dispose() {
@@ -596,6 +627,7 @@ class StreamBeamVideo: NSObject, FlutterTexture {
     }
 }
 
+#if os(macOS)
 /// GPU upscaling of decoded frames with MetalFX's spatial scaler
 /// (`MTLFXSpatialScaler`): each decoded CVPixelBuffer is reconstructed to up to
 /// 2× per axis (capped at the largest attached display) before it reaches the
@@ -745,3 +777,5 @@ final class MetalFXUpscaler {
         self.pool = pool
     }
 }
+
+#endif

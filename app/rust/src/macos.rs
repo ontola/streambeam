@@ -102,16 +102,3 @@ pub extern "C" fn streambeam_macos_capture_take_idr_request() -> u8 {
 pub extern "C" fn streambeam_macos_capture_wanted() -> u8 {
     u8::from(streambeam_host::macos_screen::capture_wanted())
 }
-
-/// Render-callback pull for the Watch role: fills `out` with interleaved
-/// 48 kHz stereo f32 from the active playback session, or silence.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn streambeam_macos_audio_fill(out: *mut f32, len: usize) {
-    if out.is_null() || len == 0 {
-        return;
-    }
-    // SAFETY: Swift's AVAudioSourceNode owns the buffer for the duration of
-    // this synchronous render callback.
-    let buf = unsafe { slice::from_raw_parts_mut(out, len) };
-    crate::audio_play::fill_f32(buf);
-}

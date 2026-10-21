@@ -39,6 +39,13 @@ AppCapabilities appCapabilities() {
       platformLabel: 'Android',
     );
   }
+  if (Platform.isIOS) {
+    return const AppCapabilities(
+      host: false,
+      watch: true,
+      platformLabel: 'iOS',
+    );
+  }
   final host = hostPlatformSupported();
   // Desktop decode/watch is not wired yet on any desktop OS.
   const watch = false;

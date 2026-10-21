@@ -120,10 +120,10 @@ fn fill(ring: &Ring, out: &mut [i16], device_rate: u32, frac: &mut f64) {
     }
 }
 
-/// macOS: the Swift runner owns an `AVAudioSourceNode` (started alongside the
+/// Apple: the Swift runner owns an `AVAudioSourceNode` (started alongside the
 /// video decoder) whose render callback pulls interleaved 48 kHz stereo f32
 /// through [`fill_f32`]. Registering the ring here is all "starting" means.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod sink {
     use std::sync::Mutex;
 
@@ -162,7 +162,7 @@ mod sink {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use sink::fill_f32;
 
 /// Windows watch audio needs a WASAPI render sink — pending the next
@@ -237,6 +237,20 @@ mod sink {
     }
 }
 
+/// Apple native audio callback. The legacy symbol name is retained so macOS
+/// and iOS share the same decoder/audio implementation without an ABI change.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn streambeam_macos_audio_fill(out: *mut f32, len: usize) {
+    if out.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: AVAudioSourceNode owns this writable buffer for the duration
+    // of its synchronous render callback.
+    let buf = unsafe { std::slice::from_raw_parts_mut(out, len) };
+    fill_f32(buf);
+}
+
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
     use super::*;
@@ -250,6 +264,20 @@ mod tests {
         assert_eq!(&out[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(&out[8..], &[0, 0, 0, 0]);
         assert!(ring.lock().unwrap().is_empty());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn apple_sink_converts_stereo_pcm_and_silences_after_stop() {
+        let ring: Ring = Arc::new(Mutex::new([i16::MAX, -i16::MAX].into_iter().collect()));
+        let sink = sink::start(ring).unwrap();
+        let mut out = [9.0; 4];
+        fill_f32(&mut out);
+        assert_eq!(out, [1.0, -1.0, 0.0, 0.0]);
+        drop(sink);
+        out.fill(9.0);
+        fill_f32(&mut out);
+        assert_eq!(out, [0.0; 4]);
     }
 
     #[test]
