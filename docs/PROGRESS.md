@@ -3,6 +3,32 @@
 Live status of the milestone plan in [PLAN.md](PLAN.md). Updated as work lands.
 Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 
+## Current delivery evidence — 2026-10-21
+
+- Exact `5a99a2799340a1460f2d63e7119d7c02b93ea50b` passed all ten hosted checks:
+  [ordinary platform CI](https://github.com/joepio/streambeam/actions/runs/39605216105),
+  [unsigned iOS and native tests](https://github.com/joepio/streambeam/actions/runs/39605216489),
+  and [browser media/input fixture](https://github.com/joepio/streambeam/actions/runs/39605216141).
+  PR #3 is merged. Linux remains an experimental shell; browser sharing still
+  requires the separate development bridge.
+- That commit is installed on the Mac with the same signature and privacy
+  permissions. A real Mac/Mancave session showed nonblank 3840 × 2160 AV1 video;
+  120 fps is a selected target, not a measured result.
+- The matching Windows artifact is staged. AllSigned blocks the unsigned
+  updater, so the previous service remains intact and the new build is not
+  installed. ADB is offline: the final Android build is not installed; Xiaomi's
+  last verified in-place preview update is `604ce0e`.
+- Local iOS **0.1.0 (3)** is an exported App Store distribution IPA with strict
+  signature, profile and privacy-manifest verification. The
+  [hosted signed build 4](https://github.com/joepio/streambeam/actions/runs/39608208468)
+  is still running at this documentation update. No upload or physical iPhone
+  acceptance is claimed.
+- Apple app **6825263933**, **StreamBeam Remote Desktop**, remains a draft.
+  Missing API `.p8` recovery blocks upload setup. Bitwarden is locked and a
+  backup destination vault is undecided; the private inventory is ready but no
+  recoverable backup is verified. Permanent Android keys/Google Play access and
+  Microsoft Store identity/submission remain pending. See [RELEASING.md](RELEASING.md).
+
 | Milestone | Status | Notes |
 |---|---|---|
 | M0 — Scaffold + secure transport | ✅ done | proto + net + devtools; tag m0 pending |
@@ -91,11 +117,15 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 
 ## Decisions log
 
+- 2026-10-21 — **Export and verify a signed iOS candidate without changing its signing identity.** Apple's keychain rejected the original OpenSSL 3 PKCS12 container. Re-exported the same Apple Distribution key/certificate with explicit 3DES encryption and SHA-1 MAC for Apple compatibility, and replaced the encrypted GitHub signing secret. Local App Store IPA 0.1.0 (3) export now passes strict signature, embedded profile and Rust privacy-manifest checks. This is container compatibility, not a new signing identity. Hosted build 4 is separately in progress; no store upload occurred. Credential inventory is private and ready, but Bitwarden unlock/vault selection and recoverable backup remain pending.
+
+- 2026-10-21 — **Verify integrated CI and separate it from installation evidence.** All ten checks passed for exact 5a99a2799340a1460f2d63e7119d7c02b93ea50b, including full Windows/macOS/Linux/Android builds, unsigned iOS/native tests and genuine browser fixture media/input; PR #3 merged. Installed that Mac build without changing its signing identity or existing permissions and observed nonblank 3840×2160 AV1 in a real Mac/Mancave session. The 120 fps menu target is not a throughput measurement. The matching Windows update is staged but its unsigned updater is blocked by machine AllSigned policy; the prior service remains intact. Final Android installation could not proceed while ADB was offline; the last verified Xiaomi update is 604ce0e. Signed iOS export, store upload, physical iPhone acceptance and credential backup are tracked separately above.
+
 - 2026-10-21 — **Configure dedicated Apple distribution signing and align the store draft.** Created an Apple Distribution certificate and a matching App Store-only profile for `Q9WPWRTU7G.io.streambeam.streambeam`, checked the certificate/private-key match and profile entitlements/expiry, and saved the three approved signing values as encrypted `joepio/streambeam` Actions secrets. Private originals remain outside the repository. App Store Connect now shows version 0.1.0 with draft description/keywords and manual release. API-key download failed in the in-app browser: the first unused key was revoked with user approval, and replacement recovery remains pending; no upload access is claimed. User requested a password-manager backup, still pending. Pin signed iOS builds to the same Xcode 26.3 as preview CI. Current hosted native jobs have successful build evidence on the prior integration; final exact-commit CI, signed export, TestFlight processing and physical iPhone acceptance remain separate checks. Xiaomi's latest ARM64 APK was updated in place with the unchanged preview signer; other ADB devices were not reachable.
 
 - 2026-10-21 — **Package the iOS Rust framework privacy manifest before store upload.** Release-binary inspection found `stat`, `fstat`, `fstatat` and `lstat` imports without a manifest in `rust_lib_streambeam.framework`. The CocoaPods resource now embeds `PrivacyInfo.xcprivacy` in that framework, declaring FileTimestamp reason C617.1 for Rust reads of the app-container device name, pairing identity and saved-host files (`streambeamDataDir` supplies the iOS Documents container). Other plugins’ manifests cannot cover this binary under [Apple’s required-reason rules](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api). Refreshed the podspec checksum, rebuilt an unsigned Release archive, and verified the manifest and exact reason in the archived framework; plist validation and diff checks pass. This verifies packaging, not App Store acceptance, signed export or physical iPhone playback.
 
-- 2026-10-21 — **Register the iOS app and reconcile platform/release documentation.** Apple App Store Connect now contains **StreamBeam Remote Desktop** (the shorter StreamBeam name was unavailable), bundle `io.streambeam.streambeam`, SKU `streambeam-ios`, app ID `6825263933`, under Argu B.V. team `Q9WPWRTU7G`. Its initial iOS 1.0 version is Prepare for Submission; source remains 0.1.0+2 and versions need alignment before build selection. No signed IPA or uploaded build is verified; Apple signing/API setup is authorized and underway. README, platform matrix, release guide and draft listing metadata now distinguish implemented iOS viewing (unsigned release, three native simulator and three Rust audio tests pass) from pending physical iPhone acceptance. The shared Apple implementation also passes a complete macOS ARM64 release and six native decoder regressions, without changing the installed app/signature. CI covers all major OS build targets, with Linux explicitly an experimental shell; the browser bridge remains optional, video-only and undeployed. Historical progress entries remain as dated evidence.
+- 2026-10-21 — **Register the iOS app and reconcile platform/release documentation.** Apple App Store Connect now contains **StreamBeam Remote Desktop** (the shorter StreamBeam name was unavailable), bundle `io.streambeam.streambeam`, SKU `streambeam-ios`, app ID `6825263933`, under Argu B.V. team `Q9WPWRTU7G`. Its initial iOS 1.0 version is Prepare for Submission; source remains 0.1.0+2 and versions need alignment before build selection. Signing/API setup was still underway at registration; the later local signed-IPA export and remaining upload blocker are recorded above. README, platform matrix, release guide and draft listing metadata now distinguish implemented iOS viewing (unsigned release, three native simulator and three Rust audio tests pass) from pending physical iPhone acceptance. The shared Apple implementation also passes a complete macOS ARM64 release and six native decoder regressions, without changing the installed app/signature. CI covers all major OS build targets, with Linux explicitly an experimental shell; the browser bridge remains optional, video-only and undeployed. Historical progress entries remain as dated evidence.
 
 - 2026-10-21 — **Explicit store upload paths and Android disclosure.** Candidate builds can optionally validate/upload to TestFlight or a Google Play internal draft, with pinned bundle digest/version checks, pending-release/review protection and temporary key cleanup. Added draft platform-specific listings and Android focused-text Accessibility disclosure before opening Settings. Seven mocked upload-boundary tests pass; live signed uploads, account setup and policy declarations remain pending.
 - 2026-10-21 — **Reproduce and fix the remaining saved-host test failure on Linux.** After the timing/teardown fixes, CI still rendered no host tile. An isolated Linux run revealed the actual platform-specific cause: the test mounted StreamBeamApp, whose AppShell deliberately displays “Not available on Linux yet” instead of mounting WatchPage. The regression now mounts the mocked WatchPage directly inside MaterialApp, exercising persistence lifecycle on every test host without weakening the production Linux capability gate or skipping the test. Full Linux Flutter analysis and all 59 tests pass using the existing Flutter 3.44.0 SDK; the focused regression also passes locally on macOS Flutter 3.44.7. Exact hosted Flutter 3.44.7 verification remains pending.

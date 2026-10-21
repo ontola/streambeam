@@ -22,21 +22,54 @@ The Apple bundle identifier and App Store Connect app record have been created:
 | Store version / state | iOS **0.1.0**, **Prepare for Submission** |
 | Account record | [App Store Connect](https://appstoreconnect.apple.com/apps/6825263933/distribution) |
 
-This is registration, not an App Store release or TestFlight build. There is no
-verified signed IPA or upload yet. The dedicated Apple Distribution certificate
-and matching App Store profile were created and validated on 2026-10-21; the
-three signing secrets are configured in this repository. The app record's
+A local App Store distribution IPA **0.1.0 (3)** was exported on 2026-10-21.
+Strict code-signature verification, the embedded distribution profile and the
+Rust framework privacy manifest were checked in the exported artifact. The
+dedicated Apple Distribution certificate and matching App Store profile are
+validated, and all three signing secrets are configured in this repository.
+This is a signed export; no upload, Apple processing, TestFlight availability or
+public App Store release is verified.
+
+The [hosted signed build 4](https://github.com/joepio/streambeam/actions/runs/39608208468)
+was still running when this status was recorded; its outcome must be checked
+separately from the successful local export. The app record's
 marketing version is now **0.1.0**, matching source **0.1.0+2**, and its draft
 description/keywords are saved with manual release selected.
 
 The App Store Connect API-key download failed in the in-app browser. The first
 unused key was revoked with user approval; its replacement is not yet backed up
-or configured for CI. Do not claim upload access until the private file is
-actually saved and authenticated. The password-manager backup is also pending.
+or configured for CI: its `.p8` private file has not been recovered. Do not claim
+upload access until that file is saved and authenticated. A private credential
+inventory is ready, but the Bitwarden CLI remains locked and the destination
+vault has not been selected. No password-manager backup is verified.
 
 Google Play registration/upload and Microsoft Store identity/submission are
 still unverified. Keep their draft listings separate from Apple's registered
 name and record. No public store installation is available from this work yet.
+
+## Verified build and device status — 2026-10-21
+
+All ten hosted checks passed on exact commit
+`5a99a2799340a1460f2d63e7119d7c02b93ea50b`, subsequently merged through PR #3:
+[ordinary CI](https://github.com/joepio/streambeam/actions/runs/39605216105),
+[iOS preview](https://github.com/joepio/streambeam/actions/runs/39605216489), and
+[browser preview](https://github.com/joepio/streambeam/actions/runs/39605216141).
+This includes Windows x64, both Mac architectures, Linux's experimental shell,
+Android release/scanner checks, unsigned iOS/native decoder tests, Rust checks,
+Flutter analysis/tests, and real fixture media/input through the browser bridge.
+
+The exact commit is installed on the Mac with its existing signing identity and
+macOS privacy permissions preserved. A real Mac/Mancave session displayed
+nonblank **3840 × 2160 AV1** video. **120 fps is the selected target, not a
+measured delivered frame rate.** The matching Windows artifact is staged, but
+the machine's AllSigned policy blocks its unsigned updater; the previous
+service remains intact and the new Windows version is not installed.
+
+The final Android artifact has not been installed on a phone because ADB is
+offline. Xiaomi's last verified in-place preview update was `604ce0e`, with the
+existing preview signer. Permanent Android signing and Google Play access remain
+pending. Browser CI proves the development bridge against the fixture; it does
+not establish native-host browser sharing or a deployed public viewer.
 
 ## Before publishing
 
@@ -118,6 +151,12 @@ The iOS job expects `IOS_DISTRIBUTION_P12_BASE64`,
 `IOS_DISTRIBUTION_P12_PASSWORD` and `IOS_APP_STORE_PROFILE_BASE64`.
 The profile must be an unexpired App Store distribution profile for the
 exact bundle ID; development, ad hoc and enterprise profiles are rejected.
+The original OpenSSL 3 PKCS12 export could not be imported by Apple's keychain.
+Re-exporting the **same key and certificate** with explicit 3DES encryption and
+a SHA-1 MAC produced an Apple-compatible P12; the corrected encrypted secret
+is installed. This changes the export container, not the app's signing identity.
+Preserve this compatibility when renewing/exporting the credential.
+
 Signing uses a temporary CI keychain and an ignored Runner-only xcconfig,
 then removes the signing material. Exported IPAs remain artifacts by default;
 explicit upload is described below. Never include private credentials in source,
@@ -132,6 +171,8 @@ wired. The viewer advertises SDR H.264; it does not host the iPhone/iPad screen.
 
 Local validation on 2026-10-21:
 
+- App Store distribution IPA 0.1.0 (3) exported successfully; strict signature,
+  profile and embedded Rust privacy-manifest verification passed.
 - Complete unsigned device release built successfully (29.3 MB).
 - Full Flutter analysis and 54 tests passed for the iOS implementation; later
   integrated discovery work increased the shared suite to 59 tests.
@@ -150,9 +191,9 @@ Check hosted results for the exact commit; local results are not hosted CI proof
 
 Before public submission, verify installation, Local Network/camera consent,
 first pairing, reconnection, moving video, audible A/V and remote input on a
-physical iPhone/iPad. Signed export, Apple processing and TestFlight availability
-must each be checked separately. The registered app record above resolves the
-old registration blocker; it does not resolve these acceptance requirements.
+physical iPhone/iPad. The local signed export is verified; hosted signed output,
+Apple processing and TestFlight availability remain separate checks. The
+registered app record above resolves the old registration blocker; it does not resolve these acceptance requirements.
 
 Android upload-key setup and a successful signed AAB also remain unverified.
 The unsigned App Bundle rejection remains an ordinary CI check.
@@ -196,6 +237,9 @@ References: [Google edits](https://developers.google.com/android-publisher/api-r
 GitHub Actions secrets cannot serve as a recoverable backup. Keep the dedicated
 Apple distribution P12 and its password, the App Store profile, API private key
 with key/issuer IDs, and any Android upload keystore/password/alias in the
-publisher's password manager. Verify the backup before removing local originals.
+publisher's password manager. A private inventory is prepared; the locked
+Bitwarden session and destination-vault choice still prevent a verified backup.
+Verify recovery of the saved items before removing local originals or treating
+GitHub-secret installation as completion of credential custody.
 Never commit keys or include them in diagnostic artifacts. Certificate/profile
 renewal is separate from replacing an installed app's signing identity.
