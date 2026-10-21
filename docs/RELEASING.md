@@ -2,7 +2,7 @@
 
 The first downloadable release is `v0.1.0` (Android version code 2). These are
 LAN-streaming previews, not the completed M8/v1 milestone. Android ARM64 is the
-packaged target; Windows and macOS host/app-bridge compilation are checked separately. CI cannot
+packaged mobile target; desktop bundles are described in [DESKTOP_RELEASES.md](DESKTOP_RELEASES.md). CI cannot
 validate GPU capture, physical controllers, phone cameras or live latency.
 
 ## Before publishing
@@ -11,7 +11,7 @@ validate GPU capture, physical controllers, phone cameras or live latency.
    number, even when a preview's semantic version is lower than an old local
    development build's `1.0.0`. Android upgrades use the build number.
 2. Commit the release notes and changes. Push `main` and wait for every CI job:
-   Rust formatting, Rust tests/Clippy, Windows/macOS host and app bridges, Flutter
+   Rust formatting, Rust tests/Clippy, Windows/macOS/Linux app bundles, Flutter
    analysis/tests, and the minified Android release with scanner verification.
 3. Build from that exact clean commit with the pinned Flutter 3.44.7 and Rust
    toolchain. Run `flutter pub get --enforce-lockfile` in `app`, then
