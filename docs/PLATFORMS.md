@@ -1,62 +1,47 @@
-# Platform capability matrix
+# Platform support
 
-Live tracker of where each platform stands on the three things StreamBeam does:
-**Beam** (send this device's screen), **Watch** (view another device's screen),
-and **Control** (mouse / keyboard / gamepad). Keep this truthful — update the
-cell the moment a capability lands or breaks.
+StreamBeam has three roles: **share** this device's screen, **watch** another screen, and **control** the device being watched. The same app can perform both screen-sharing roles where implemented.
 
-Legend: ✅ working · 🔨 in progress · ⬜ not started · ➖ n/a / blocked by platform
+This matrix describes implementation, not a guarantee that every device combination has passed live testing. See [PROGRESS](PROGRESS.md) for dated evidence and open work.
 
-## Audio + video
+## Video
 
-| Platform | Beam (host: capture → encode → serve) | Watch (client: receive → decode → display) |
+| Platform | Share | Watch | Current implementation |
+|---|---|---|---|
+| Windows | Implemented | Implemented | WGC/DXGI capture; direct NVIDIA NVENC H.264/AV1 with software H.264 fallback. Viewer uses Media Foundation H.264 decoding and a Flutter texture; Windows viewing needs broader device testing. |
+| macOS | Implemented | Implemented | ScreenCaptureKit capture and hardware VideoToolbox H.264 encoding. VideoToolbox H.264 playback; AV1 when the hardware capability probe succeeds. MetalFX upscaling is available. |
+| Android | Implemented | Implemented | MediaProjection capture with MediaCodec H.264 encoding; MediaCodec playback to a Surface. AV1 playback is negotiated where supported. System sharing consent is required per capture session. |
+| Linux | Planned | Planned | Native capture, codecs and rendering remain to be implemented. |
+| iOS / iPadOS | Not available | Planned | The Flutter scaffold is not a functional streaming client. No installable release. |
+
+Desktop capture stays idle until an authorized viewer requests a session. macOS needs Screen Recording permission. Android shows the system's sharing chooser before capture starts.
+
+## Remote control
+
+| Platform | As viewer | As the device being controlled |
 |---|---|---|
-| **Windows** | ✅ WGC/DXGI capture + Media Foundation H.264 (hardware NVENC / async-MFT in progress) | ✅ Media Foundation H.264 software decoder MFT → NV12→RGBA CPU convert → Flutter `PixelBufferTexture`, same `streambeam/video_desktop` channel contract as macOS (`app/windows/runner/streambeam_video.{h,cpp}`) — verified 2026-07-07 via self-loopback (this box hosting + watching itself); an initial reddish tint was a real bug (Flutter's `PixelBufferTexture` is hardcoded RGBA — no format field on the struct — while the code wrote BGRA order), fixed. **Shares the cross-platform keyframe/hover "flashing" bug** (see PROGRESS.md) — reproduces identically on this decoder too, confirming it's not decode-side. ⬜ audio both ways: WASAPI loopback capture + WASAPI playback sink pending the next Windows-box session |
-| **Android** | ✅ MediaProjection + MediaCodec H.264 — **video only** (host audio not wired; out of v1 scope) | ✅ MediaCodec → Surface · 🔨 audio: Opus decode in Rust → AAudio LowLatency sink (landed 2026-07-18, device verification pending) |
-| **macOS** | ✅ Idle listener + client-initiated ScreenCaptureKit NV12 capture → hardware VideoToolbox H.264 → bounded native/Rust `VideoEncoder` queue; capture runs only during an authorized session; fixed 30 fps for now — verified 2026-07-17 from an already-paired Xiaomi 15 at 1920×1080, with no host action or repeat approval · 🔨 audio: SCStream system audio (own process excluded) → Rust Opus (landed 2026-07-18, device verification pending) | ✅ VideoToolbox decode (H.264 + AV1 on M3+ via hw probe) → Flutter texture, MetalFX spatial upscaling on by default ([UPSCALE.md](UPSCALE.md)) — H.264 and AV1 both verified 2026-07-07 vs fakehost / a real Windows host (NVENC AV1) · 🔨 audio: Opus decode in Rust → `AVAudioSourceNode` pull (landed 2026-07-18, verification pending) |
-| **Linux** | ⬜ PipeWire portal + VAAPI | ⬜ VA-API / Vulkan decode → texture |
-| **iOS** | ➖ no background screen capture | ⬜ later |
+| Android | Touch/trackpad interaction, keyboard and gamepad forwarding | Accessibility-based touch and focused-field text editing are implemented; permission and device behavior need verification. Unrestricted keyboard shortcuts, native mouse/wheel behavior and gamepad injection are not generally available. |
+| macOS | Mouse and keyboard forwarding | Mouse and keyboard through CGEvent, with Accessibility permission. Gamepad injection is not implemented. |
+| Windows | Viewer exists; input coverage needs further verification | Mouse and keyboard through SendInput; gamepad through VIIPER, which needs separate installation. |
+| Linux | Planned | Planned |
+| iOS / iPadOS | Planned | Not available |
 
-## Control (mouse / keyboard / gamepad)
+A successful video stream alone does not establish that remote input works. Validate capture, decoding, mouse/touch, keyboard and gamepad separately on the actual pair of devices.
 
-Two halves: a **viewer** captures & sends input; a **host** injects the input it
-receives. "Control my phone from my PC" needs the host half on the target.
+## Audio
 
-| Platform | As viewer (capture & send) | As host (inject received) |
+| Platform | Send system audio | Play received audio |
 |---|---|---|
-| **Windows** | ➖ (no desktop watch yet) | ✅ mouse (SendInput, incl. back/forward buttons + smooth wheel) · ✅ gamepad (VIIPER virtual pad) · 🔨 keyboard (SendInput VK injection landed 2026-07-07; verify on device) |
-| **Android** | ✅ host-aware full multi-touch from touchscreens · ✅ mouse/trackpad for desktop hosts · ✅ gamepad · ✅ software/physical keyboard | 🔨 AccessibilityService gesture injection landed (up to 10 contacts), primary mouse click/drag mapped to touch, and focused-field text editing for letters/digits/punctuation/Shift/backspace/Enter · permission + real-device verification pending · native cursor/wheel/global shortcuts still need Shizuku |
-| **macOS** | ✅ mouse (hover/click/drag/scroll map 1:1 while watching) · ✅ keyboard (physical keys → VK while streaming) | ✅ touch/mouse (absolute + relative, tap, drag, smooth scroll) · ✅ keyboard (VK→macOS keycode), via CGEvent after the Accessibility grant · ⬜ gamepad |
-| **Linux** | ➖ | ⬜ uinput / XTest |
-| **iOS** | ⬜ later | ➖ |
+| macOS | ScreenCaptureKit → Opus implemented; live validation pending | Opus → AVAudioSourceNode implemented; live validation pending |
+| Android | Not implemented; screen sharing is video-only | Opus → AAudio implemented; broader live validation pending |
+| Windows | WASAPI capture pending | WASAPI playback pending |
+| Linux / iOS | Not implemented | Not implemented |
 
-## What the open cells need
+## Distribution and networking
 
-- **macOS beam follow-ups** — video and CGEvent input are working through
-  ScreenCaptureKit + VideoToolbox and reuse the shared host server/pairing/FEC
-  path. Display selection is implemented. Still needed: ScreenCaptureKit
-  system audio → Opus, dynamic fps/bitrate reconfiguration, and gamepad
-  injection.
-- **Desktop watch (macOS → then Windows/Linux)** — decode H.264 and render into
-  the Flutter window. macOS: VideoToolbox → `AVSampleBufferDisplayLayer` platform
-  view, fed by the shared `crates/core` reassembly. The network + FEC + jitter
-  path is reused; only decode + present is new per-OS.
-- **Android as host / control (PC→phone)** — the AccessibilityService now
-  dispatches full-state multi-touch gestures. Android requires the user to
-  enable `Remote touch control` in Accessibility settings. Shizuku/ADB remains
-  the likely follow-up for unrestricted native mouse and keyboard injection.
-- **Keyboard injection (remaining hosts)** — Windows `SendInput` and macOS
-  `CGEvent` are wired. Linux still needs uinput; touch viewers expose the
-  system on-screen keyboard.
-- **Host audio off Windows** — Android/macOS hosts stream video only; add
-  loopback capture (ScreenCaptureKit audio on macOS, AudioRecord/OpenSL on
-  Android) → Opus.
+- Android has an [ARM64 preview APK](https://github.com/joepio/streambeam/releases/tag/v0.1.0) for Android 8 and later. Published previews may lag behind development.
+- macOS and Windows currently require source builds. Desktop installers and app-store releases are not available yet.
+- Nearby discovery and pairing target the local network. Built-in internet discovery, NAT traversal and relays remain [future work](WAN.md).
+- HDR, display selection, quality settings and upscaling depend on the complete capture-to-display path; consult [HDR](HDR.md), [UPSCALE](UPSCALE.md) and the decisions log before claiming support for a particular setup.
 
-## Symmetric-app north star
-
-The goal (see [SYMMETRY.md](SYMMETRY.md)) is every desktop platform beams **and**
-watches, phones watch (and beam where the OS allows), all from one Flutter app +
-one Rust core. Today: **Windows beams + watches**, **Android beams + watches**,
-and **macOS beams + watches**. The protocol/host/client cores are already
-platform-agnostic — remaining work is per-OS capture, encode, decode, and input
-glue behind the existing traits.
+The direction is one app that shares and watches across platforms. [SYMMETRY](SYMMETRY.md) explains that design; planned platforms must not be presented as shipping support.

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+<title id="title">StreamBeam — your screens, closer together</title>
+<desc id="desc">Screen sharing, remote control and game streaming between Windows, macOS and Android. A desktop and phone share the same picture.</desc>
+<defs><linearGradient id="screen" x2="1" y2="1"><stop stop-color="#6366F1"/><stop offset="1" stop-color="#22D3EE"/></linearGradient></defs>
+<rect width="1280" height="640" rx="28" fill="#0F172A"/>
+<circle cx="1120" cy="90" r="300" fill="#151F3A"/>
+<circle cx="1150" cy="640" r="230" fill="#102C40"/>
+<g transform="translate(64 54) scale(.14)"><rect width="512" height="512" rx="112" fill="#0F172A"/>
+  <!-- Two flowing bands form an S. Flat fills keep the mark crisp at small sizes. -->
+  <g transform="translate(-258 -68) scale(.82)">
+    <path fill="#6366F1" d="M772 152V222C772 248 762 259 738 269L560 337C536 346 534 356 554 369L676 430L621 464C608 473 595 474 580 466L510 427C462 402 440 379 447 342C454 298 486 270 541 247L772 152Z"/>
+    <path fill="#22D3EE" d="M654 322C668 316 679 318 693 326L751 361C800 389 819 416 805 456C792 495 765 519 723 536L482 635V575C482 550 491 539 513 530L693 458C717 448 719 438 699 426L579 357L654 322Z"/>
+  </g>
+</g>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="154" y="103" fill="#FFFFFF" font-size="38" font-weight="700" letter-spacing="-1">StreamBeam</text>
+<text x="64" y="236" fill="#FFFFFF" font-size="62" font-weight="700" letter-spacing="-2">Your screens.</text>
+<text x="64" y="310" fill="#67E8F9" font-size="62" font-weight="700" letter-spacing="-2">Closer together.</text>
+<text x="67" y="370" fill="#CBD5E1" font-size="23">Share a screen. Control a device.</text>
+<text x="67" y="405" fill="#CBD5E1" font-size="23">Play across screens.</text>
+<rect x="64" y="487" width="380" height="46" rx="23" fill="#1E293B"/>
+<text x="86" y="517" fill="#E2E8F0" font-size="20">Windows  ·  macOS  ·  Android</text>
+<text x="66" y="581" fill="#94A3B8" font-size="18">Pair once. Connect on your local network.</text>
+</g>
+<!-- Device illustration; deliberately not a fabricated product screenshot. -->
+<rect x="740" y="178" width="438" height="285" rx="22" fill="#1E293B" stroke="#64748B" stroke-width="3"/>
+<rect x="757" y="195" width="404" height="246" rx="10" fill="#0B1222"/>
+<path d="M757 370 L872 240 L961 337 L1030 272 L1161 408 V441 H757Z" fill="url(#screen)"/>
+<circle cx="1095" cy="249" r="22" fill="#67E8F9"/>
+<path d="M939 464 V497 H879 M939 497 H1000" fill="none" stroke="#64748B" stroke-width="12" stroke-linecap="round"/>
+<rect x="678" y="326" width="150" height="244" rx="25" fill="#0F172A" stroke="#94A3B8" stroke-width="3"/>
+<rect x="690" y="341" width="126" height="211" rx="15" fill="#0B1222"/>
+<path d="M690 480 L731 402 L765 448 L792 417 L816 470 V552 H690Z" fill="url(#screen)"/>
+<circle cx="794" cy="382" r="11" fill="#67E8F9"/>
+<rect x="726" y="348" width="55" height="6" rx="3" fill="#475569"/>
+<path d="M629 264 H694 M681 251 L694 264 L681 277 M694 292 H629 M642 279 L629 292 L642 305" fill="none" stroke="#67E8F9" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
