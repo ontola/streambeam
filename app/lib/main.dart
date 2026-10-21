@@ -920,6 +920,10 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
   }
 
   void _teardownVideo() {
+    // Native playback saves the host after authentication. Manual stop changes
+    // _sessionId before its Future completes, so that completion cannot refresh
+    // the list. Reload the persisted identity whenever we leave the player.
+    _savedHostInfo = loadSavedHostInfo();
     unawaited(_setStreamingWifiLock(false));
     _showVideo = false;
     appImmersive.value = false;
@@ -1401,6 +1405,7 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
     appImmersive.value = false;
     if (mounted) {
       setState(() {
+        _savedHostInfo = loadSavedHostInfo();
         _desktopTextureId = null;
         _desktopHdr = false;
         _showVideo = false;

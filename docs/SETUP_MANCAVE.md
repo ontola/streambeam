@@ -296,9 +296,9 @@ Do not commit these files: the capture contains the private desktop.
   authentication, adding the current app to Accessibility succeeded. Relaunching
   StreamBeam removed both permission warnings; its UI listed Mancave and Xiaomi
   as online. This verifies permission status, not remote input execution.
-  Phone-visible Mac discovery, actual capture/input, and the Mac-to-Xiaomi
-  Android consent flow remain unverified while ADB is disconnected. Do not label
-  these paths working based on discovery or permission status alone.
+  A later Xiaomi screenshot confirmed MacBook Pro in the list, and the user
+  confirmed successful streaming after requesting a connection. Remote input
+  and the reverse Mac-to-Xiaomi Android consent flow remain unverified.
 - UI automation briefly opened the generated build as a second app. That process
   was stopped; generated/backup bundles were unregistered from Launch Services
   and the installed app registered again. Keep only one host on port 47989.
@@ -307,3 +307,11 @@ Do not commit these files: the capture contains the private desktop.
   The updated local Rust workspace passed 122 tests (one manual soak ignored);
   formatting and diff checks passed. The diagnostic build is locally verified,
   not covered by the earlier green hosted run at `26422ed`.
+
+- Follow-up saved-tile correction: ARM64 preview updated in place again on
+  Xiaomi 15 with APK SHA-256
+  `fe6cddfcac942ecb068fa9782d84d48ed53a04d2ba04380050ee97fb8462e33a`.
+  The persistent preview signer is unchanged. Android install succeeded;
+  returning from a new real stream without the stale setup label still needs
+  user confirmation. Flutter analysis and all 54 tests pass, including the
+  regression that fails before the teardown reload.
