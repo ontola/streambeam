@@ -26,9 +26,9 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
   checks. No upload or physical iPhone
   acceptance is claimed.
 - Apple app **6825263933**, **StreamBeam Remote Desktop**, remains a draft.
-  Missing API `.p8` recovery blocks upload setup. Proton Pass is selected;
-  sign-in and destination-vault selection remain pending. The private inventory
-  is ready, but no recoverable backup is verified. Permanent Android keys/Google Play access and
+  Missing API `.p8` recovery blocks upload setup. The publisher confirmed saving
+  the P12, password, profile and inventory in Proton Pass; restore testing and
+  adding the missing API key remain pending. Permanent Android keys/Google Play access and
   Microsoft Store identity/submission remain pending. See [RELEASING.md](RELEASING.md).
 
 | Milestone | Status | Notes |
@@ -118,6 +118,8 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - [ ] 240 fps input-latency measurement + stuck-button loss soak
 
 ## Decisions log
+
+- 2026-10-21 — **Record user-confirmed Proton Pass storage.** The publisher confirmed saving all four prepared files: Apple-compatible distribution P12, its password, App Store provisioning profile and private backup inventory. No vault restore test was performed. The missing App Store Connect API `.p8` is not backed up and still blocks upload access; retain local originals.
 
 - 2026-10-21 — **Deploy the verified Windows artifact with an explicitly approved process-only exception.** The publisher approved one execution-policy exception for the prepared updater; persistent AllSigned remains unchanged. Installed exact `5a99a27` artifact `12348791793` on Mancave with a rollback copy retained. Worker SHA-256 `30f42e412d10e3aad0e8d7c7a8b2b981c654080ca868d97aea0895028e2eb94d`, app and Rust DLL match the artifact; the existing supervisor, worker configuration, host identity and pairings are unchanged. The supervisor confirmed the new worker stayed up, with UDP 47989 listening. A real updated-Mac to updated-Mancave stream displayed nonblank 3840×2160 AV1; stopping returned to Ready with MANCAVE still Saved. No remote-input or subjective-audio acceptance is claimed. Proton Pass is the chosen key-backup destination; login and vault selection remain pending.
 

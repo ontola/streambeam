@@ -43,8 +43,10 @@ The App Store Connect API-key download failed in the in-app browser. The first
 unused key was revoked with user approval; its replacement is not yet backed up
 or configured for CI: its `.p8` private file has not been recovered. Do not claim
 upload access until that file is saved and authenticated. A private credential
-inventory is ready. The publisher selected Proton Pass; sign-in and the
-destination-vault selection remain pending. No password-manager backup is verified.
+inventory is ready. On 2026-10-21 the publisher confirmed saving the Apple-compatible
+P12, its password, the distribution profile and the inventory in Proton Pass.
+This is user-confirmed storage; a restore test has not been performed. The API
+private key is still missing and is not included in that backup.
 
 Google Play registration/upload and Microsoft Store identity/submission are
 still unverified. Keep their draft listings separate from Apple's registered
@@ -245,9 +247,10 @@ References: [Google edits](https://developers.google.com/android-publisher/api-r
 GitHub Actions secrets cannot serve as a recoverable backup. Keep the dedicated
 Apple distribution P12 and its password, the App Store profile, API private key
 with key/issuer IDs, and any Android upload keystore/password/alias in the
-publisher's password manager. Proton Pass is the selected destination. A private
-inventory is prepared; Proton sign-in and destination-vault selection still
-prevent a verified backup.
+publisher's password manager. On 2026-10-21 the publisher confirmed saving the
+Apple-compatible P12, its password, the profile and the private inventory in
+Proton Pass. The missing API private key must still be added; recovery from the
+vault has not been tested.
 Verify recovery of the saved items before removing local originals or treating
 GitHub-secret installation as completion of credential custody.
 Never commit keys or include them in diagnostic artifacts. Certificate/profile
