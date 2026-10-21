@@ -311,7 +311,8 @@ Do not commit these files: the capture contains the private desktop.
 - Follow-up saved-tile correction: ARM64 preview updated in place again on
   Xiaomi 15 with APK SHA-256
   `fe6cddfcac942ecb068fa9782d84d48ed53a04d2ba04380050ee97fb8462e33a`.
-  The persistent preview signer is unchanged. Android install succeeded;
-  returning from a new real stream without the stale setup label still needs
-  user confirmation. Flutter analysis and all 54 tests pass, including the
-  regression that fails before the teardown reload.
+  The persistent preview signer is unchanged. Android install succeeded and
+  the installed APK hash matches. The user confirmed a fresh connection and
+  stop leaves MacBook Pro at Saved / Tap to start streaming. Flutter analysis
+  and all 54 tests pass, including the regression that fails before the
+  teardown reload.
