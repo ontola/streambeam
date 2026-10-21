@@ -19,6 +19,19 @@ class _PairingApi extends IdleApi {
   int connections = 0;
 
   @override
+  Future<List<DiscoveredHost>> crateApiDiscoverHosts({
+    required int timeoutMs,
+  }) async => [
+    DiscoveredHost(
+      name: 'MacBook Pro',
+      port: 47989,
+      addrs: ['192.168.0.76'],
+      hostPubkey: Uint8List.fromList(List.filled(32, 7)),
+      platform: 'macos',
+    ),
+  ];
+
+  @override
   SavedHostInfo? crateApiLoadSavedHostInfo() => saved;
   @override
   void crateApiStopPlayback() {}
@@ -104,9 +117,16 @@ void main() {
     'stopping a paired stream refreshes its tile before stream completion',
     (tester) async {
       await tester.pumpWidget(const StreamBeamApp());
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1));
-      await tester.pump();
+      // Native discovery crosses an asynchronous channel before starting its
+      // one-second browse. Advance until its result is rendered, not exactly
+      // one second after pumpWidget (which can predate that browse timer).
+      for (
+        var i = 0;
+        i < 50 && find.text('Set up a connection').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       expect(find.text('Set up a connection'), findsOneWidget);
       await tester.tap(find.text('MacBook Pro'));
       await tester.pumpAndSettle();

@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'beam_page.dart';
 import 'hdr_probe.dart';
 import 'hdr_status.dart';
+import 'host_discovery.dart';
 import 'decode_watchdog.dart';
 import 'pairing_help.dart';
 import 'src/rust/api.dart';
@@ -1006,19 +1007,12 @@ class _WatchPageState extends State<WatchPage> with WidgetsBindingObserver {
       });
     }
     try {
-      final List<DiscoveredHost> hosts;
-      if (Platform.isAndroid) {
-        await _ensureMdnsLock();
-        final rustHosts = await discoverHosts(timeoutMs: 6000);
-        // Some Samsung builds hold the multicast lock but still feed raw UDP
-        // browsers only empty DNS packets. Android's NSD service goes through
-        // the platform mDNS responder and remains reliable there.
-        hosts = rustHosts.isEmpty ? await _discoverHostsNative() : rustHosts;
-      } else {
-        // macOS: Rust mdns-sd can't reliably receive (mDNSResponder owns 5353),
-        // so browse via native Bonjour instead.
-        hosts = await _discoverHostsNative();
-      }
+      if (Platform.isAndroid) await _ensureMdnsLock();
+      final hosts = await discoverHostsOnPlatform(
+        operatingSystem: Platform.operatingSystem,
+        rustDiscovery: () => discoverHosts(timeoutMs: 6000),
+        nativeDiscovery: _discoverHostsNative,
+      );
       if (!mounted) return;
       final localHostPubkey = hostPublicKey();
       final visibleHosts = localHostPubkey.length == 32
