@@ -15,7 +15,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  rust_lib_streambeam: e42f501a4955fb87974e7598d09fc6cd1bbcf6c7
+  rust_lib_streambeam: 29a31b7208262ffd4a3fe9aff16d38bfc01736be
 
 PODFILE CHECKSUM: 84494963d3b25357956634e096cadf44f51179b1
 
