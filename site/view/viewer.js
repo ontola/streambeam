@@ -72,6 +72,27 @@ async function* packets(readable) {
   } finally { reader.releaseLock(); }
 }
 
+// Keep reference frames intact while applying bounded backpressure. A temporary
+// main-thread pause can deliver a burst of packets even on a fast decoder.
+async function decoderReady() {
+  if (decoder.decodeQueueSize < 8) return;
+  await new Promise((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); decoder.removeEventListener('dequeue', ready); };
+    const ready = () => {
+      if (stopped || decoder.state !== 'configured') {
+        cleanup(); reject(new Error('Video decoding stopped.'));
+      } else if (decoder.decodeQueueSize < 8) {
+        cleanup(); resolve();
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup(); reject(new Error('The browser cannot keep up with this stream. Try the native app.'));
+    }, 2000);
+    decoder.addEventListener('dequeue', ready);
+    ready();
+  });
+}
+
 start.onclick = async () => {
   start.disabled = true;
   stop.disabled = false;
@@ -110,8 +131,8 @@ start.onclick = async () => {
       } else {
         if (packet.length < 10 || packet[0] > 2) throw new Error('Invalid media frame.');
         if (packet[0] === 2) { sound?.push(packet); continue; }
-        // Fail closed on decoder backlog; never drop reference frames and continue corrupted.
-        if (decoder.decodeQueueSize >= 8) throw new Error('The browser cannot keep up with this stream. Try the native app.');
+        await decoderReady();
+        if (stopped) break;
         decoder.decode(new EncodedVideoChunk({ type: packet[0] ? 'key' : 'delta', timestamp: Number(new DataView(packet.buffer, packet.byteOffset + 1, 8).getBigUint64(0)), data: packet.subarray(9) }));
       }
     }

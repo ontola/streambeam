@@ -110,7 +110,9 @@ block it. Do not publish the invitation or expose the gateway to the internet.
   pending handshakes, 128 KiB total initial data, and 256 KiB per connection.
   After successful authentication,
   the native connection has a 60-second setup timeout. Video packets are capped
-  at 4 MiB, writes at two seconds, and decode backlog at eight queued frames.
+  at 4 MiB, writes at two seconds, and decode backlog at eight queued frames. At that cap the browser pauses
+  reads for at most two seconds, preserving reference frames through short CPU
+  stalls; a persistently slow decoder still ends the session.
 - Server messages use a big-endian u32 length. The first is UTF-8 JSON with
   `version:2`, H.264 `codec`, `width`, `height`, `fps`, desktop `control` support and
   negotiated `audio {sample_rate, channels, frame_ms}`. Following messages contain
@@ -150,7 +152,8 @@ npm test --prefix site/view
 ```
 
 `smoke.mjs` launches the real fixture and bridge, rejects a wrong capability, a wrong origin and a wrong certificate pin,
-then requires at least 30 decoded 640×360 frames with non-uniform image pixels.
+then requires at least 30 decoded 640×360 frames with non-uniform image pixels
+and 30 more after a forced 750 ms browser scheduling stall.
 It verifies that the invitation fragment is cleared, no native input arrives before
 consent, consented browser key/button events reach the actual native fixture,
 focus loss releases held input, and closing the actual tab releases held keys,
@@ -161,7 +164,9 @@ this is not an audibility assertion. The fixture’s opt-in private JSONL input
 recorder never injects events into the OS. Credentials stay in temporary private files
 and are not printed. Screenshot output defaults to Cargo's target directory
 under `web-smoke/`; `STREAMBEAM_WEB_ARTIFACTS` overrides it. The dedicated Browser
-preview workflow runs this same path in Chrome and retains the screenshot.
+preview workflow runs this same path in Chrome and retains the screenshot. On
+failure it retains a sanitized status/capability/process-exit report and page
+screenshot, never raw logs, browser traces, URLs or private invitations.
 
 Production follow-up: integrate invitation and lifecycle with native hosts,
 replace the prototype bearer capability with reviewed persistent browser pairing,

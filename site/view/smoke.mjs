@@ -15,7 +15,9 @@ const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--no-deps', '--f
 const bin = join(metadata.target_directory, 'debug');
 const directory = await mkdtemp(join(tmpdir(), 'streambeam-web-'));
 const children = [];
-let browser;
+let browser, page;
+let phase = "startup";
+const artifactDir = resolve(process.env.STREAMBEAM_WEB_ARTIFACTS || join(metadata.target_directory,"web-smoke"));
 const server = createServer(async (req, res) => {
   // Exact static-file allowlist; no invitation can become a request URL.
   const files = {'/view/':'view/index.html','/view/viewer.js':'view/viewer.js','/view/controls.js':'view/controls.js','/view/audio.js':'view/audio.js','/view/viewer.css':'view/viewer.css','/assets/streambeam-logo.svg':'assets/streambeam-logo.svg'};
@@ -29,6 +31,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 function child(name, args, env = {}) {
   const process = spawn(join(bin, name), args, {cwd:root, env:{...globalThis.process.env,...env}, stdio:['ignore','pipe','pipe']});
+  process.stderr.resume(); // Drain without retaining potentially private fixture logs.
   children.push(process);
   return process;
 }
@@ -37,7 +40,14 @@ async function until(condition, message) {
   while (Date.now() < deadline) { const result = await condition(); if (result) return result; await new Promise(resolve => setTimeout(resolve, 50)); }
   throw new Error(message);
 }
+async function decodedFrames(count) {
+  await page.waitForFunction(target => document.querySelector('#stop').disabled || Number(document.querySelector('#screen').dataset.decodedFrames) >= target, count, {timeout:30000});
+  assert.ok(Number(await page.locator('#screen').getAttribute('data-decoded-frames')) >= count, 'Stream ended before enough frames were decoded');
+}
+
 try {
+  await mkdir(artifactDir,{recursive:true});
+  for (const name of ['browser-viewer.png','browser-failure.png','failure.json']) await rm(join(artifactDir,name),{force:true});
   const inputFile = join(directory,'input.jsonl');
   const host = child('fakehost', ['--input-events-file',inputFile], {STREAMBEAM_LISTEN:'127.0.0.1:0',STREAMBEAM_NO_MDNS:'1'});
   let output = '';
@@ -49,7 +59,8 @@ try {
   const bridge = child('webbridge', ['--pair-file',pairFile,'--invite-file',inviteFile,'--viewer-url',`${origin}/view/`,'--listen','127.0.0.1:0']);
   const invitation = await until(async () => {try{return (await readFile(inviteFile,'utf8')).trim()}catch{return null}}, 'Bridge did not write invitation');
   browser = await chromium.launch({channel:process.env.STREAMBEAM_BROWSER_CHANNEL || 'chrome',headless:true});
-  const page = await browser.newPage();
+  page = await browser.newPage();
+  phase = "invalid-capability";
   // A wrong capability must not consume the invitation or receive any config/video.
   const invalid = new URL(invitation);
   const fragment = new URLSearchParams(invalid.hash.slice(1));
@@ -60,6 +71,7 @@ try {
   assert.equal(await page.locator('#screen').getAttribute('data-decoded-frames'), null);
   assert.equal(new URL(page.url()).hash, '');
   assert.equal(bridge.exitCode,null);
+  phase = "invalid-origin";
   // A different browser origin is refused even with the correct capability.
   const wrongOrigin = new URL(invitation); wrongOrigin.hostname = 'localhost';
   await page.goto('about:blank');
@@ -68,6 +80,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#stop').disabled);
   assert.equal(await page.locator('#screen').getAttribute('data-decoded-frames'), null);
   assert.equal(bridge.exitCode,null);
+  phase = "invalid-certificate";
   // Certificate pinning must reject a server when the invitation fingerprint differs.
   const wrongCert = new URL(invitation);
   const certFragment = new URLSearchParams(wrongCert.hash.slice(1));
@@ -78,11 +91,16 @@ try {
   await page.waitForFunction(() => document.querySelector('#stop').disabled);
   assert.equal(await page.locator('#screen').getAttribute('data-decoded-frames'), null);
   assert.equal(bridge.exitCode,null);
+  phase = "authenticated-video";
   // Fresh authenticated page must decode the genuine native fixture, not mock JS frames.
   await page.goto('about:blank');
   await page.goto(invitation);
   await page.getByRole('button',{name:'Connect',exact:true}).click();
-  await page.waitForFunction(() => Number(document.querySelector('#screen').dataset.decodedFrames) >= 30, null, {timeout:30000});
+  await decodedFrames(30);
+  phase = "video-stall-recovery";
+  const framesBeforeStall = Number(await page.locator('#screen').getAttribute('data-decoded-frames'));
+  await page.evaluate(()=>{const until=performance.now()+750;while(performance.now()<until){}});
+  await decodedFrames(framesBeforeStall + 30);
   const evidence = await page.locator('#screen').evaluate(canvas => {
     const pixels = canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
     const colors = new Set();
@@ -90,6 +108,7 @@ try {
     return {width:canvas.width,height:canvas.height,frames:Number(canvas.dataset.decodedFrames),colors:colors.size};
   });
   assert.equal(evidence.width,640); assert.equal(evidence.height,360); assert.ok(evidence.colors>20);
+  phase = 'audio';
   assert.equal(await page.locator('#sound-status').getAttribute('data-decoded-frames'),null);
   await page.getByRole('button',{name:'Enable sound',exact:true}).click();
   // Simulate a short main-thread stall; queued network packets must recover.
@@ -100,13 +119,14 @@ try {
   await page.getByRole('button',{name:'Mute',exact:true}).click();
   assert.equal(await page.locator('#sound-status').getAttribute('data-enabled'),'false');
   assert.equal(await page.locator('#sound-status').getAttribute('data-active-sources'),'0');
+  phase = 'input';
   const recorded = async () => (await readFile(inputFile,'utf8')).split('\n').slice(0,-1).filter(Boolean).map(line=>JSON.parse(line));
   const hasKey=(events,vk,down)=>events.some(e=>e.Key?.vk===vk && e.Key.down===down);
   const hasButton=(events,down)=>events.some(e=>e.MouseButton?.button===0 && e.MouseButton.down===down);
   // Viewing alone must never forward pointer or keyboard events.
   await page.locator('#screen').click({position:{x:100,y:80}});
   await page.keyboard.press('a');
-  await page.waitForFunction(() => Number(document.querySelector('#screen').dataset.decodedFrames) >= 40);
+  await decodedFrames(40);
   assert.equal((await recorded()).length,0);
   await page.locator('#control').check();
   await page.keyboard.down('Shift'); await page.keyboard.down('a');
@@ -121,7 +141,6 @@ try {
   await page.locator('#control').check();
   await page.keyboard.down('b');
   await until(async()=>hasKey(await recorded(),66,true),'Second control session did not start');
-  const artifactDir = resolve(process.env.STREAMBEAM_WEB_ARTIFACTS || join(metadata.target_directory,'web-smoke'));
   await mkdir(artifactDir,{recursive:true});
   await page.screenshot({path:join(artifactDir,'browser-viewer.png'),fullPage:true});
   await page.close();
@@ -130,6 +149,32 @@ try {
   assert.equal(bridge.exitCode,0);
   assert.equal(await readFile(inviteFile).then(()=>true,()=>false),false);
   console.log(JSON.stringify({result:'passed',...evidence,wrongTokenRejected:true,wrongOriginRejected:true,wrongCertificateRejected:true,fragmentCleared:true,audioDecoded:audioEvidence,audioStartsOnClick:true,audioMuteClearsQueue:true,inputConsentVerified:true,nativeInputReceived:true,focusLossReleased:true,tabCloseReleased:true,cleanShutdown:true,screenshot:join(artifactDir,'browser-viewer.png')}));
+} catch (error) {
+  // Deliberately allowlist diagnostics: no URLs, console logs, request details,
+  // child stdout/stderr or browser traces (all can contain private capabilities).
+  await mkdir(artifactDir,{recursive:true});
+  const state = page && !page.isClosed() ? await page.evaluate(() => ({
+    status: document.querySelector('#status')?.textContent,
+    stats: document.querySelector('#stats')?.textContent,
+    sound: document.querySelector('#sound-status')?.textContent,
+    decodedFrames: document.querySelector('#screen')?.dataset.decodedFrames,
+    secureContext: isSecureContext,
+    webTransport: 'WebTransport' in window,
+    videoDecoder: 'VideoDecoder' in window,
+    audioDecoder: 'AudioDecoder' in window,
+  })).catch(()=>({unavailable:true})) : {unavailable:true};
+  // Viewer errors are sanitized too, in case a future browser embeds an address.
+  const clean = value => JSON.stringify(value).replace(/https?:[^\s"<>]+/g,'[address]').replace(/sbm1:[^\s"]+/g,'[pairing]').replace(/[a-fA-F0-9]{64}/g,'[secret]');
+  const diagnostics = clean({phase,browser:browser?.version(),state,children:children.map(child=>({exitCode:child.exitCode,signal:child.signalCode})),errorType:error.name});
+  await writeFile(join(artifactDir,'failure.json'),diagnostics+'\n');
+  console.error(diagnostics);
+  // Screenshots are safe only after invitation parsing has erased the fragment.
+  // The page has no address bar; suppress arbitrary browser-generated errors.
+  if (page && !page.isClosed() && new URL(page.url()).hash === '' && state.status) {
+    await page.locator('#status').evaluate((el,text)=>{el.textContent=text;}, JSON.parse(clean(state.status)));
+    await page.screenshot({path:join(artifactDir,'browser-failure.png'),fullPage:true}).catch(()=>{});
+  }
+  throw new Error(`Browser fixture failed during ${phase} (${error.name}); see sanitized failure.json`);
 } finally {
   await browser?.close();
   for (const process of children) process.kill('SIGTERM');

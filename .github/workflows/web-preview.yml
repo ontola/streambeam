@@ -43,8 +43,11 @@ jobs:
         env:
           STREAMBEAM_WEB_ARTIFACTS: ${{ runner.temp }}/web-preview
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: success()
+        if: always()
         with:
           name: browser-preview-fixture
-          path: ${{ runner.temp }}/web-preview/browser-viewer.png
-          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/web-preview/browser-viewer.png
+            ${{ runner.temp }}/web-preview/browser-failure.png
+            ${{ runner.temp }}/web-preview/failure.json
+          if-no-files-found: warn
