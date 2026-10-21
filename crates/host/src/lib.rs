@@ -17,6 +17,7 @@ pub mod desktop_win;
 pub mod encode;
 pub mod gamepad_inject;
 pub mod input_inject;
+mod input_session;
 pub mod logging;
 #[cfg(target_os = "macos")]
 pub mod macos_screen;

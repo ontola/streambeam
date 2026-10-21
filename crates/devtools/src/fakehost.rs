@@ -5,6 +5,7 @@ mod audio_src;
 mod media;
 mod stream_ctl;
 
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,6 +37,9 @@ struct Opt {
     /// Target frame rate.
     #[arg(long, default_value_t = 30)]
     fps: u32,
+    /// Development-only private JSONL record of authenticated synthetic input.
+    #[arg(long)]
+    input_events_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -69,6 +73,18 @@ fn load_catalog(
 }
 
 async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let input_log = if let Some(path) = &opt.input_events_file {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        Some(Arc::new(Mutex::new(options.open(path)?)))
+    } else {
+        None
+    };
     let catalog = Arc::new(load_catalog(&opt)?);
     let audio = Arc::new(audio_src::OpusCatalog::bundled());
     eprintln!(
@@ -136,8 +152,9 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let catalog = catalog.clone();
                 let audio = audio.clone();
                 let fps = opt.fps;
+                let input_log = input_log.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle(incoming, store, catalog, audio, fps).await {
+                    if let Err(e) = handle(incoming, store, catalog, audio, fps, input_log).await {
                         eprintln!("connection failed: {e}");
                     }
                 });
@@ -171,6 +188,7 @@ async fn handle(
     catalog: Arc<media::VideoCatalog>,
     audio: Arc<audio_src::OpusCatalog>,
     fps: u32,
+    input_log: Option<Arc<Mutex<std::fs::File>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = incoming.await?;
     eprintln!("client connected from {}", conn.remote_address());
@@ -222,6 +240,24 @@ async fn handle(
         }
     }
 
+    // Input is consumed only after Hello authorization; the fixture never injects it.
+    let input_conn = conn.clone();
+    tokio::spawn(async move {
+        let Ok(mut recv) = input_conn.accept_uni().await else {
+            return;
+        };
+        let mut buffer = Vec::new();
+        while let Ok(event) =
+            read_msg::<streambeam_proto::input::InputEvent>(&mut recv, &mut buffer).await
+        {
+            if let Some(log) = &input_log {
+                let mut file = log.lock().unwrap();
+                if serde_json::to_writer(&mut *file, &event).is_err() || writeln!(file).is_err() {
+                    break;
+                }
+            }
+        }
+    });
     let stream_ctl = Arc::new(StreamControl::new(&catalog));
     let mut streaming = false;
     let frame_interval = Duration::from_micros(1_000_000 / u64::from(fps.max(1)));

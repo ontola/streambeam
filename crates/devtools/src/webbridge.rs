@@ -1,4 +1,6 @@
 //! Opt-in, single-viewer H.264 bridge. Native protocol/authentication stay unchanged.
+mod web_input;
+
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -19,7 +21,7 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const INVITE_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Parser)]
-#[command(about = "Experimental video-only browser bridge; not a production host")]
+#[command(about = "Experimental browser video and desktop-control bridge; not a production host")]
 struct Opt {
     /// File containing the native host's pairing payload (never put it in arguments).
     #[arg(long)]
@@ -122,13 +124,18 @@ async fn run(mut opt: Opt) -> Result<(), Error> {
     );
     opt.viewer_url.set_fragment(Some(&fragment));
     private_invitation(&opt.invite_file, opt.viewer_url.as_str())?;
-    eprintln!("Browser invitation saved privately; expires in 5 minutes. Video only, one viewer.");
+    eprintln!(
+        "Browser invitation saved privately; expires in 5 minutes. One viewer; desktop control is opt-in."
+    );
     let started = Instant::now();
     let serving = async {
         // Sequential handshakes bound active connections; no detached tasks or media queues.
         loop {
             let remaining = INVITE_TTL.saturating_sub(started.elapsed());
-            let incoming = timeout(remaining, server.accept()).await?;
+            let incoming = tokio::select! {
+                result = timeout(remaining, server.accept()) => result?,
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+            };
             let request = match timeout(AUTH_TIMEOUT, incoming).await {
                 Ok(Ok(request)) => request,
                 _ => continue,
@@ -148,10 +155,10 @@ async fn run(mut opt: Opt) -> Result<(), Error> {
                 if !authorized(&capability, &received, started.elapsed()) {
                     return Err::<_, Error>("invalid or expired invitation".into());
                 }
-                Ok(send)
+                Ok((send, recv))
             })
             .await;
-            let send = match authentication {
+            let (send, recv) = match authentication {
                 Ok(Ok(send)) => send,
                 _ => {
                     connection.close(VarInt::from_u32(1), b"Authentication failed");
@@ -159,15 +166,12 @@ async fn run(mut opt: Opt) -> Result<(), Error> {
                 }
             };
             // One accepted browser consumes this invitation. Only now authenticate upstream.
-            let result = relay(payload.trim(), &connection, send).await;
+            let result = relay(payload.trim(), &connection, send, recv).await;
             connection.close(VarInt::from_u32(0), b"Stream ended");
             return result;
         }
     };
-    let result = tokio::select! {
-        result = serving => result,
-        _ = tokio::signal::ctrl_c() => Ok(()),
-    };
+    let result = serving.await;
     let _ = std::fs::remove_file(&opt.invite_file);
     result
 }
@@ -189,11 +193,22 @@ async fn relay(
     payload: &str,
     connection: &wtransport::Connection,
     mut send: wtransport::SendStream,
+    recv: wtransport::RecvStream,
 ) -> Result<(), Error> {
     let mut session = tokio::select! {
         result = timeout(Duration::from_secs(60), streambeam_core::connect_as(payload, "StreamBeam browser bridge")) => result??,
         _ = connection.closed() => return Ok(()),
     };
+    let can_control = session.input_mode == streambeam_proto::control::HostInputMode::Mouse;
+    let mut control = web_input::Control::new(can_control);
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(32);
+    struct ReaderTask(tokio::task::JoinHandle<()>);
+    impl Drop for ReaderTask {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _reader = ReaderTask(tokio::spawn(web_input::read(recv, input_tx)));
     let result = async {
         if session.codec != "h264" {
             return Err::<(), Error>("browser preview requires H.264".into());
@@ -202,7 +217,7 @@ async fn relay(
         let (sps, _) = streambeam_core::extract_avc_decoder_config(config).ok_or("invalid H.264 configuration")?;
         if sps.len() < 4 { return Err("short H.264 SPS".into()); }
         let config = config.to_vec();
-        let metadata = serde_json::json!({"version":1,"codec":format!("avc1.{}", hex(&sps[1..4])),"width":session.width,"height":session.height,"fps":session.fps});
+        let metadata = serde_json::json!({"version":1,"codec":format!("avc1.{}", hex(&sps[1..4])),"width":session.width,"height":session.height,"fps":session.fps,"control":can_control});
         packet(&mut send, &serde_json::to_vec(&metadata)?).await?;
         streambeam_core::request_idr(&mut session).await?;
         let mut assembler = FrameReassembler::default();
@@ -215,6 +230,17 @@ async fn relay(
             let datagram = tokio::select! {
                 result = timeout(Duration::from_secs(10), session.conn.read_datagram()) => result??,
                 _ = connection.closed() => return Ok(()),
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+                command = input_rx.recv() => {
+                    let command = match command {
+                        Some(Ok(command)) => command,
+                        Some(Err(_)) | None => return Ok(()),
+                    };
+                    for event in control.accept(command,session.width,session.height)? {
+                        timeout(Duration::from_millis(500),streambeam_core::send_input(&mut session,event)).await??;
+                    }
+                    continue;
+                }
             };
             let header = MediaHeader::decode(&datagram)?;
             if header.channel != CHANNEL_VIDEO { continue; }
@@ -241,6 +267,19 @@ async fn relay(
             }
         }
     }.await;
+    // Best effort even after browser transport loss; the host's ownership guard is
+    // the final fallback for a dead upstream connection or an interrupted process.
+    let _ = timeout(Duration::from_secs(1), async {
+        for event in control.release() {
+            streambeam_core::send_input(&mut session, event).await?;
+        }
+        if let Some(input) = session.input.as_mut() {
+            input.finish()?;
+            input.stopped().await?;
+        }
+        Ok::<(), Error>(())
+    })
+    .await;
     session
         .conn
         .close(quinn::VarInt::from_u32(0), b"Browser viewer closed");

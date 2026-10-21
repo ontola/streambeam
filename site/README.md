@@ -6,7 +6,7 @@ Static site. No build step — deploy this directory as-is to any static host
 ## Layout
 
 - `index.html` — landing page.
-- `view/` — experimental video-only WebTransport/WebCodecs viewer; requires the
+- `view/` — experimental WebTransport/WebCodecs viewer with opt-in desktop control; requires the
   separate native bridge, not linked as a production install option. See
   [WEB.md](../docs/WEB.md).
 - `session/index.html` — target of the QR/deep link `https://streambeam.eu/session/#sbm1:…`.

@@ -1755,6 +1755,7 @@ dependencies = [
  "opus",
  "quinn",
  "rand 0.9.4",
+ "serde",
  "serde_json",
  "streambeam-core",
  "streambeam-net",

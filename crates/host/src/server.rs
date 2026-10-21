@@ -871,12 +871,16 @@ async fn handle_client(
 
     let input_conn = conn.clone();
     let input_controls = controls.clone();
+    // One generation per authenticated connection, never per extra uni stream.
+    let input_lease = crate::input_session::acquire();
     tokio::spawn(async move {
         loop {
             match input_conn.accept_uni().await {
                 Ok(recv) => {
                     log!("input stream opened");
-                    if let Err(e) = handle_input_stream(recv, input_controls.clone()).await {
+                    if let Err(e) =
+                        handle_input_stream(recv, input_controls.clone(), &input_lease).await
+                    {
                         log!("input stream ended: {e}");
                     }
                 }
@@ -1246,18 +1250,21 @@ async fn handle_client(
 async fn handle_input_stream(
     mut recv: quinn::RecvStream,
     controls: Arc<HostControls>,
+    input_lease: &crate::input_session::Lease<fn(InputEvent)>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Called only after Hello authorization; the connection task owns cleanup.
     let mut buf = Vec::new();
     let result = async {
         loop {
             let event: InputEvent = read_msg(&mut recv, &mut buf).await?;
             match event {
                 InputEvent::ClipboardText { text } => controls.receive_remote_clipboard(text),
-                other => crate::input_inject::apply(other),
+                other => input_lease.apply(other),
             }
         }
     }
     .await;
+    input_lease.release();
     #[cfg(windows)]
     crate::gamepad_inject::reset();
     result

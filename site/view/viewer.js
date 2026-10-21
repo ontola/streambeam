@@ -1,3 +1,4 @@
+import { attachControls } from './controls.js';
 const status = document.querySelector('#status');
 const start = document.querySelector('#connect');
 const stop = document.querySelector('#stop');
@@ -5,7 +6,7 @@ const canvas = document.querySelector('#screen');
 const stats = document.querySelector('#stats');
 const context = canvas.getContext('2d');
 const MAX_PACKET = 4 * 1024 * 1024;
-let transport, decoder, stopped = false;
+let transport, decoder, controller, stopped = false;
 
 function fromHex(value) {
   if (!/^[a-f0-9]{64}$/.test(value ?? '')) throw new Error('Invalid invitation.');
@@ -32,6 +33,7 @@ try {
 
 function end(message) {
   stopped = true;
+  controller?.dispose();
   transport?.close();
   if (decoder && decoder.state !== 'closed') decoder.close();
   stop.disabled = true;
@@ -79,7 +81,6 @@ start.onclick = async () => {
     const stream = await transport.createBidirectionalStream();
     const writer = stream.writable.getWriter();
     await writer.write(invite.token);
-    await writer.close();
     invite.token.fill(0);
     let configured = false, frames = 0;
     for await (const packet of packets(stream.readable)) {
@@ -94,7 +95,7 @@ start.onclick = async () => {
               canvas.width = frame.displayWidth; canvas.height = frame.displayHeight;
               context.drawImage(frame, 0, 0); canvas.hidden = false;
               frames += 1;
-              status.textContent = 'Connected · video only';
+              status.textContent = 'Connected';
               stats.textContent = `${canvas.width} × ${canvas.height} · ${frames} decoded frames`;
               canvas.dataset.decodedFrames = String(frames);
             } finally { frame.close(); }
@@ -102,6 +103,7 @@ start.onclick = async () => {
           error() { end('Video decoding stopped. Open a new invitation to retry.'); }
         });
         decoder.configure(config); configured = true;
+        controller = attachControls({canvas,writer,allowed:metadata.control===true,onError:end});
       } else {
         if (packet.length < 10 || packet[0] > 1) throw new Error('Invalid video frame.');
         // Fail closed on decoder backlog; never drop reference frames and continue corrupted.

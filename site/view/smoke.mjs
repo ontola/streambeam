@@ -18,7 +18,7 @@ const children = [];
 let browser;
 const server = createServer(async (req, res) => {
   // Exact static-file allowlist; no invitation can become a request URL.
-  const files = {'/view/':'view/index.html','/view/viewer.js':'view/viewer.js','/view/viewer.css':'view/viewer.css','/assets/streambeam-logo.svg':'assets/streambeam-logo.svg'};
+  const files = {'/view/':'view/index.html','/view/viewer.js':'view/viewer.js','/view/controls.js':'view/controls.js','/view/viewer.css':'view/viewer.css','/assets/streambeam-logo.svg':'assets/streambeam-logo.svg'};
   const name = files[req.url];
   if (!name) {res.writeHead(404).end(); return;}
   const mime = name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
@@ -38,7 +38,8 @@ async function until(condition, message) {
   throw new Error(message);
 }
 try {
-  const host = child('fakehost', [], {STREAMBEAM_LISTEN:'127.0.0.1:0',STREAMBEAM_NO_MDNS:'1'});
+  const inputFile = join(directory,'input.jsonl');
+  const host = child('fakehost', ['--input-events-file',inputFile], {STREAMBEAM_LISTEN:'127.0.0.1:0',STREAMBEAM_NO_MDNS:'1'});
   let output = '';
   host.stdout.on('data', data => output += data);
   const payload = await until(() => output.split('\n').find(line => line.startsWith('sbm1:')), 'Fixture did not start');
@@ -89,14 +90,36 @@ try {
     return {width:canvas.width,height:canvas.height,frames:Number(canvas.dataset.decodedFrames),colors:colors.size};
   });
   assert.equal(evidence.width,640); assert.equal(evidence.height,360); assert.ok(evidence.colors>20);
+  const recorded = async () => (await readFile(inputFile,'utf8')).split('\n').slice(0,-1).filter(Boolean).map(line=>JSON.parse(line));
+  const hasKey=(events,vk,down)=>events.some(e=>e.Key?.vk===vk && e.Key.down===down);
+  const hasButton=(events,down)=>events.some(e=>e.MouseButton?.button===0 && e.MouseButton.down===down);
+  // Viewing alone must never forward pointer or keyboard events.
+  await page.locator('#screen').click({position:{x:100,y:80}});
+  await page.keyboard.press('a');
+  await page.waitForFunction(() => Number(document.querySelector('#screen').dataset.decodedFrames) >= 40);
+  assert.equal((await recorded()).length,0);
+  await page.locator('#control').check();
+  await page.keyboard.down('Shift'); await page.keyboard.down('a');
+  const bounds=await page.locator('#screen').boundingBox();
+  await page.mouse.move(bounds.x+100,bounds.y+80); await page.mouse.down();
+  await until(async()=>{const e=await recorded();return hasKey(e,65,true)&&hasKey(e,160,true)&&hasButton(e,true);},'Native fixture did not receive browser input');
+  await page.locator('#stop').focus();
+  await until(async()=>{const e=await recorded();return hasKey(e,65,false)&&hasKey(e,160,false)&&hasButton(e,false);},'Focus loss did not release held input');
+  assert.equal(await page.locator('#control').isChecked(),false);
+  await page.keyboard.up('a');await page.keyboard.up('Shift');await page.mouse.up();
+  // Closing the actual browser tab with held keys must also release native input.
+  await page.locator('#control').check();
+  await page.keyboard.down('b');
+  await until(async()=>hasKey(await recorded(),66,true),'Second control session did not start');
   const artifactDir = resolve(process.env.STREAMBEAM_WEB_ARTIFACTS || join(metadata.target_directory,'web-smoke'));
   await mkdir(artifactDir,{recursive:true});
   await page.screenshot({path:join(artifactDir,'browser-viewer.png'),fullPage:true});
-  await page.getByRole('button',{name:'Stop',exact:true}).click();
-  await until(() => bridge.exitCode !== null, 'Bridge did not release native session after Stop');
+  await page.close();
+  await until(() => bridge.exitCode !== null, 'Bridge did not release native session after tab close');
+  assert.ok(hasKey(await recorded(),66,false),'Tab close did not release held B');
   assert.equal(bridge.exitCode,0);
   assert.equal(await readFile(inviteFile).then(()=>true,()=>false),false);
-  console.log(JSON.stringify({result:'passed',...evidence,wrongTokenRejected:true,wrongOriginRejected:true,wrongCertificateRejected:true,fragmentCleared:true,cleanShutdown:true,screenshot:join(artifactDir,'browser-viewer.png')}));
+  console.log(JSON.stringify({result:'passed',...evidence,wrongTokenRejected:true,wrongOriginRejected:true,wrongCertificateRejected:true,fragmentCleared:true,inputConsentVerified:true,nativeInputReceived:true,focusLossReleased:true,tabCloseReleased:true,cleanShutdown:true,screenshot:join(artifactDir,'browser-viewer.png')}));
 } finally {
   await browser?.close();
   for (const process of children) process.kill('SIGTERM');

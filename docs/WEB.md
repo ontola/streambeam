@@ -1,9 +1,9 @@
 # Experimental browser viewer
 
-The browser path is a **video-only development preview**, not a replacement for
+The browser path is a **development preview with optional desktop control**, not a replacement for
 native apps. It needs a separately launched `webbridge` process. Native hosts do
 not yet offer a browser-sharing button or generate browser invitations. Audio,
-remote input, saved browser devices, mobile-browser acceptance, and WAN routing
+saved browser devices, mobile-browser acceptance, and WAN routing
 are not implemented. Do not advertise the website as a working browser viewer
 until the assets are deployed and the host integration is complete.
 
@@ -56,7 +56,11 @@ cargo run -p streambeam-devtools --features web --bin webbridge -- \
 ```
 
 Open the URL from the private invitation file in the browser and click Connect.
-Stop closes the native stream and consumes the invitation. Start a new bridge
+Control is off by default. Enable “Allow remote control for this session” to use
+the shared desktop; leaving the canvas, hiding the tab, or pressing Escape revokes
+control and releases held keys/buttons. Keyboard mapping currently assumes the
+standard physical Windows VK layout; IME composition, clipboard, gamepads and
+Android multi-touch are not provided. Stop closes the native stream and consumes the invitation. Start a new bridge
 with a fresh host pairing token to reconnect. Remove the private pairing file
 when finished. The invitation file must not already exist; it is deleted on normal
 exit, timeout, or Ctrl+C. After a forced kill, delete the stale file yourself.
@@ -92,7 +96,8 @@ block it. Do not publish the invitation or expose the gateway to the internet.
   constant-time comparison and a five-minute expiry gate all native connection
   attempts and application responses. Invalid attempts do not consume the invite.
 - Only one authenticated browser is accepted per process. No parallel per-peer
-  tasks or unbounded media queues are created. QUIC ingress is limited to four
+  unbounded tasks or media queues are created. One bounded input reader task is
+  created after authentication and aborted at session teardown. QUIC ingress is limited to four
   pending handshakes, 128 KiB total initial data, and 256 KiB per connection.
   After successful authentication,
   the native connection has a 60-second setup timeout. Video packets are capped
@@ -102,9 +107,22 @@ block it. Do not publish the invitation or expose the gateway to the internet.
   one keyframe flag byte, a big-endian u64 timestamp in microseconds, and Annex-B
   H.264. Keyframes include SPS/PPS. Native FEC completion order is restored and
   native packet loss requests IDR recovery before dependent frames resume.
-- There is no browser input channel in this slice. Closing/stopping the viewer
-  releases the native session. A slow decoder terminates instead of dropping
-  reference frames and displaying corrupted video.
+- After the initial capability, the client side of the same bidirectional stream
+  carries u16 big-endian-length JSON input commands (maximum 512 bytes, queue 32,
+  250 commands/second). The restricted tagged commands are `control {enabled}`,
+  `move {x,y}`, `button {button,down}`, `key {vk,down}`, and `scroll {dx,dy}`.
+  Unknown fields/commands, out-of-range positions/VKs and more than 16 held keys
+  are rejected. No arbitrary protocol, clipboard, power, or secure-attention
+  message can be tunneled through this surface. Input is ignored until explicit
+  session consent and remains disabled for Android/touch hosts.
+- Revoking consent releases all tracked held keys/buttons. Teardown sends releases
+  and finishes the native input stream with a bounded acknowledgement wait. The
+  native host also now guards held input with a per-authenticated-connection
+  generation: the newer connection's first input releases old holds atomically;
+  old input/cleanup cannot release keys belonging to the new owner. Stream EOF,
+  task cancellation and connection loss all release owned keys/buttons.
+- Closing/stopping the viewer releases the native session. A slow decoder
+  terminates instead of dropping reference frames and displaying corrupted video.
 
 ## Verification
 
@@ -117,13 +135,35 @@ npm test --prefix site/view
 
 `smoke.mjs` launches the real fixture and bridge, rejects a wrong capability, a wrong origin and a wrong certificate pin,
 then requires at least 30 decoded 640×360 frames with non-uniform image pixels.
-It verifies that the invitation fragment is cleared and Stop closes the bridge
-and removes the private invitation. Credentials stay in temporary private files
+It verifies that the invitation fragment is cleared, no native input arrives before
+consent, consented browser key/button events reach the actual native fixture,
+focus loss releases held input, and closing the actual tab releases held keys,
+closes the bridge and removes the private invitation. The fixture's opt-in private
+JSONL input recorder never injects events into the OS. Credentials stay in temporary private files
 and are not printed. Screenshot output defaults to Cargo's target directory
 under `web-smoke/`; `STREAMBEAM_WEB_ARTIFACTS` overrides it. The dedicated Browser
 preview workflow runs this same path in Chrome and retains the screenshot.
 
 Production follow-up: integrate invitation and lifecycle with native hosts,
 replace the prototype bearer capability with reviewed persistent browser pairing,
-add audio/input and visibility recovery, evaluate unreliable media delivery,
+add audio, keyboard-layout/IME support and visibility recovery, evaluate unreliable media delivery,
 exercise LAN browser permissions and target browsers, then ship the viewer URL.
+
+## Native host integration path
+
+The next useful product step is a “Share in browser” action in the desktop app,
+with a QR/link, expiry and Stop button owned by the existing host UI. Extract the
+bridge from the devtool into an optional library task and make the app own its
+lifetime. Keep the same invitation/origin/TLS restrictions; do not silently open
+a listener at application startup. The owner explicitly choosing browser sharing
+should be the action that creates an invitation.
+
+The current prototype pairs an ephemeral native bridge identity on every launch.
+That is suitable for an isolated fixture but would accumulate paired records on
+real hosts. Production integration needs a reviewed local bridge identity or a
+host-owned media adapter, with revocation and display selection tied to the
+browser session. Avoid exposing the native pairing payload to JavaScript or
+reusing the native pairing token as the browser bearer capability. Browser LAN
+permission prompts, the deployed HTTPS viewer, codec support and actual desktop
+permission/approval behavior need their own acceptance test before calling this
+install-free sharing.
