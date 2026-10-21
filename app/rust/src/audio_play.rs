@@ -179,6 +179,18 @@ mod sink {
     }
 }
 
+/// Linux builds the experimental app shell; audio awaits a native backend.
+#[cfg(target_os = "linux")]
+mod sink {
+    use super::Ring;
+
+    pub struct Sink;
+
+    pub fn start(_ring: Ring) -> Result<Sink, String> {
+        Err("audio playback not yet implemented on Linux".into())
+    }
+}
+
 #[cfg(target_os = "android")]
 mod sink {
     use ndk::audio::{
