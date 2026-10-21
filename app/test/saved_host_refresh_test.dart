@@ -116,7 +116,10 @@ void main() {
   testWidgets(
     'stopping a paired stream refreshes its tile before stream completion',
     (tester) async {
-      await tester.pumpWidget(const StreamBeamApp());
+      // Exercise the viewer's persistence lifecycle directly. AppShell keeps
+      // the unimplemented Linux viewer behind its platform capability gate;
+      // that shell policy must not prevent this mocked regression running in CI.
+      await tester.pumpWidget(const MaterialApp(home: WatchPage()));
       // Native discovery crosses an asynchronous channel before starting its
       // one-second browse. Advance until its result is rendered, not exactly
       // one second after pumpWidget (which can predate that browse timer).
