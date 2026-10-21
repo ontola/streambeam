@@ -14,7 +14,23 @@
     "subtitle": "Your desktop on your devices",
     "description": "Watch your Mac or Windows desktop on your iPhone or iPad with StreamBeam. Pair with a QR code or approve a connection request, then reconnect to your saved device.\n\nStream video and supported host audio over your local network. Use touch controls and the keyboard to control the paired computer. Choose a quality profile to suit your screen and connection.\n\nThe sending computer needs the StreamBeam desktop app. This iOS release is a viewer; it does not share your iPhone or iPad screen. Devices must be on the same local network. Internet relay access is not included.",
     "keywords": "screen,sharing,remote,desktop,streaming,local,network,computer,control",
-    "validation": "Do not submit until iOS pairing, live playback, audio and input pass on a physical device."
+    "validation": "Unsigned iOS release and three native simulator video/audio tests passed; shared Apple changes also passed a full macOS release and six native decoder tests. Physical iPhone/iPad installation, pairing, moving video, audible audio and input must pass before public submission.",
+    "name": "StreamBeam Remote Desktop",
+    "registration": {
+      "status": "created",
+      "verifiedOn": "2026-10-21",
+      "appId": "6825263933",
+      "sku": "streambeam-ios",
+      "bundleId": "io.streambeam.streambeam",
+      "publisher": "Argu B.V.",
+      "teamId": "Q9WPWRTU7G",
+      "url": "https://appstoreconnect.apple.com/apps/6825263933/distribution",
+      "version": "1.0",
+      "state": "Prepare for Submission",
+      "nameNote": "StreamBeam was unavailable; the registered App Store name is StreamBeam Remote Desktop."
+    },
+    "deliveryStatus": "No signed IPA or uploaded build verified. Apple signing/API credential setup is authorized and underway.",
+    "versionAlignment": "The registered store version is 1.0; app/pubspec.yaml is 0.1.0+2. Align the marketing version before selecting a build."
   },
   "microsoftStore": {
     "shortDescription": "Share your Windows desktop with your paired StreamBeam devices.",
@@ -23,6 +39,7 @@
   },
   "submissionChecklist": [
     "Confirm publisher account, support email and a public privacy policy URL.",
+    "Align the Apple marketing version with the binary before choosing a build; the registered app record currently has iOS 1.0 while source is 0.1.0+2.",
     "Capture screenshots of the actual release on each supported platform; do not use concept mockups as app screenshots.",
     "Complete Play AccessibilityService and screen-capture foreground-service declarations with a real demonstration video.",
     "Review Data safety and Apple App Privacy against the shipped SDK versions and actual data flows.",

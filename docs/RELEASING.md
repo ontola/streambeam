@@ -1,9 +1,37 @@
-# Android preview releases
+# Releases and store delivery
 
 The first downloadable release is `v0.1.0` (Android version code 2). These are
-LAN-streaming previews, not the completed M8/v1 milestone. Android ARM64 is the
-packaged mobile target; desktop bundles are described in [DESKTOP_RELEASES.md](DESKTOP_RELEASES.md). CI cannot
-validate GPU capture, physical controllers, phone cameras or live latency.
+LAN-streaming previews, not the completed M8/v1 milestone. Ordinary CI now builds
+Android ARM64, Windows x64, macOS Apple Silicon/Intel, an experimental Linux x64
+shell, and a complete unsigned iOS app. Browser fixture tests cover the optional
+video bridge separately. See [DESKTOP_RELEASES.md](DESKTOP_RELEASES.md),
+[IOS.md](IOS.md) and [WEB.md](WEB.md). Build artifacts do not establish production
+signing, actual install/upgrade behavior, physical input, cameras or live latency.
+
+## Current store status — 2026-10-21
+
+The Apple bundle identifier and App Store Connect app record have been created:
+
+| Field | Registered value |
+|---|---|
+| App Store name | **StreamBeam Remote Desktop**; `StreamBeam` was unavailable |
+| Bundle ID | `io.streambeam.streambeam` |
+| SKU | `streambeam-ios` |
+| Apple app ID | `6825263933` |
+| Publisher / team | Argu B.V. / `Q9WPWRTU7G` |
+| Store version / state | iOS **1.0**, **Prepare for Submission** |
+| Account record | [App Store Connect](https://appstoreconnect.apple.com/apps/6825263933/distribution) |
+
+This is registration, not an App Store release or TestFlight build. There is no
+verified signed IPA or upload yet. Apple signing/API credential setup is
+underway following user authorization; completing that setup still requires
+verification. The app source currently builds **0.1.0+2**: align the App Store
+marketing version with the intended binary version before selecting a build.
+Do not assume the record's initial 1.0 means the application has reached v1.
+
+Google Play registration/upload and Microsoft Store identity/submission are
+still unverified. Keep their draft listings separate from Apple's registered
+name and record. No public store installation is available from this work yet.
 
 ## Before publishing
 
@@ -12,7 +40,8 @@ validate GPU capture, physical controllers, phone cameras or live latency.
    development build's `1.0.0`. Android upgrades use the build number.
 2. Commit the release notes and changes. Push `main` and wait for every CI job:
    Rust formatting, Rust tests/Clippy, Windows/macOS/Linux app bundles, Flutter
-   analysis/tests, and the minified Android release with scanner verification.
+   analysis/tests, the minified Android release with scanner verification, the
+   unsigned iOS build/native simulator tests, and browser-preview checks.
 3. Build from that exact clean commit with the pinned Flutter 3.44.7 and Rust
    toolchain. Run `flutter pub get --enforce-lockfile` in `app`, then
    `flutter build apk --release --target-platform android-arm64` (allow pub to
@@ -41,7 +70,7 @@ identity and update `site/.well-known/assetlinks.json` as described in
 `site/README.md`. Changing signer requires an explicit migration plan.
 
 
-## Store candidates (2026-10-20)
+## Signed store candidates
 
 The **Signed store candidates and uploads** workflow builds downloadable artifacts
 on explicit dispatch. With `upload_store: true`, it validates/uploads an IPA to
@@ -78,42 +107,50 @@ part of store setup; establish the migration separately.
 Official reference:
 [Android app signing](https://developer.android.com/studio/publish/app-signing).
 
-### iOS signing and current blocker
+### iOS signing and remaining acceptance
 
 The iOS job expects `IOS_DISTRIBUTION_P12_BASE64`,
 `IOS_DISTRIBUTION_P12_PASSWORD` and `IOS_APP_STORE_PROFILE_BASE64`.
 The profile must be an unexpired App Store distribution profile for the
 exact bundle ID; development, ad hoc and enterprise profiles are rejected.
 Signing uses a temporary CI keychain and an ignored Runner-only xcconfig,
-then removes the signing material. Exported IPAs remain artifacts by default; explicit upload is described below.
+then removes the signing material. Exported IPAs remain artifacts by default;
+explicit upload is described below. Never include private credentials in source,
+logs or the listing metadata.
 
-**iOS is not currently buildable or ready for TestFlight.** An actual device
-build on 2026-10-20 exposed:
+**The iOS viewer now builds and has native video/audio integration.** The
+previous missing Rust sink and native decoder channel have been implemented.
+Runner/Pods target iOS 15; builds set `CMAKE_POLICY_VERSION_MINIMUM=3.5` for
+vendored Opus. Bonjour discovery, camera/local-network permission descriptions,
+QR pairing, saved hosts, touch/keyboard controls and foreground lifecycle are
+wired. The viewer advertises SDR H.264; it does not host the iPhone/iPad screen.
 
-1. Xcode 27 rejects the old iOS 13 deployment target. Runner/Pods now target 15.
-2. The vendored Opus CMake project requires
-   `CMAKE_POLICY_VERSION_MINIMUM=3.5` with CMake 4; the workflow sets it.
-3. `app/rust/src/audio_play.rs` has no iOS `sink`, so Rust compilation fails.
-   The iOS Runner also has no `streambeam/video_desktop` channel or native
-   decoder; resolving compilation alone would not provide a functioning app.
+Local validation on 2026-10-21:
 
-Implement and test iOS video/audio, camera/local-network permissions and
-pairing/input on a real device before distributing a build. The signing job
-is prepared but its signed build/export has not been exercised.
+- Complete unsigned device release built successfully (29.3 MB).
+- Full Flutter analysis and 54 tests passed for the iOS implementation; later
+  integrated discovery work increased the shared suite to 59 tests.
+- Three Rust audio tests passed, including PCM conversion and silence after stop.
+- Three iPhone simulator tests passed through `scripts/test-ios-native.sh`,
+  with an inspected successful xcresult: non-uniform H.264 pixels, texture
+  notification/teardown, audio-engine startup/stop and malformed-config errors.
+- A full macOS ARM64 release and six existing native decoder regressions passed
+  with the shared Apple code, including AV1, HDR10 and MetalFX. The installed
+  Mac app and its signing identity were not changed by these tests.
 
-App Store Connect still requires an authenticated account and an app record
-before an upload. See
-[Apple's app record setup](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app).
-Neither store registration nor an upload was completed in this session.
-No permanent Android upload key was generated: the approval request for
-creating it and saving it in `joepio/streambeam` Actions secrets is pending.
+The `iOS preview` workflow builds the unsigned device app, archives it with its
+SHA-256, and runs the native simulator tests on ordinary pushes/PRs. Those
+artifacts do not install on a physical iPhone without appropriate signing.
+Check hosted results for the exact commit; local results are not hosted CI proof.
 
-Validation for this preparation: 122 Rust tests passed (one manual soak
-ignored), full Flutter analysis and all 53 Flutter tests passed, Rust formatting
-and Clippy passed with existing warnings, optimized Mac build and signed
-installation passed, Android ARM64 release APK and all three ML Kit registrar
-checks passed. The unsigned App Bundle rejection is exercised in CI.
-A signed AAB/IPA and hosted CI have not yet been verified.
+Before public submission, verify installation, Local Network/camera consent,
+first pairing, reconnection, moving video, audible A/V and remote input on a
+physical iPhone/iPad. Signed export, Apple processing and TestFlight availability
+must each be checked separately. The registered app record above resolves the
+old registration blocker; it does not resolve these acceptance requirements.
+
+Android upload-key setup and a successful signed AAB also remain unverified.
+The unsigned App Bundle rejection remains an ordinary CI check.
 
 ## Store uploads and listing assets (2026-10-21)
 
