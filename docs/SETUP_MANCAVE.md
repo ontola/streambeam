@@ -289,10 +289,13 @@ Do not commit these files: the capture contains the private desktop.
   the mDNS log showed successful IPv4 probing/announcing and native Bonjour
   independently listed **MacBook Pro** at the Mac's LAN endpoint. The precise
   reason the prior app could not advertise has not been isolated.
-- The running Mac app still reports Screen Recording and Accessibility as
-  disabled. Phone-visible Mac discovery, capture, input, and the Mac-to-Xiaomi
-  Android consent flow remain unverified after this change because ADB was no
-  longer connected. Do not label these paths working based on discovery alone.
+- TCC logs confirmed that re-signing invalidated the existing Screen Recording
+  and PostEvent requirements, despite enabled switches in System Settings.
+  Replacing the Screen Recording entry with the current installed app removed
+  its capture warning. Accessibility restoration is pending system authentication.
+  Phone-visible Mac discovery, actual capture/input, and the Mac-to-Xiaomi
+  Android consent flow remain unverified while ADB is disconnected. Do not label
+  these paths working based on discovery or permission status alone.
 - UI automation briefly opened the generated build as a second app. That process
   was stopped; generated/backup bundles were unregistered from Launch Services
   and the installed app registered again. Keep only one host on port 47989.

@@ -237,3 +237,18 @@ IPv4 probe/announce records with `dns-sd -B _streambeam._udp local.`. QUIC
 packet tracing stays disabled. Redirect diagnostics to a private file, since
 the existing host startup output also contains pairing QR material. Leave the
 environment variable unset during normal use.
+
+## macOS permission switch enabled but app reports disabled
+
+Check the installed bundle's signing requirement before blaming the UI poll.
+On 2026-10-21, re-signing from the local development certificate to an existing
+Apple Development identity caused TCC to reject the prior requirement for
+ScreenCapture and PostEvent. The switches remained enabled. Unified `tccd`
+logs explicitly reported “Failed to match existing code requirement”.
+
+Turning the old Screen Recording entry off and on was insufficient. Removing
+that entry and adding the current installed app through System Settings, then
+relaunching it, restored the app's capture permission status. Restore only the
+app's existing grants through the normal system UI; user authentication may be
+required. Do not edit the TCC database or infer working capture/input from a
+switch alone. Preserve the signing identity on subsequent builds.
