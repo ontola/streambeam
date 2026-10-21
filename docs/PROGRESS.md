@@ -14,9 +14,10 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 - That commit is installed on the Mac with the same signature and privacy
   permissions. A real Mac/Mancave session showed nonblank 3840 × 2160 AV1 video;
   120 fps is a selected target, not a measured result.
-- The matching Windows artifact is staged. AllSigned blocks the unsigned
-  updater, so the previous service remains intact and the new build is not
-  installed. ADB is offline: the final Android build is not installed; Xiaomi's
+- The matching Windows artifact is installed on Mancave. Worker, app and Rust
+  DLL hashes match the artifact; service configuration, pairing identity and
+  persistent AllSigned policy are unchanged. A real latest-Mac/latest-Windows
+  4K AV1 stream and clean stop passed. ADB is offline: the final Android build is not installed; Xiaomi's
   last verified in-place preview update is `604ce0e`.
 - Local iOS **0.1.0 (3)** is an exported App Store distribution IPA with strict
   signature, profile and privacy-manifest verification. The
@@ -25,9 +26,9 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
   checks. No upload or physical iPhone
   acceptance is claimed.
 - Apple app **6825263933**, **StreamBeam Remote Desktop**, remains a draft.
-  Missing API `.p8` recovery blocks upload setup. Bitwarden is locked and a
-  backup destination vault is undecided; the private inventory is ready but no
-  recoverable backup is verified. Permanent Android keys/Google Play access and
+  Missing API `.p8` recovery blocks upload setup. Proton Pass is selected;
+  sign-in and destination-vault selection remain pending. The private inventory
+  is ready, but no recoverable backup is verified. Permanent Android keys/Google Play access and
   Microsoft Store identity/submission remain pending. See [RELEASING.md](RELEASING.md).
 
 | Milestone | Status | Notes |
@@ -118,7 +119,9 @@ Per-platform beam/watch/control status lives in [PLATFORMS.md](PLATFORMS.md).
 
 ## Decisions log
 
-- 2026-10-21 — **Export and verify a signed iOS candidate without changing its signing identity.** Apple's keychain rejected the original OpenSSL 3 PKCS12 container. Re-exported the same Apple Distribution key/certificate with explicit 3DES encryption and SHA-1 MAC for Apple compatibility, and replaced the encrypted GitHub signing secret. Local App Store IPA 0.1.0 (3) export now passes strict signature, embedded profile and Rust privacy-manifest checks. This is container compatibility, not a new signing identity. Hosted build 4 also passed on merge commit `6dc295c`; the downloaded IPA independently passed strict signature, exact profile/certificate, production entitlement and privacy-manifest checks. CI cleanup passed and upload was skipped. Credential inventory is private and ready, but Bitwarden unlock/vault selection and recoverable backup remain pending.
+- 2026-10-21 — **Deploy the verified Windows artifact with an explicitly approved process-only exception.** The publisher approved one execution-policy exception for the prepared updater; persistent AllSigned remains unchanged. Installed exact `5a99a27` artifact `12348791793` on Mancave with a rollback copy retained. Worker SHA-256 `30f42e412d10e3aad0e8d7c7a8b2b981c654080ca868d97aea0895028e2eb94d`, app and Rust DLL match the artifact; the existing supervisor, worker configuration, host identity and pairings are unchanged. The supervisor confirmed the new worker stayed up, with UDP 47989 listening. A real updated-Mac to updated-Mancave stream displayed nonblank 3840×2160 AV1; stopping returned to Ready with MANCAVE still Saved. No remote-input or subjective-audio acceptance is claimed. Proton Pass is the chosen key-backup destination; login and vault selection remain pending.
+
+- 2026-10-21 — **Export and verify a signed iOS candidate without changing its signing identity.** Apple's keychain rejected the original OpenSSL 3 PKCS12 container. Re-exported the same Apple Distribution key/certificate with explicit 3DES encryption and SHA-1 MAC for Apple compatibility, and replaced the encrypted GitHub signing secret. Local App Store IPA 0.1.0 (3) export now passes strict signature, embedded profile and Rust privacy-manifest checks. This is container compatibility, not a new signing identity. Hosted build 4 also passed on merge commit `6dc295c`; the downloaded IPA independently passed strict signature, exact profile/certificate, production entitlement and privacy-manifest checks. CI cleanup passed and upload was skipped. Credential inventory is private and ready, but Proton Pass sign-in/vault selection and recoverable backup remain pending.
 
 - 2026-10-21 — **Verify integrated CI and separate it from installation evidence.** All ten checks passed for exact 5a99a2799340a1460f2d63e7119d7c02b93ea50b, including full Windows/macOS/Linux/Android builds, unsigned iOS/native tests and genuine browser fixture media/input; PR #3 merged. Installed that Mac build without changing its signing identity or existing permissions and observed nonblank 3840×2160 AV1 in a real Mac/Mancave session. The 120 fps menu target is not a throughput measurement. The matching Windows update is staged but its unsigned updater is blocked by machine AllSigned policy; the prior service remains intact. Final Android installation could not proceed while ADB was offline; the last verified Xiaomi update is 604ce0e. Signed iOS export, store upload, physical iPhone acceptance and credential backup are tracked separately above.
 

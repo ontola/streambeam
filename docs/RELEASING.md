@@ -43,8 +43,8 @@ The App Store Connect API-key download failed in the in-app browser. The first
 unused key was revoked with user approval; its replacement is not yet backed up
 or configured for CI: its `.p8` private file has not been recovered. Do not claim
 upload access until that file is saved and authenticated. A private credential
-inventory is ready, but the Bitwarden CLI remains locked and the destination
-vault has not been selected. No password-manager backup is verified.
+inventory is ready. The publisher selected Proton Pass; sign-in and the
+destination-vault selection remain pending. No password-manager backup is verified.
 
 Google Play registration/upload and Microsoft Store identity/submission are
 still unverified. Keep their draft listings separate from Apple's registered
@@ -64,9 +64,14 @@ Flutter analysis/tests, and real fixture media/input through the browser bridge.
 The exact commit is installed on the Mac with its existing signing identity and
 macOS privacy permissions preserved. A real Mac/Mancave session displayed
 nonblank **3840 × 2160 AV1** video. **120 fps is the selected target, not a
-measured delivered frame rate.** The matching Windows artifact is staged, but
-the machine's AllSigned policy blocks its unsigned updater; the previous
-service remains intact and the new Windows version is not installed.
+measured delivered frame rate.** The matching Windows artifact is now installed
+on Mancave after an explicitly approved process-only execution-policy exception.
+Persistent AllSigned, the supervisor, configuration, host identity and pairings
+are unchanged; a rollback copy is retained. Worker/app/Rust DLL hashes match the
+artifact and the supervisor confirmed the updated worker stayed running. A real
+updated-Mac to updated-Windows 4K AV1 stream passed, and Stop returned the Mac to
+Ready with MANCAVE still Saved. Remote-input and subjective-audio acceptance were
+not part of this deployment check.
 
 The final Android artifact has not been installed on a phone because ADB is
 offline. Xiaomi's last verified in-place preview update was `604ce0e`, with the
@@ -240,8 +245,9 @@ References: [Google edits](https://developers.google.com/android-publisher/api-r
 GitHub Actions secrets cannot serve as a recoverable backup. Keep the dedicated
 Apple distribution P12 and its password, the App Store profile, API private key
 with key/issuer IDs, and any Android upload keystore/password/alias in the
-publisher's password manager. A private inventory is prepared; the locked
-Bitwarden session and destination-vault choice still prevent a verified backup.
+publisher's password manager. Proton Pass is the selected destination. A private
+inventory is prepared; Proton sign-in and destination-vault selection still
+prevent a verified backup.
 Verify recovery of the saved items before removing local originals or treating
 GitHub-secret installation as completion of credential custody.
 Never commit keys or include them in diagnostic artifacts. Certificate/profile
