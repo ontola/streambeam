@@ -1,10 +1,5 @@
 //! Fake host: speaks the real protocol for the macOS dev loop.
 
-mod annex_b;
-mod audio_src;
-mod media;
-mod stream_ctl;
-
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -12,7 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use stream_ctl::StreamControl;
+use streambeam_devtools::stream_ctl::StreamControl;
+use streambeam_devtools::{audio_src, default_log_filter, media};
 use streambeam_net::{
     HelloDecision, Identity, PairingStore, advertise, export_pairing_secret, pairing_addrs,
     peer_pubkey, read_msg, server_config, write_msg,
@@ -53,11 +49,6 @@ async fn main() {
         eprintln!("fakehost error: {e}");
         std::process::exit(1);
     }
-}
-
-fn default_log_filter() -> tracing_subscriber::EnvFilter {
-    tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
 }
 
 fn load_catalog(
@@ -371,7 +362,7 @@ async fn stream_video(
             }
         }
 
-        if frame_id % 30 == 0 {
+        if frame_id.is_multiple_of(30) {
             eprintln!(
                 "sent frame {frame_id} catalog[{idx}] ({} bytes, keyframe={})",
                 au.data.len(),

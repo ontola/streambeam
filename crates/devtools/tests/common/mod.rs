@@ -1,4 +1,6 @@
 //! Shared helpers for devtools integration tests.
+// Each test binary compiles its own copy and uses only some of the helpers.
+#![allow(dead_code)]
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;

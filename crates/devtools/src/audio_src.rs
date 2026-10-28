@@ -47,6 +47,10 @@ impl OpusCatalog {
     pub fn len(&self) -> usize {
         self.packets.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.packets.is_empty()
+    }
 }
 
 #[cfg(test)]

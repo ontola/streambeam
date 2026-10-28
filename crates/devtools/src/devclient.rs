@@ -1,9 +1,5 @@
 //! Headless dev client: pairing, FEC reassembly, hash verify, loss injection.
 
-mod annex_b;
-mod loss;
-mod media;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +9,7 @@ use streambeam_core::{
     ClientSession, FrameReassembler, LossReport, SavedHost, connect_as_identity, connect_known,
     fallback_video_caps, load_saved_host, save_saved_host,
 };
+use streambeam_devtools::{default_log_filter, loss, media};
 use streambeam_net::write_msg;
 use streambeam_proto::control::ClientMsg;
 use streambeam_proto::media::{CHANNEL_AUDIO, MediaHeader};
@@ -108,11 +105,6 @@ async fn main() {
         eprintln!("devclient error: {e}");
         std::process::exit(1);
     }
-}
-
-fn default_log_filter() -> tracing_subscriber::EnvFilter {
-    tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
 }
 
 fn load_reference(
@@ -245,17 +237,17 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
                     f.write_all(&frame)?;
                 }
 
-                if let (Some(path), false) = (&opt.dump_fixture, fixture_keyframe_written) {
-                    if MediaHeader::decode(&datagram)?.is_keyframe() {
-                        let kf = path.with_extension("keyframe");
-                        std::fs::write(&kf, &frame)?;
-                        println!(
-                            "fixture: wrote {} byte keyframe to {}",
-                            frame.len(),
-                            kf.display()
-                        );
-                        fixture_keyframe_written = true;
-                    }
+                if let (Some(path), false) = (&opt.dump_fixture, fixture_keyframe_written)
+                    && MediaHeader::decode(&datagram)?.is_keyframe()
+                {
+                    let kf = path.with_extension("keyframe");
+                    std::fs::write(&kf, &frame)?;
+                    println!(
+                        "fixture: wrote {} byte keyframe to {}",
+                        frame.len(),
+                        kf.display()
+                    );
+                    fixture_keyframe_written = true;
                 }
 
                 if let Some(catalog) = reference.as_ref() {
@@ -275,7 +267,7 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
                     }
                 }
 
-                if n == 1 || n % 30 == 0 {
+                if n == 1 || n.is_multiple_of(30) {
                     let tag = if reference.is_some() {
                         if hash_failures == 0 { "✓" } else { "!" }
                     } else {
@@ -289,28 +281,28 @@ async fn run(opt: &Opt, verify: bool) -> Result<(), Box<dyn std::error::Error + 
             }
         }
 
-        if let Some(report) = asm.take_loss_report() {
-            if last_idr.elapsed() >= Duration::from_millis(250) {
-                match report {
-                    LossReport::Invalidate {
-                        first_frame,
-                        last_frame,
-                    } => {
-                        write_msg(
-                            &mut session.send,
-                            &ClientMsg::InvalidateRefFrames {
-                                first_frame,
-                                last_frame,
-                            },
-                        )
-                        .await?;
-                    }
-                    LossReport::NeedIdr => {
-                        write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
-                    }
+        if let Some(report) = asm.take_loss_report()
+            && last_idr.elapsed() >= Duration::from_millis(250)
+        {
+            match report {
+                LossReport::Invalidate {
+                    first_frame,
+                    last_frame,
+                } => {
+                    write_msg(
+                        &mut session.send,
+                        &ClientMsg::InvalidateRefFrames {
+                            first_frame,
+                            last_frame,
+                        },
+                    )
+                    .await?;
                 }
-                last_idr = std::time::Instant::now();
+                LossReport::NeedIdr => {
+                    write_msg(&mut session.send, &ClientMsg::RequestIdr).await?;
+                }
             }
+            last_idr = std::time::Instant::now();
         }
 
         if last_report.elapsed() >= Duration::from_secs(2) {
@@ -423,10 +415,10 @@ async fn open_session(
     .await?;
     println!("paired ✓");
 
-    if let Some(dir) = client_data_dir() {
-        if let Ok(host) = SavedHost::from_pair_payload(&opt.payload) {
-            save_saved_host(&dir.join("saved_host.json"), &host)?;
-        }
+    if let Some(dir) = client_data_dir()
+        && let Ok(host) = SavedHost::from_pair_payload(&opt.payload)
+    {
+        save_saved_host(&dir.join("saved_host.json"), &host)?;
     }
 
     Ok(session)

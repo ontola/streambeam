@@ -1,16 +1,14 @@
 //! Graphical client: H.264 + Opus playback via ffplay.
 
-mod client;
-mod play;
-
 use std::time::Duration;
 
 use clap::Parser;
 use streambeam_core::FrameReassembler;
 use streambeam_proto::media::{CHANNEL_AUDIO, MEDIA_HEADER_LEN, MediaHeader};
 
-use client::connect;
-use play::{AudioPlayer, VideoPlayer};
+use streambeam_core::connect;
+use streambeam_devtools::default_log_filter;
+use streambeam_devtools::play::{AudioPlayer, VideoPlayer};
 
 #[derive(Parser, Debug)]
 #[command(name = "playclient")]
@@ -25,10 +23,7 @@ struct Opt {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
+        .with_env_filter(default_log_filter())
         .init();
 
     let opt = Opt::parse();
@@ -92,14 +87,12 @@ async fn run(
 
         let header = MediaHeader::decode(&datagram)?;
         if header.channel == CHANNEL_AUDIO {
-            if let Some(audio) = audio.as_mut() {
-                if datagram.len() > MEDIA_HEADER_LEN {
-                    if let Err(e) = audio.push_opus(&datagram[MEDIA_HEADER_LEN..]) {
-                        if e.kind() != std::io::ErrorKind::BrokenPipe {
-                            return Err(e.into());
-                        }
-                    }
-                }
+            if let Some(audio) = audio.as_mut()
+                && datagram.len() > MEDIA_HEADER_LEN
+                && let Err(e) = audio.push_opus(&datagram[MEDIA_HEADER_LEN..])
+                && e.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Err(e.into());
             }
             continue;
         }
@@ -113,7 +106,7 @@ async fn run(
                 return Err(e.into());
             }
             frames += 1;
-            if frames == 1 || frames % 30 == 0 {
+            if frames == 1 || frames.is_multiple_of(30) {
                 eprintln!("playing frame {frames} ({} bytes)", frame.len());
             }
         }
