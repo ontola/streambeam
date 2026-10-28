@@ -1,46 +1,13 @@
 // Release builds are a GUI app (no console window); debug keeps the console for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! LAN streaming host — Windows capture/encode plugs in behind [`VideoEncoder`] (M2).
+//! LAN streaming host — Windows capture/encode plugs in behind [`streambeam_host::VideoEncoder`] (M2).
 
 use std::net::SocketAddr;
 
 use clap::Parser;
 
-mod active_stream;
-pub mod audio;
-#[cfg(all(windows, feature = "audio"))]
-pub mod audio_capture_win;
-#[cfg(windows)]
-mod capture;
-pub mod config;
-pub mod data_dir;
-#[cfg(windows)]
-mod desktop_win;
-pub mod encode;
-pub mod gamepad_inject;
-pub mod input_inject;
-mod input_session;
-pub mod logging;
-#[cfg(target_os = "macos")]
-pub mod macos_screen;
-pub mod mock;
-#[cfg(windows)]
-mod nvenc;
-pub mod power;
-pub mod qr;
-#[cfg(windows)]
-mod scale;
-pub mod secure_desktop;
-pub mod server;
-#[cfg(windows)]
-mod viiper_server;
-#[cfg(windows)]
-mod wgc;
-
-pub use config::{build_host_config, default_host_name};
-pub use encode::{EncodeError, EncodedFrame, VideoEncoder};
-pub use server::{ClientEntry, HostConfig, HostControls, PairApproval};
+use streambeam_host::{PairApproval, build_host_config, default_host_name, logging, server};
 
 #[derive(Parser, Debug)]
 #[command(
