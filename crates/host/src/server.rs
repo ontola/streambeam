@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
-    Advertiser, HelloVerdict, Identity, PairingStore, advertise_ips, export_pairing_secret,
+    Advertiser, HelloVerdict, Identity, PairingStore, export_pairing_secret, pairing_addrs,
     peer_pubkey, read_msg, server_config, write_msg,
 };
 use streambeam_proto::PROTO_VERSION;
@@ -691,21 +691,6 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     endpoint.close(0u32.into(), b"host stopped");
     endpoint.wait_idle().await;
     Ok(())
-}
-
-/// The addresses a peer can actually reach this host on, expanding an
-/// unspecified bind (`0.0.0.0`) into the machine's real LAN IPs. Public so the
-/// app can show the user the same thing it puts in a pairing payload.
-pub fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
-    let port = listen.port();
-    if listen.ip().is_unspecified() {
-        advertise_ips(listen.ip())
-            .into_iter()
-            .map(|ip| SocketAddr::new(ip, port))
-            .collect()
-    } else {
-        vec![listen]
-    }
 }
 
 /// The shared encoder plus the request it was actually built for — so a

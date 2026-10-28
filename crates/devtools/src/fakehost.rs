@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use stream_ctl::StreamControl;
 use streambeam_net::{
-    HelloDecision, Identity, PairingStore, advertise, advertise_ips, export_pairing_secret,
+    HelloDecision, Identity, PairingStore, advertise, export_pairing_secret, pairing_addrs,
     peer_pubkey, read_msg, server_config, write_msg,
 };
 use streambeam_proto::PROTO_VERSION;
@@ -168,18 +168,6 @@ async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     endpoint.wait_idle().await;
     Ok(())
-}
-
-fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
-    let port = listen.port();
-    if listen.ip().is_unspecified() {
-        advertise_ips(listen.ip())
-            .into_iter()
-            .map(|ip| SocketAddr::new(ip, port))
-            .collect()
-    } else {
-        vec![listen]
-    }
 }
 
 async fn handle(

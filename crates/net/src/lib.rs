@@ -11,7 +11,7 @@ pub mod verify;
 pub use config::{client_config, ensure_crypto_provider, peer_certs, peer_pubkey, server_config};
 pub use discovery::{
     Advertiser, Browser, DiscoveredHost, SERVICE_TYPE, advertise, advertise_ips, browse,
-    guess_lan_ip,
+    guess_lan_ip, pairing_addrs,
 };
 pub use enroll::{
     HelloDecision, HelloVerdict, PairedClient, PairingStore, build_pair_proof,
