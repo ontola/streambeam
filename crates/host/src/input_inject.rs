@@ -42,7 +42,7 @@ pub mod diag {
     static REFUSED: AtomicU64 = AtomicU64::new(0);
 
     fn sparse(n: u64, every: u64) -> bool {
-        n <= 5 || n % every == 0
+        n <= 5 || n.is_multiple_of(every)
     }
 
     /// How often to log each kind once past the first few — high-rate motion

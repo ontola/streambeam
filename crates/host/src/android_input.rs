@@ -7,7 +7,10 @@ use std::sync::{LazyLock, Mutex};
 use streambeam_proto::input::{InputEvent, TouchContact};
 
 const MAX_PENDING: usize = 64;
-static FRAMES: LazyLock<Mutex<VecDeque<(Vec<TouchContact>, u16, u16)>>> =
+/// Touch contacts plus the reference width/height they were reported against.
+type TouchFrame = (Vec<TouchContact>, u16, u16);
+
+static FRAMES: LazyLock<Mutex<VecDeque<TouchFrame>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
 static KEYS: LazyLock<Mutex<VecDeque<(u16, bool)>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
 static ENABLED: AtomicBool = AtomicBool::new(false);
