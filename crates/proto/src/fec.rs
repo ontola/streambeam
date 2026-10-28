@@ -25,7 +25,7 @@ pub fn max_supported_data_shards() -> usize {
     let mut lo = 1usize;
     let mut hi = MAX_DATA_SHARDS;
     while lo < hi {
-        let mid = lo + (hi - lo + 1) / 2;
+        let mid = lo + (hi - lo).div_ceil(2);
         let r = media::parity_count(mid, DEFAULT_FEC_RATIO);
         if fec_params_supported(mid, r) {
             lo = mid;
@@ -181,7 +181,7 @@ pub fn decode_frame(shards: &[MediaShard]) -> Result<Vec<u8>, ProtoError> {
         });
     }
 
-    if shard_len == 0 || shard_len % 2 != 0 {
+    if shard_len == 0 || !shard_len.is_multiple_of(2) {
         return Err(ProtoError::Invalid {
             field: "shard_len",
             value: shard_len as u64,
@@ -253,8 +253,8 @@ pub fn decode_frame(shards: &[MediaShard]) -> Result<Vec<u8>, ProtoError> {
             by_idx[idx] = Some(data);
         }
         let mut out = Vec::with_capacity(k * shard_len);
-        for idx in 0..k {
-            out.extend_from_slice(by_idx[idx].as_deref().ok_or(ProtoError::NotEnoughShards {
+        for data in &by_idx {
+            out.extend_from_slice(data.as_deref().ok_or(ProtoError::NotEnoughShards {
                 have: shards.len(),
                 need: k,
             })?);

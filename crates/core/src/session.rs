@@ -126,13 +126,7 @@ pub async fn connect_as_identity(
         .ok_or("pairing payload has no addresses")?;
 
     let identity = load_client_identity(identity_path)?;
-    let mut endpoint = quinn::Endpoint::client("[::]:0".parse()?)?;
-    endpoint.set_default_client_config(client_config(&identity, info.host_pubkey)?);
-
-    let conn = endpoint
-        .connect(addr, "localhost")?
-        .await
-        .map_err(|e| describe_connect_failure(&e))?;
+    let (endpoint, conn) = dial(&identity, info.host_pubkey, addr).await?;
 
     let exporter = export_pairing_secret(&conn)?;
     let pair_proof = Some(build_pair_proof(
@@ -155,15 +149,32 @@ pub async fn connect_known(
     video_caps: VideoCaps,
 ) -> Result<ClientSession, Box<dyn std::error::Error + Send + Sync>> {
     let identity = load_client_identity(Some(identity_path))?;
-    let mut endpoint = quinn::Endpoint::client("[::]:0".parse()?)?;
-    endpoint.set_default_client_config(client_config(&identity, host_pubkey)?);
+    let (endpoint, conn) = dial(&identity, host_pubkey, addr).await?;
+
+    finish_session(endpoint, conn, client_name, None, video_caps).await
+}
+
+/// Open a client endpoint pinned to `host_pubkey` and complete the QUIC
+/// handshake with `addr`. The local socket binds the unspecified address of
+/// the target's family, so an IPv4 host stays reachable on machines without
+/// IPv6 support (where binding `[::]` fails outright).
+async fn dial(
+    identity: &Identity,
+    host_pubkey: [u8; 32],
+    addr: SocketAddr,
+) -> Result<(quinn::Endpoint, quinn::Connection), Box<dyn std::error::Error + Send + Sync>> {
+    let bind: SocketAddr = match addr {
+        SocketAddr::V4(_) => (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
+        SocketAddr::V6(_) => (std::net::Ipv6Addr::UNSPECIFIED, 0).into(),
+    };
+    let mut endpoint = quinn::Endpoint::client(bind)?;
+    endpoint.set_default_client_config(client_config(identity, host_pubkey)?);
 
     let conn = endpoint
         .connect(addr, "localhost")?
         .await
         .map_err(|e| describe_connect_failure(&e))?;
-
-    finish_session(endpoint, conn, client_name, None, video_caps).await
+    Ok((endpoint, conn))
 }
 
 fn load_client_identity(
@@ -294,7 +305,7 @@ impl Drop for ClientSession {
     fn drop(&mut self) {
         // Close the QUIC session so the host drops stale "connected client" entries
         // immediately instead of waiting for a control-stream read timeout.
-        let _ = self.conn.close(0u32.into(), b"client session ended");
+        self.conn.close(0u32.into(), b"client session ended");
     }
 }
 

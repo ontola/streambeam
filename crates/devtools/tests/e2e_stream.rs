@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::path::PathBuf;
-
 use common::{
     run_devclient, run_devclient_opts, run_devclient_reconnect, spawn_fakehost, spawn_host,
 };

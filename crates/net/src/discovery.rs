@@ -1,7 +1,7 @@
 //! mDNS discovery for StreamBeam hosts on the LAN.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -316,6 +316,21 @@ pub fn advertise_ips(listen: IpAddr) -> Vec<IpAddr> {
     }
 }
 
+/// The addresses a peer can actually reach a host on, expanding an
+/// unspecified bind (`0.0.0.0`) into the machine's real LAN IPs. Used for
+/// pairing payloads, so the app can show the user the same thing it encodes.
+pub fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
+    let port = listen.port();
+    if listen.ip().is_unspecified() {
+        advertise_ips(listen.ip())
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, port))
+            .collect()
+    } else {
+        vec![listen]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +339,18 @@ mod tests {
     fn loopback_listen_yields_loopback() {
         let ips = advertise_ips("127.0.0.1".parse().unwrap());
         assert!(ips.contains(&"127.0.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn specific_listen_addr_is_used_verbatim() {
+        let listen: SocketAddr = "192.168.1.20:47989".parse().unwrap();
+        assert_eq!(pairing_addrs(listen), vec![listen]);
+    }
+
+    #[test]
+    fn unspecified_listen_keeps_port() {
+        let addrs = pairing_addrs("0.0.0.0:47989".parse().unwrap());
+        assert!(!addrs.is_empty());
+        assert!(addrs.iter().all(|a| a.port() == 47989));
     }
 }

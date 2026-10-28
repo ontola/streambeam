@@ -13,7 +13,7 @@ use crate::identity::Identity;
 use crate::verify::{AcceptClientCertVerifier, PinHostVerifier};
 
 fn supported_algs() -> WebPkiSupportedAlgorithms {
-    WebPkiSupportedAlgorithms::from(default_provider().signature_verification_algorithms)
+    default_provider().signature_verification_algorithms
 }
 
 pub fn ensure_crypto_provider() {
@@ -52,7 +52,7 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
 pub fn client_config(identity: &Identity, pinned_host: [u8; 32]) -> Result<quinn::ClientConfig> {
     ensure_crypto_provider();
     let algs = supported_algs();
-    let verifier = Arc::new(PinHostVerifier::new(pinned_host, algs.clone()));
+    let verifier = Arc::new(PinHostVerifier::new(pinned_host, algs));
     let rustls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier)

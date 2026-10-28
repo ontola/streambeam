@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use streambeam_net::{
-    Advertiser, HelloVerdict, Identity, PairingStore, advertise_ips, export_pairing_secret,
+    Advertiser, HelloVerdict, Identity, PairingStore, export_pairing_secret, pairing_addrs,
     peer_pubkey, read_msg, server_config, write_msg,
 };
 use streambeam_proto::PROTO_VERSION;
@@ -27,6 +27,12 @@ impl CloseableConn for quinn::Connection {
         self.close(0u32.into(), b"superseded by new session");
     }
 }
+
+/// One encoder shared by every connection (see `CachedEncoder`).
+type SharedEncoder = Arc<AsyncMutex<Box<dyn VideoEncoder>>>;
+
+/// The live pairing store plus where it is persisted (if anywhere).
+type PersistedPairing = (Arc<Mutex<PairingStore>>, Option<std::path::PathBuf>);
 
 /// `eprintln!`-alike that also survives into `host.log` — plain `eprintln!`
 /// is invisible once the release build has no console attached.
@@ -148,7 +154,7 @@ pub struct HostControls {
     /// `active_stream.rs` for the handoff logic and its regression test.
     active_stream: ActiveStreamTracker<quinn::Connection>,
     /// Set once by `run()` so `forget` can also drop the persisted pairing.
-    pairing: Mutex<Option<(Arc<Mutex<PairingStore>>, Option<std::path::PathBuf>)>>,
+    pairing: Mutex<Option<PersistedPairing>>,
     /// Set by `request_shutdown` to stop `run`'s accept loop; the `Notify`
     /// wakes it if it's currently parked on `endpoint.accept()`.
     shutdown_requested: AtomicBool,
@@ -278,10 +284,10 @@ impl HostControls {
         if let Some((store, path)) = &*self.pairing.lock().unwrap() {
             let mut store = store.lock().unwrap();
             store.forget(&pubkey);
-            if let Some(path) = path {
-                if let Err(e) = store.save_to(path) {
-                    log!("failed to persist forgotten client: {e}");
-                }
+            if let Some(path) = path
+                && let Err(e) = store.save_to(path)
+            {
+                log!("failed to persist forgotten client: {e}");
             }
         }
         true
@@ -693,27 +699,12 @@ pub async fn run(config: HostConfig) -> Result<(), Box<dyn std::error::Error + S
     Ok(())
 }
 
-/// The addresses a peer can actually reach this host on, expanding an
-/// unspecified bind (`0.0.0.0`) into the machine's real LAN IPs. Public so the
-/// app can show the user the same thing it puts in a pairing payload.
-pub fn pairing_addrs(listen: SocketAddr) -> Vec<SocketAddr> {
-    let port = listen.port();
-    if listen.ip().is_unspecified() {
-        advertise_ips(listen.ip())
-            .into_iter()
-            .map(|ip| SocketAddr::new(ip, port))
-            .collect()
-    } else {
-        vec![listen]
-    }
-}
-
 /// The shared encoder plus the request it was actually built for — so a
 /// later `SessionRequest` asking for different dimensions/fps (e.g. a client
 /// reconnecting after changing `StreamMode`) can tell it needs a rebuild
 /// instead of silently keeping whatever the first-ever request produced.
 struct CachedEncoder {
-    encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
+    encoder: SharedEncoder,
     width: u16,
     height: u16,
     codec_config: Option<Vec<u8>>,
@@ -874,17 +865,10 @@ async fn handle_client(
     // One generation per authenticated connection, never per extra uni stream.
     let input_lease = crate::input_session::acquire();
     tokio::spawn(async move {
-        loop {
-            match input_conn.accept_uni().await {
-                Ok(recv) => {
-                    log!("input stream opened");
-                    if let Err(e) =
-                        handle_input_stream(recv, input_controls.clone(), &input_lease).await
-                    {
-                        log!("input stream ended: {e}");
-                    }
-                }
-                Err(_) => break,
+        while let Ok(recv) = input_conn.accept_uni().await {
+            log!("input stream opened");
+            if let Err(e) = handle_input_stream(recv, input_controls.clone(), &input_lease).await {
+                log!("input stream ended: {e}");
             }
         }
     });
@@ -895,7 +879,7 @@ async fn handle_client(
     // build — `SetBitrate` and anything else needing the encoder later reads
     // it from here rather than a value resolved before we knew what the
     // client actually wanted.
-    let mut resolved: Option<(Arc<AsyncMutex<Box<dyn VideoEncoder>>>, u16, u16)> = None;
+    let mut resolved: Option<(SharedEncoder, u16, u16)> = None;
     let mut last_idr = std::time::Instant::now();
     // RFI's invalidate IS now cheaper to service than a full IDR on the
     // NVENC path (`NvEncInvalidateRefFrames` — no keyframe burst, no session
@@ -1300,7 +1284,7 @@ async fn request_approval(
 
 async fn stream_video(
     conn: quinn::Connection,
-    encoder: Arc<AsyncMutex<Box<dyn VideoEncoder>>>,
+    encoder: SharedEncoder,
     ctl: Arc<StreamControl>,
     controls: Arc<HostControls>,
     addr: SocketAddr,

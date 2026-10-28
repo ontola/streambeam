@@ -78,7 +78,7 @@ fn spawn_ffplay(
     height: u16,
 ) -> Result<VideoPlayer, Box<dyn std::error::Error + Send + Sync>> {
     let verbose = std::env::var("STREAMBEAM_FFPLAY_VERBOSE").is_ok();
-    let mut args = vec![
+    let args = vec![
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         if verbose {
@@ -218,9 +218,5 @@ impl AudioPlayer {
             self.stdin.write_all(&sample.to_le_bytes())?;
         }
         self.stdin.flush()
-    }
-
-    pub fn finished(&mut self) -> bool {
-        matches!(self._child.try_wait(), Ok(Some(_)))
     }
 }
