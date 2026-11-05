@@ -56,6 +56,18 @@ pub fn desktop_diagnosis() -> String {
     }
 }
 
+/// Name of the desktop currently receiving input (`Default`, `Winlogon`, …),
+/// or `None` when it can't be opened, which is itself what a locked session
+/// looks like from a non-SYSTEM process.
+pub fn input_desktop_name() -> Option<String> {
+    unsafe {
+        let desk = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_GENERIC_ALL).ok()?;
+        let name = desktop_name(desk);
+        let _ = CloseDesktop(desk);
+        Some(name)
+    }
+}
+
 fn desktop_name(desk: HDESK) -> String {
     unsafe {
         let mut buf = [0u16; 64];

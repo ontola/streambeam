@@ -13,6 +13,7 @@ pub mod audio;
 pub mod audio_capture_win;
 #[cfg(windows)]
 mod capture;
+pub mod clipboard;
 pub mod config;
 pub mod data_dir;
 #[cfg(windows)]
@@ -144,7 +145,10 @@ fn build_config(
 
 fn run_cli(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let controls = std::sync::Arc::new(server::HostControls::new());
-    let config = build_config(opt, None, None, controls);
+    let config = build_config(opt, None, None, controls.clone());
+    // No Dart shell here to poll the OS clipboard (the app host has one), so
+    // the headless worker runs its own bridge.
+    clipboard::spawn(controls);
     eprintln!(
         "StreamBeam host {} (mock encoder — real capture in M2)",
         env!("CARGO_PKG_VERSION")
