@@ -153,7 +153,7 @@ pub struct HostControls {
     /// wakes it if it's currently parked on `endpoint.accept()`.
     shutdown_requested: AtomicBool,
     shutdown: tokio::sync::Notify,
-    clipboard_to_client: tokio::sync::watch::Sender<(u64, String)>,
+    pub(crate) clipboard_to_client: tokio::sync::watch::Sender<(u64, String)>,
     clipboard_from_client: Mutex<Option<String>>,
     clipboard_revision: AtomicU64,
 }
@@ -205,7 +205,7 @@ impl HostControls {
         self.clipboard_from_client.lock().unwrap().take()
     }
 
-    fn receive_remote_clipboard(&self, text: String) {
+    pub(crate) fn receive_remote_clipboard(&self, text: String) {
         if text.len() <= 60_000 {
             *self.clipboard_from_client.lock().unwrap() = Some(text);
         }

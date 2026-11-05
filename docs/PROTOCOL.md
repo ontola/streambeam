@@ -192,7 +192,9 @@ unprivileged AccessibilityService cannot inject a native mouse cursor.
 
 Text clipboard sync is active only for the authenticated device currently in
 a stream session. Client→host updates use S1; host→client updates use S0. Both
-sides de-duplicate the last applied value to prevent echo loops. Images, files,
+sides de-duplicate the last applied value to prevent echo loops. A Windows
+host does not read or write its clipboard while the secure desktop (lock or
+login screen) has input; viewer text received meanwhile is applied after unlock. Images, files,
 and rich clipboard formats are not part of v3.
 
 ## Discovery
