@@ -30,7 +30,7 @@ validated, and all three signing secrets are configured in this repository.
 This is a signed export; no upload, Apple processing, TestFlight availability or
 public App Store release is verified.
 
-The [hosted signed build 4](https://github.com/joepio/streambeam/actions/runs/39608208468)
+The [hosted signed build 4](https://github.com/ontola/streambeam/actions/runs/39608208468)
 passed on merge commit `6dc295c6c902356d945e4f84be6670bacd5bac5d`. The downloaded
 IPA **0.1.0 (4)** independently passed strict signature, exact profile/certificate,
 production entitlement, bundle/team and Rust privacy-manifest checks. Its SHA-256
@@ -56,9 +56,9 @@ name and record. No public store installation is available from this work yet.
 
 All ten hosted checks passed on exact commit
 `5a99a2799340a1460f2d63e7119d7c02b93ea50b`, subsequently merged through PR #3:
-[ordinary CI](https://github.com/joepio/streambeam/actions/runs/39605216105),
-[iOS preview](https://github.com/joepio/streambeam/actions/runs/39605216489), and
-[browser preview](https://github.com/joepio/streambeam/actions/runs/39605216141).
+[ordinary CI](https://github.com/ontola/streambeam/actions/runs/39605216105),
+[iOS preview](https://github.com/ontola/streambeam/actions/runs/39605216489), and
+[browser preview](https://github.com/ontola/streambeam/actions/runs/39605216141).
 This includes Windows x64, both Mac architectures, Linux's experimental shell,
 Android release/scanner checks, unsigned iOS/native decoder tests, Rust checks,
 Flutter analysis/tests, and real fixture media/input through the browser bridge.
