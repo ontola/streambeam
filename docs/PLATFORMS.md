@@ -43,7 +43,7 @@ A successful video stream alone does not establish that remote input works. Vali
 
 ## Distribution and networking
 
-- Android has an [ARM64 preview APK](https://github.com/joepio/streambeam/releases/tag/v0.1.0) for Android 8 and later. Published previews may lag behind development.
+- Android has an [ARM64 preview APK](https://github.com/ontola/streambeam/releases/tag/v0.1.0) for Android 8 and later. Published previews may lag behind development.
 - Ordinary CI packages Windows x64, macOS Apple Silicon/Intel, Android ARM64, iOS and an experimental Linux x64 shell. Windows/iOS outputs are unsigned; macOS CI signatures are ad hoc, and Android CI uses a development signer. These are not production-signed store releases. All ten checks passed for exact `5a99a2799340a1460f2d63e7119d7c02b93ea50b`; see [release evidence](RELEASING.md).
 - A complete unsigned iOS release builds locally. Three iPhone simulator tests verify decoded H.264 pixels, texture lifecycle/errors and a running audio graph; three Rust audio tests verify PCM behavior. The shared Apple changes also pass a full macOS ARM64 release build and six existing macOS decoder tests, including AV1, HDR10 and MetalFX. This is not physical iPhone pairing, audible A/V or remote-input acceptance.
 - Apple has registered **StreamBeam Remote Desktop** (`io.streambeam.streambeam`), currently Prepare for Submission with no uploaded build. Public App Store, Google Play and Microsoft Store releases remain unavailable. See [RELEASING](RELEASING.md) and [DESKTOP_RELEASES](DESKTOP_RELEASES.md).

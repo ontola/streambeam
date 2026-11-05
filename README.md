@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/joepio/streambeam/releases/tag/v0.1.0">Download Android preview</a> ·
+  <a href="https://github.com/ontola/streambeam/releases/tag/v0.1.0">Download Android preview</a> ·
   <a href="https://streambeam.eu">Website</a> ·
   <a href="docs/PLATFORMS.md">Platform support</a> ·
   <a href="docs/PROGRESS.md">Development status</a>
@@ -35,7 +35,7 @@ On macOS, allow **Screen Recording** to share your screen and **Accessibility** 
 
 | Platform | Share its screen | Watch another screen | Install today |
 |---|---|---|---|
-| **Android** | Yes; system confirmation per capture session | Yes | [ARM64 preview APK](https://github.com/joepio/streambeam/releases/tag/v0.1.0), Android 8+ |
+| **Android** | Yes; system confirmation per capture session | Yes | [ARM64 preview APK](https://github.com/ontola/streambeam/releases/tag/v0.1.0), Android 8+ |
 | **macOS** | Yes; Screen Recording permission required | Yes | Source / CI app bundles for Apple Silicon and Intel |
 | **Windows** | Yes; desktop capture and optional background service | Yes; H.264 viewer implemented | Source / unsigned CI ZIP |
 | **Linux** | Not implemented | Not implemented | Experimental CI shell bundle; no native streaming |
@@ -44,13 +44,13 @@ On macOS, allow **Screen Recording** to share your screen and **Accessibility** 
 
 **Preview limits:** CI bundles are build artifacts, not signed public installers. App Store, Google Play and Microsoft Store releases are not available yet. The iOS app record is registered as **StreamBeam Remote Desktop**, with no uploaded build; see [release status](docs/RELEASING.md). Audio is partially implemented and still needs broader device validation; Android screen sharing is video-only. The [experimental browser viewer](docs/WEB.md) requires a separately launched bridge; audio and remote input require session consent. Physical browser/desktop acceptance remains pending. Internet discovery, NAT traversal and relays are [future work](docs/WAN.md). There is no published end-to-end latency guarantee.
 
-The published Android preview may lag behind current development. See [releases](https://github.com/joepio/streambeam/releases) for the exact downloadable build, and [PROGRESS](docs/PROGRESS.md) for recent changes.
+The published Android preview may lag behind current development. See [releases](https://github.com/ontola/streambeam/releases) for the exact downloadable build, and [PROGRESS](docs/PROGRESS.md) for recent changes.
 
 ## Continuous integration
 
 CI builds Android ARM64, Windows x64, macOS Apple Silicon and Intel, an experimental Linux x64 shell, and an unsigned iOS app. The iOS workflow also tests real VideoToolbox decoding and audio-engine startup in a simulator. A separate browser workflow exercises the optional bridge and viewer against the streaming fixture.
 
-A passing build does not establish device acceptance or store signing. Check the [workflow run for the exact commit](https://github.com/joepio/streambeam/actions); see [desktop delivery](docs/DESKTOP_RELEASES.md), [iOS validation](docs/IOS.md) and [store delivery](docs/RELEASING.md) for the remaining steps.
+A passing build does not establish device acceptance or store signing. Check the [workflow run for the exact commit](https://github.com/ontola/streambeam/actions); see [desktop delivery](docs/DESKTOP_RELEASES.md), [iOS validation](docs/IOS.md) and [store delivery](docs/RELEASING.md) for the remaining steps.
 
 ## Build and run
 
