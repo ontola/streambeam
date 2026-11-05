@@ -8,6 +8,8 @@ video/audio/control bridge separately. See [DESKTOP_RELEASES.md](DESKTOP_RELEASE
 [IOS.md](IOS.md) and [WEB.md](WEB.md). Build artifacts do not establish production
 signing, actual install/upgrade behavior, physical input, cameras or live latency.
 
+Per-store accounts, forms and publisher steps: [STORE_SUBMISSION.md](STORE_SUBMISSION.md).
+
 ## Current store status — 2026-10-21
 
 The Apple bundle identifier and App Store Connect app record have been created:

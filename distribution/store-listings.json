@@ -4,8 +4,8 @@
   "name": "StreamBeam",
   "language": "en-US",
   "website": "https://streambeam.eu",
-  "supportEmail": null,
-  "privacyPolicyUrl": null,
+  "supportEmail": "support@streambeam.eu",
+  "privacyPolicyUrl": "https://streambeam.eu/privacy/",
   "googlePlay": {
     "shortDescription": "Share screens and control your devices over your local network.",
     "fullDescription": "Bring your screens together with StreamBeam. Watch a Windows or Mac desktop on your Android phone or tablet, or share your Android screen with another paired StreamBeam device.\n\nPair once using a QR code or an approved connection request. Saved devices let you reconnect without repeating setup. Connections run directly over your local network.\n\nUse touch controls and the on-screen keyboard to control a compatible paired device. Choose streaming quality to suit your screen and network. Audio playback depends on the sending device; Android screen sharing currently sends video without system audio.\n\nOptional Android remote control uses AccessibilityService to apply taps, swipes and keyboard input from your paired device. To edit text, StreamBeam reads and changes the focused text field locally. Accessibility text is not uploaded to StreamBeam servers; a paired viewer can see text visible in your shared screen. Enable or disable this access in Android Settings. Android asks you to choose what to share each time you start screen sharing.\n\nStreamBeam currently requires devices on the same local network and a compatible StreamBeam app on the other device. This early release does not include internet relay access.",
@@ -39,7 +39,7 @@
     "validation": "Partner Center identity, packaged runtime and Store certification are pending."
   },
   "submissionChecklist": [
-    "Confirm publisher account, support email and a public privacy policy URL.",
+    "Deploy https://streambeam.eu/privacy/ and make support@streambeam.eu deliverable before any submission. Store-by-store steps: docs/STORE_SUBMISSION.md.",
     "Capture screenshots of the actual release on each supported platform; do not use concept mockups as app screenshots.",
     "Complete Play AccessibilityService and screen-capture foreground-service declarations with a real demonstration video.",
     "Review Data safety and Apple App Privacy against the shipped SDK versions and actual data flows.",

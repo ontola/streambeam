@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" type="image/svg+xml" href="/assets/streambeam-logo.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StreamBeam privacy policy</title>
+<meta name="description" content="How the StreamBeam apps handle your data: no account, no StreamBeam servers in the stream, everything stays between your own paired devices.">
+<link rel="canonical" href="https://streambeam.eu/privacy/">
+<style>
+  :root {
+    --beam: #6C7BFF; --beam-strong: #8591FF; --bg: #0D0F1A; --card: #151827;
+    --ink: #E9EAF2; --muted: #9CA0B8; --line: #262A3F;
+    color-scheme: dark light;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #FAFAFD; --card: #FFFFFF; --ink: #14161F; --muted: #5A5E75;
+      --line: #E3E5EF; --beam: #5563E8; --beam-strong: #4351DB;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #FAFAFD; --card: #FFFFFF; --ink: #14161F; --muted: #5A5E75;
+    --line: #E3E5EF; --beam: #5563E8; --beam-strong: #4351DB;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 400 1rem/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--beam-strong); }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; align-items: center; gap: 10px; padding: 22px 0; font-weight: 700; }
+  header a { color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+  main { padding: 24px 0 64px; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.1; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 28px; }
+  .summary { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin-bottom: 32px; }
+  h2 { font-size: 1.2rem; margin: 32px 0 10px; }
+  p, ul { margin-bottom: 12px; }
+  ul { padding-left: 1.3rem; }
+  li { margin-bottom: 6px; }
+  footer { border-top: 1px solid var(--line); padding: 24px 0 40px; color: var(--muted); font-size: 0.88rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><a href="/"><img src="/assets/streambeam-logo.svg" width="28" height="28" alt=""> StreamBeam</a></header>
+  <main>
+    <h1>Privacy policy</h1>
+    <p class="meta">Applies to the StreamBeam apps for Android, iOS, iPadOS, macOS, Windows and Linux, and to streambeam.eu. Last updated 5 November 2026.</p>
+
+    <div class="summary">
+      <p><strong>In short:</strong> StreamBeam has no accounts, no ads, no analytics and no tracking. Your screen, audio, input and clipboard travel directly and encrypted between your own paired devices on your local network. They never pass through a StreamBeam server, and we cannot see them.</p>
+    </div>
+
+    <h2>Who we are</h2>
+    <p>StreamBeam is published by Argu B.V. (Ontola), the Netherlands. For anything about this policy or your data, email <a href="mailto:support@streambeam.eu">support@streambeam.eu</a>.</p>
+
+    <h2>What stays on your device</h2>
+    <p>To let you reconnect without pairing again, each StreamBeam app stores the following in its own private app storage:</p>
+    <ul>
+      <li>a device key pair that identifies this device to devices you paired with;</li>
+      <li>the device name you see in the app;</li>
+      <li>your paired devices: their names, public keys and last known local network addresses;</li>
+      <li>your settings, such as stream quality.</li>
+    </ul>
+    <p>This information is not sent to us. Uninstalling the app or using “forget device” removes it.</p>
+
+    <h2>What is sent between your devices</h2>
+    <p>When you start a session, the devices involved connect directly over your local network using an encrypted connection that only accepts devices you approved. Depending on what you use, a session carries:</p>
+    <ul>
+      <li>the picture of the shared screen, and the sending device’s audio where supported;</li>
+      <li>your taps, mouse, keyboard and game controller input;</li>
+      <li>clipboard contents, when clipboard sharing is used.</li>
+    </ul>
+    <p>This data goes only to the paired device you connect to. It is not stored by StreamBeam after the session ends and is never sent to us or to third parties.</p>
+    <p>To find your devices, the apps announce and look for each other on your local network (mDNS / Bonjour). These announcements contain the device name and connection details and stay inside your local network.</p>
+
+    <h2>Permissions</h2>
+    <ul>
+      <li><strong>Camera</strong>: only to scan a pairing QR code. Images are processed on the device and are not stored or uploaded.</li>
+      <li><strong>Local network</strong>: to discover and connect to your own devices.</li>
+      <li><strong>Screen recording / screen capture</strong>: only when you choose to share this device’s screen. Your operating system asks you every time or lets you revoke it in its settings.</li>
+      <li><strong>Accessibility (Android) and Accessibility (macOS)</strong>: optional, only to let a paired device you approved control this device with taps, swipes and typing. On Android, StreamBeam reads and changes the focused text field on the device itself so that typed text arrives correctly. That text is not uploaded to us; a paired viewer can see what is visible on the shared screen. You can turn this off at any time in your system settings.</li>
+      <li><strong>Notifications (Android)</strong>: to show that screen sharing is active.</li>
+    </ul>
+
+    <h2>Third-party components</h2>
+    <p>On Android, QR scanning uses Google’s ML Kit barcode scanner, which runs on the device. Google’s ML Kit can send limited diagnostic and usage information about the scanner (not your images) to Google, as described in <a href="https://developers.google.com/ml-kit/terms">Google’s ML Kit terms</a>. The app stores you download StreamBeam from (Google Play, the App Store, the Microsoft Store) handle your download and may collect data under their own privacy policies.</p>
+    <p>StreamBeam contains no advertising, analytics or crash-reporting SDKs.</p>
+
+    <h2>The streambeam.eu website</h2>
+    <p>Pairing links look like <code>https://streambeam.eu/session/#…</code>. The pairing code sits after the <code>#</code>, which browsers never send to the server, so it cannot appear in our server logs. Like any web host, our hosting provider may keep short-lived technical logs (such as IP address and requested page) to keep the site running and secure. The site sets no tracking cookies.</p>
+
+    <h2>Your rights</h2>
+    <p>Because we do not hold personal data from the apps, there is normally nothing for us to give you, correct or delete: it is all on your own devices, under your control. You still have the rights the GDPR gives you, including the right to complain to the Dutch Data Protection Authority (Autoriteit Persoonsgegevens). Contact us at the address above with any question.</p>
+
+    <h2>Children</h2>
+    <p>StreamBeam is a general-purpose tool and is not directed at children. It collects no personal data from anyone.</p>
+
+    <h2>Changes</h2>
+    <p>If a future version handles data differently, for example an optional internet relay, we will update this page before that version is released and change the date above.</p>
+  </main>
+  <footer><a href="/">streambeam.eu</a> · <a href="https://ontola.io">Ontola.io</a></footer>
+</div>
+</body>
+</html>
