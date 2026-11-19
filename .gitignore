@@ -25,3 +25,6 @@ app/macos/Runner/Configs/LocalSigning.xcconfig
 # Python validation helpers
 __pycache__/
 *.pyc
+
+# Netlify build output (see netlify.toml)
+/_public

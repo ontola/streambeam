@@ -1,11 +1,29 @@
 # streambeam.eu
 
-Static site. No build step — deploy this directory as-is to any static host
-(Cloudflare Pages, Netlify, GitHub Pages with a custom domain, nginx…).
+Static site, no framework. Hosted on **Netlify**, configured by
+[`netlify.toml`](../netlify.toml) in the repo root: the "build" copies `site/`
+to `_public/` minus `view/` and this README, and sets the headers below.
+
+## Netlify setup (one time)
+
+1. Netlify → *Add new site* → *Import an existing project* → GitHub →
+   `ontola/streambeam`. Netlify reads `netlify.toml`; leave the build fields empty.
+2. *Domain management* → add `streambeam.eu` (primary) and `www.streambeam.eu`.
+3. DNS at the registrar, either point the nameservers to Netlify DNS
+   (simplest), or set `streambeam.eu ALIAS/ANAME apex-loadbalancer.netlify.com`
+   (or `A 75.2.60.5` if the registrar has no ALIAS) and
+   `www CNAME <site-name>.netlify.app`.
+4. Wait for the Let's Encrypt certificate, then enable *Force HTTPS*.
+5. Check: `curl -sI https://streambeam.eu/.well-known/assetlinks.json` returns
+   `200` with `content-type: application/json` and no redirect.
+
+Deploys happen on every push to `main` that touches `site/` or
+`netlify.toml`; pull requests get a deploy preview.
 
 ## Layout
 
 - `index.html` — landing page.
+- `404.html` — not-found page (Netlify serves it automatically).
 - `view/` — experimental WebTransport/WebCodecs viewer with opt-in desktop control; requires the
   separate native bridge, not linked as a production install option. See
   [WEB.md](../docs/WEB.md).

@@ -1,0 +1,46 @@
+# streambeam.eu on Netlify. Static site, no framework: the "build" only
+# assembles the public files from site/.
+#
+# site/view/ is the experimental browser viewer: it needs a separately launched
+# bridge and is deliberately not deployed (see docs/WEB.md).
+
+[build]
+  base = "/"
+  publish = "_public"
+  command = """
+    rm -rf _public && mkdir -p _public && cp -R site/. _public/ \
+    && rm -rf _public/view _public/README.md \
+    && python3 -m json.tool _public/.well-known/assetlinks.json > /dev/null
+  """
+  # Only rebuild when the website changed.
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- site/ netlify.toml"
+
+# Android App Links: must be JSON, served directly, never redirected.
+[[headers]]
+  for = "/.well-known/assetlinks.json"
+  [headers.values]
+    Content-Type = "application/json"
+    Access-Control-Allow-Origin = "*"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Frame-Options = "DENY"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# The session page reads the one-time pairing token from the URL fragment.
+# Never let it be cached by intermediaries or show up in referrers.
+[[headers]]
+  for = "/session/*"
+  [headers.values]
+    Cache-Control = "no-store"
+
+# www → apex. Netlify also does this automatically once both domains are
+# attached, this rule just makes it explicit.
+[[redirects]]
+  from = "https://www.streambeam.eu/*"
+  to = "https://streambeam.eu/:splat"
+  status = 301
+  force = true
