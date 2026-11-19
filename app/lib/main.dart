@@ -25,9 +25,9 @@ import 'src/rust/frb_generated.dart';
 import 'stream_player.dart';
 import 'ui.dart';
 
-final _githubRepoUrl = Uri.parse('https://github.com/joepio/streambeam');
+final _githubRepoUrl = Uri.parse('https://github.com/ontola/streambeam');
 final _githubReleasesUrl = Uri.parse(
-  'https://github.com/joepio/streambeam/releases',
+  'https://github.com/ontola/streambeam/releases',
 );
 final _ontolaUrl = Uri.parse('https://ontola.io');
 const _logoAsset = 'assets/streambeam-logo.svg';
